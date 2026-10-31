@@ -1,6 +1,5 @@
-// Início (dentro da conta): conta, instância, aparelho e conexão; Bloquear e Sair. A lista de chats
-// chega na fase 2.
-import Ionicons from '@expo/vector-icons/Ionicons'
+// Conta e aparelho (aberta pela lista de chats): conta, instância, aparelho, conexão e cache local;
+// Bloquear e Sair.
 import { useRouter } from 'expo-router'
 import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
@@ -10,9 +9,11 @@ import type { Connection } from '@/account/session'
 import { Button } from '@/ui/Button'
 import { Banner, Card, Divider, ListItem, SectionLabel, StatusPill } from '@/ui/Card'
 import { ConfirmDialog, Dialog } from '@/ui/Dialog'
-import { Screen } from '@/ui/Screen'
+import { Screen, ScreenHeader } from '@/ui/Screen'
 import { TextField } from '@/ui/TextField'
 import { colors, spacing } from '@/ui/theme'
+import { syncLabel } from '@/chat/ChatBits'
+import { engine, store, useSyncStatus } from '@/data/react'
 
 const CONNECTION: Record<
   Connection,
@@ -80,12 +81,17 @@ export default function Home() {
   const lock = useAction()
   const out = useAction()
   const conn = CONNECTION[s.connection]
+  const sync = useSyncStatus()
+  const stats = store.stats()
 
   const [confirmOut, setConfirmOut] = useState(false)
   const logout = () => setConfirmOut(true)
 
   return (
-    <Screen testID="screen-home">
+    <Screen
+      testID="screen-home"
+      header={<ScreenHeader title="Conta" onBack={() => router.back()} />}
+    >
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.hello}>ClearChat</Text>
@@ -118,17 +124,6 @@ export default function Home() {
           {s.notice.text}
         </Banner>
       ) : null}
-
-      <Card style={styles.chats} testID="home-chats">
-        <View style={styles.chatsIcon}>
-          <Ionicons name="chatbubbles-outline" size={26} color={colors.accentStrong} />
-        </View>
-        <Text style={styles.chatsTitle}>Suas conversas aparecem aqui</Text>
-        <Text style={styles.chatsText}>
-          A conta está pronta e os dados estão desbloqueados neste aparelho. A lista de chats e a
-          sincronização chegam na próxima versão.
-        </Text>
-      </Card>
 
       <SectionLabel>Conta</SectionLabel>
       <Card padded={false}>
@@ -170,6 +165,21 @@ export default function Home() {
                 : 'Abre direto; use Bloquear para pedir a senha.'
               : 'A senha será pedida quando o app abrir de novo.'
           }
+        />
+      </Card>
+
+      <SectionLabel>Dados neste aparelho</SectionLabel>
+      <Card padded={false}>
+        <ListItem
+          testID="home-sync"
+          icon="sync-outline"
+          title={syncLabel(sync).text}
+          subtitle={
+            sync.lastSyncAt
+              ? `Última sincronização: ${new Date(sync.lastSyncAt).toLocaleString('pt-BR')} · ${stats.chats} chats, ${stats.messages} mensagens`
+              : 'Ainda não sincronizou.'
+          }
+          onPress={() => void engine.sync()}
         />
       </Card>
 
@@ -224,17 +234,5 @@ const styles = StyleSheet.create({
   hello: { color: colors.fg, fontSize: 26, fontWeight: '700' },
   email: { color: colors.muted, fontSize: 14, marginTop: 2 },
   noticeAction: { marginTop: spacing.sm, flexDirection: 'row' },
-  chats: { alignItems: 'center', paddingVertical: spacing.xl, gap: spacing.sm },
-  chatsIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: colors.accentSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.xs
-  },
-  chatsTitle: { color: colors.fg, fontSize: 16.5, fontWeight: '600', textAlign: 'center' },
-  chatsText: { color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center' },
   actions: { gap: spacing.sm, marginTop: spacing.xs }
 })

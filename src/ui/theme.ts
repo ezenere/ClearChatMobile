@@ -23,7 +23,11 @@ export const colors = {
   danger: '#f87171',
   dangerSoft: 'rgba(248, 113, 113, 0.12)',
   info: '#7dd3fc',
-  infoSoft: 'rgba(125, 211, 252, 0.10)'
+  infoSoft: 'rgba(125, 211, 252, 0.10)',
+  /** Markdown: fundo dos blocos de código e cor do código inline (desktop: .md). */
+  codeBg: '#0d0d12',
+  codeInline: '#e9d5ff',
+  strong: '#f4f4f6'
 } as const
 
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const

@@ -23,8 +23,8 @@ Node ≥ 22 e `npm install`.
 | ----------------------------------------- | --------------------------------------------------------------------- |
 | `npm run typecheck`                       | `tsc` do app (inclui `src/vendor/`) e dos testes                      |
 | `npm run lint`                            | ESLint (config do Expo) + Prettier (`--check`)                        |
-| `npm test`                                | Vitest (Node): vetores, plataforma, conta (servidor falso)            |
-| `npm run test:integration`                | conta contra o servidor de sync REAL local (pulado sem as variáveis)  |
+| `npm test`                                | Vitest (Node): vetores, plataforma, conta e sync (servidor falso)     |
+| `npm run test:integration`                | conta e dados contra o servidor REAL local (pulado sem as variáveis)  |
 | `npm run test-server -- up\|down\|status` | servidor de sync local para testes (Docker + backend do site)         |
 | `npm run vendor` / `npm run vendor:check` | copia / confere as cópias de `src/vendor/` (falha em qualquer desvio) |
 | `npm run prebuild`                        | gera `android/` (`expo prebuild --platform android`)                  |
@@ -41,6 +41,9 @@ cd android && ./gradlew assembleDebug -PreactNativeArchitectures=x86_64 && cd ..
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb reverse tcp:8081 tcp:8081 && npm start                       # o build debug carrega o JS do Metro
 ```
+
+Sem `watchman` instalado, o watcher do Metro pode perder edições (as rotas são carregadas sob demanda
+e continuam com o código velho): se o app não refletir uma mudança, reinicie com `npx expo start --clear`.
 
 `android/` **não** é versionado (CNG — Continuous Native Generation): tudo o que é nativo vem do
 `app.json`, de plugins e do módulo local `modules/argon2`; `npx expo prebuild --clean` regenera. Se um
@@ -79,6 +82,58 @@ núcleo — testável no Node):
   diálogo, toast, chave de recuperação, senha nova com medidor).
 - `EXPO_PUBLIC_CLEARCHAT_SYNC_URL` fixa o servidor (desenvolvimento), como o `CLEARCHAT_SYNC_URL` do desktop.
 
+## Dados (fase 2)
+
+Sem React Native no núcleo (`src/data/`, testável no Node com `node:sqlite`):
+
+- `store.ts` — cache no `expo-sqlite` (`clearchat-cache.db`): `records` (tipo, id, escopo, rev, seq,
+  tombstone, plaintext JSON; tipos desconhecidos/envelopes novos ficam opacos; o que não decifra fica
+  marcado e nunca aparece), `meta` (cursor, dono = servidor + usuário, último sync) e índices derivados:
+  `chats` (título, ordem por `updatedAt`, persona, prévia da última mensagem do **caminho ativo** da
+  sessão principal), `messages` + `messages_fts` (FTS5, `unicode61 remove_diacritics` — busca sem acento
+  no conteúdo, com trecho destacado) e `chat_states` (host/janela, §8.2). Migrações por `PRAGMA user_version`.
+- `engine.ts` — `SyncEngine`: pull paginado pelo cursor (§7.3, `payload=1`, `records/fetch` para os
+  `omitted`), uma transação por página, revisão menor ignorada, cascata do chat/coleção (§7.7), resync
+  completo no `410` (§7.9: `GET /records` paginado, apaga o que sumiu, cursor = head); `sync.changes` do
+  WebSocket aplicado direto quando continua exatamente do cursor (senão puxa — §10.2/10.3); `chat.state` e
+  `welcome.chat_states`; primitivo de escrita LWW (`saveLww`/`remove`, §7.4–7.5: `push_id` estável nas
+  retentativas de rede, `rev_mismatch` → reaplica só os campos alterados sobre a versão do servidor,
+  `gone` → a exclusão vence, `chat_busy`/cota com texto em pt-BR). Nesta fase só renomear/apagar chat
+  usam escrita (online; sem outbox — fases 3/5). Primeiro plano → puxa de novo.
+- `attachments.ts` — `clearchat-attachment://<sha256>.<ext>` → `blob_id` → `GET /blobs/{id}` → CCB1 →
+  confere o SHA-256 → grava em `Documents/attachments/` (escrita atômica); downloads deduplicados.
+- `binding.ts` — liga ao `AccountService`: desbloqueado → sincroniza; bloqueado → para (o cache fica);
+  saiu/revogado/conta apagada/`keys.reset`/outra conta ou servidor → apaga o cache e os anexos.
+
+**Decisão — plaintext no cache.** Decifrar uma vez e guardar o JSON em claro no SQLite privado do app
+(o aparelho é do usuário; Android: sandbox do app, sem backup — `configureAndroidBackup`). Assim lista,
+busca e conversa abrem sem cripto. O cache some no logout, na revogação, no `keys.reset` e na troca de
+conta/servidor; **bloquear não apaga** (o cofre pede a senha, mas os dados ficam no armazenamento do
+app). Evolução possível: SQLCipher do `expo-sqlite` com chave derivada da DEK (bloquear = cifrado em repouso).
+
+**AES-GCM nativo.** O `primitives.ts` da plataforma troca `gcmEncrypt`/`gcmDecrypt` pelo AES-GCM do
+`expo-crypto` no aparelho — só depois de uma resposta conhecida idêntica ao noble (cifra, decifra e
+recusa adulteração); senão continua no JS. O self-test roda todos os vetores (registros e blobs CCB1)
+pelo caminho nativo e compara com o noble em tamanhos variados. Pixel 9 Pro (AVD x86_64): blob de 1 MiB
+decifrado em **19 ms nativo × 1616 ms em JS** — por isso o pull decifra tudo na hora (cede a thread a cada
+~12 ms) em vez de adiar.
+
+**Telas** (`src/chat/`, `src/app/(app)/`): lista (`chats.tsx`, FlashList; busca; puxar para atualizar;
+indicador "Ao vivo/Sincronizando/Offline"; carregando/vazio/offline; toque longo → renomear/apagar) e
+conversa (`chat/[id].tsx`, FlashList com linhas memorizadas, abre no fim e segue o fim enquanto imagens
+carregam). `viewModel.ts` (puro) monta o caminho ativo pelo algoritmo normativo (`branchView` vendorado),
+o ‹ i/n › que troca a versão **só na tela** (cai quando o `branchSel` sincronizado muda), separadores de
+dia e a fronteira de compactação. `MessageRow.tsx`/`ToolCard.tsx` seguem o MessageList do desktop:
+balões, raciocínio recolhível, cards de tool (resumo, tamanho, ok/erro/negada, aprovação com detalhes,
+delegate com "Abrir subsessão", send_to_chat, questionário respondido, mídia), resumo de compactação,
+erro, marcadores de chamada e falas, mensagens entre chats/agente pai/irmãos, resultado de subagente,
+extração de memória e o rodapé (modelo, tokens in/out, cache, raciocínio, custo, duração). Markdown:
+`marked` (lexer GFM) + renderizador próprio em componentes nativos (`Markdown.tsx`): código com
+linguagem, cópia e rolagem horizontal, tabelas roláveis, listas/citações/títulos; fórmulas `$…$`/`$$…$$`
+em monoespaçado (sem KaTeX); sem HTML cru nem imagens remotas (viram link); imagem de anexo vira o anexo.
+Anexos: miniatura (expo-image) → tela cheia com pinça/duplo toque e compartilhar; PDF/outros abrem no
+visualizador do sistema (`File.preview`) ou na folha de compartilhamento.
+
 ## Servidor local para testes
 
 Nunca produção. O script sobe um Postgres descartável no Docker (`--tmpfs`, sem volume) e a API de
@@ -95,6 +150,19 @@ npm run test:integration                           # login → dispositivo → c
 npm run test-server -- down                        # para a API e remove o contêiner (os dados somem)
 ```
 
+Sem `backend/.venv` no site, um venv fora do repositório serve: `python3 -m venv /algum/lugar && /algum/lugar/bin/pip
+install <dependências do pyproject do backend>` e `CLEARCHAT_SERVER_PYTHON=/algum/lugar/bin/python` (o script já
+põe o backend no `PYTHONPATH`).
+
+A integração de dados (`tests/integration/data.test.ts`) age como um **desktop** (dispositivo `can_host`
+com a DEK, `tests/integration/seed.ts`): provedor, persona, chats com versões, tools com aprovação/negação,
+subagente, questionário, compactação, erro, mensagem entre chats, chamada de voz e anexos (PNG + PDF em
+CCB1); o "celular" (AccountService + SyncEngine reais) puxa e confere as telas; o desktop renomeia/apaga e
+o celular recebe pelo WebSocket sem pull; o celular renomeia (LWW) e o desktop vê; sair apaga o cache.
+Para o E2E: `E2E_TOOL=seed` (conta + desktop + conversas; estado com a DEK de teste no arquivo),
+`E2E_TOOL=rename E2E_CHAT=<id> E2E_TITLE=…` e `E2E_TOOL=delete E2E_CHAT=<id>` (o desktop age; o app recebe
+ao vivo). Com `EXPO_PUBLIC_CLEARCHAT_SYNC_URL=http://127.0.0.1:8100 npx expo start` o app já abre no servidor local.
+
 Limites anti-abuso do servidor valem (5 códigos/h por e-mail, 20/h por IP): cada execução da integração
 pede 5 códigos; se der `429`, `down` + `up` zera tudo. No emulador: `adb reverse tcp:8100 tcp:8100` e,
 no app, Trocar servidor → Self-host → `http://127.0.0.1:8100`. Para o E2E manual,
@@ -110,8 +178,11 @@ imports relativos e `@shared/...` são seguidos automaticamente para nada ficar 
 - `protocol/` ← `../docs`: `SYNC_PROTOCOL.md` e `test-vectors/*.json` (bytes idênticos);
 - `site/crypto/` ← `../ClearChatWebsite/frontend/src/crypto` (cripto do protocolo, sem os testes);
 - `site/lib/password.ts` ← política/medidor da senha de criptografia do site;
+- `site/data/voice.ts` ← leitura defensiva da voz no histórico (marcadores de chamada, rótulos);
 - `shared/` ← `../ClearChatDesktop/src/shared` (tipos e módulos puros + fecho transitivo);
-- `desktop/sync/` ← `../ClearChatDesktop/src/main/sync/{http,ws,stream}.ts`.
+- `desktop/sync/` ← `../ClearChatDesktop/src/main/sync/{http,ws,stream}.ts`;
+- `renderer/` ← lógica pura da UI do desktop (`src/renderer/src/lib`: `branchView`, `approvalOutcome`,
+  `reasoning`, `dates`, `fences`, `math`, `memory`, `skills`) — sem React/DOM, só `@shared`.
 
 Cada `.ts` ganha uma linha de cabeçalho `// VENDORED from …`; nunca edite à mão — corrija na origem e rode
 `npm run vendor`. O `vendor:check` (ignorando o cabeçalho) falha em qualquer divergência, arquivo ausente
@@ -144,7 +215,9 @@ index.ts               entrada: camada de plataforma → expo-router
 modules/argon2/        módulo Expo local (Kotlin + argon2kt)
 scripts/               vendor.mjs, platformAliases.cjs (redirecionamentos Metro/Vitest), test-server.sh
 src/account/           conta: máquina de estados, AccountService, captcha, Keystore/kv do aparelho
-src/app/               telas (expo-router): (auth), (app), dev/selftest.tsx
+src/app/               telas (expo-router): (auth), (app) [chats, chat/[id], home = conta], dev/selftest.tsx
+src/chat/              conversa: modelo puro (viewModel), linhas das mensagens, cards de tool, Markdown, anexos
+src/data/              sync de dados: SQLite (store), motor (pull/ao vivo/push/resync), anexos, ligação com a conta
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)
 src/platform/          polyfills e trocas para o Hermes
 src/selftest/          casos dos vetores + checagens da plataforma (Vitest e aparelho)

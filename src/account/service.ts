@@ -51,6 +51,13 @@ export interface RealtimeLike {
   getState(): WsState
 }
 
+/** Quem mais ouve o WebSocket da conta (o sync de dados: `sync.changes`, `chat.state`, welcome). */
+export interface RealtimeListener {
+  onWelcome?: (w: Record<string, unknown>) => void
+  onEvent?: (f: Record<string, unknown>) => void
+  onState?: (online: boolean) => void
+}
+
 export interface DeviceProfile {
   /** Nome padrão do aparelho (modelo), editável antes de entrar. */
   defaultName: string
@@ -136,6 +143,9 @@ export class AccountService {
   private keysResetAt = 0
   private signingOut = false
   private loggingOut = false
+  private rtListeners = new Set<RealtimeListener>()
+  /** Cursor informado no `hello` (§10.3, informativo) — o sync de dados fornece. */
+  helloCursor: () => number = () => 0
 
   constructor(deps: AccountDeps) {
     this.deps = deps
@@ -156,7 +166,7 @@ export class AccountService {
         await this.http.ensureFresh()
         return {
           access_token: this.tokens?.access_token ?? '',
-          cursor: 0,
+          cursor: this.helloCursor(),
           state_cursor: 0,
           active_windows: [],
           subscriptions: []
@@ -179,6 +189,16 @@ export class AccountService {
   }
 
   // ---------------- estado observável ----------------
+
+  addRealtimeListener(l: RealtimeListener): () => void {
+    this.rtListeners.add(l)
+    return () => this.rtListeners.delete(l)
+  }
+
+  /** Usuário da conta (null sem login). */
+  get accountUserId(): string | null {
+    return this.state.account?.userId ?? null
+  }
 
   getState = (): SessionState => this.state
 
@@ -754,6 +774,7 @@ export class AccountService {
       offline: 'connecting',
       stopped: 'offline'
     }
+    for (const l of this.rtListeners) l.onState?.(s === 'online')
     if (this.state.connection === 'error' && s === 'stopped') return
     this.dispatch({ type: 'connection', connection: map[s] })
   }
@@ -763,6 +784,7 @@ export class AccountService {
     const known = Number(this.deps.kv.get(KV.keysRev) ?? 0)
     if (rev !== null && rev !== known) void this.refreshKeys(true)
     else if (rev === null && this.state.phase !== 'needs-setup') void this.refreshKeys(true)
+    for (const l of this.rtListeners) l.onWelcome?.(w)
   }
 
   private onEvent(f: Record<string, unknown>): void {
@@ -777,7 +799,8 @@ export class AccountService {
         void this.endSession('account-deleted')
         return
       default:
-      // sync.changes, chat.state, stream.*: fases 2/3
+        // sync.changes, chat.state → sync de dados (src/data); stream.*: fase 3
+        for (const l of this.rtListeners) l.onEvent?.(f)
     }
   }
 

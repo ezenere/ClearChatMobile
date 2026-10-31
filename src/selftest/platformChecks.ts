@@ -3,6 +3,9 @@ import * as cc from '@/crypto'
 import { inflateRaw } from '@/crypto'
 import { subtle as shimSubtle } from '@/platform/subtle'
 import { argon2id } from '@/platform/hashWasm'
+import { nativeGcm } from '@/platform/gcm'
+import { gcmBackend } from '@/platform/primitives'
+import * as nobleOnly from '@vendor/site/crypto/primitives'
 import { normalizeBaseUrl } from '@vendor/desktop/sync/http'
 import { deepEq, eq, ok, rejects, throws } from './assert'
 import type { VectorCase } from './vectors'
@@ -107,6 +110,30 @@ export function platformCases(): VectorCase[] {
     eq(cc.hex(bin), h, 'hex vs binary')
     await rejects(argon2id({ ...o, salt: new Uint8Array(4) }), 'salt curto')
     await rejects(argon2id({ ...o, memorySize: 4 }), 'memória < 8·p')
+  })
+
+  add('AES-GCM nativo (expo-crypto) idêntico ao noble, quando existe', async () => {
+    const backend = await gcmBackend()
+    if (!nativeGcm) {
+      eq(backend, 'noble (JS)', 'sem nativo no Node')
+      return
+    }
+    ok(backend === nativeGcm.name, `nativo recusado pela conferência (em uso: ${backend})`)
+    for (const n of [0, 1, 15, 16, 17, 1000, 65_539]) {
+      const key = cc.randomBytes(32)
+      const nonce = cc.randomBytes(12)
+      const aad = cc.randomBytes(n % 50)
+      const pt = cc.randomBytes(n)
+      const ref = await nobleOnly.gcmEncrypt(key, nonce, aad, pt)
+      const got = await nativeGcm.encrypt(key, nonce, aad, pt)
+      eq(cc.hex(got), cc.hex(ref), `cifra ${n} bytes`)
+      eq(cc.hex(await nativeGcm.decrypt(key, nonce, aad, ref)), cc.hex(pt), `decifra ${n} bytes`)
+      const bad = ref.slice()
+      bad[bad.length - 1] ^= 0x80
+      await rejects(nativeGcm.decrypt(key, nonce, aad, bad), `tag adulterada ${n}`)
+      if (aad.length)
+        await rejects(nativeGcm.decrypt(key, nonce, cc.randomBytes(aad.length), ref), 'AAD trocada')
+    }
   })
 
   return cases

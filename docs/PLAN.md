@@ -29,8 +29,10 @@ src/
     site/            ../ClearChatWebsite/frontend/src: crypto/*, data/branches, lib/password
   platform/          polyfills e trocas para RN (crypto.subtle, deflate, Argon2 nativo, fetch com
                      streaming, AbortSignal.any, randomUUID, TextEncoder)
-  sync/              conta, chaves, Repo (pull/push com cache expo-sqlite), realtime, mirror do stream,
-                     comandos remotos, host (máquina de estados §8 sem tools locais)
+  account/           conta, chaves, sessão, WebSocket da conta (fase 1)
+  data/              cache expo-sqlite, SyncEngine (pull/ao vivo/push LWW/resync), anexos (fase 2)
+  chat/              modelo da conversa (caminho ativo), linhas das mensagens, cards, Markdown (fase 2)
+  sync/              (fase 3+) mirror do stream, comandos remotos, host (máquina de estados §8 sem tools locais)
   agent/             loop enxuto: request → adapter → SSE → tools portáveis → registros
   ui/                telas (expo-router), componentes, tema
 ```
@@ -47,7 +49,7 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 |---|---|---|
 | 0. Fundação ✅ | Expo dev build Android rodando no emulador; TS estrito, ESLint/Prettier; `vendor`/`vendor:check`; camada `platform/`; cripto passando em **todos** os vetores | `npm test` (vetores), build debug instalado no AVD |
 | 1. Conta ✅ | Login por código (captcha via WebView), registro do dispositivo, desbloqueio por senha/chave de recuperação, DEK no SecureStore, sair/revogado | contra servidor local (Docker) |
-| 2. Dados | Pull/push + cache SQLite, realtime (`sync.changes`), lista de chats, leitura com versões, Markdown, anexos (blobs) | idem + testes do Repo |
+| 2. Dados ✅ | Pull/push + cache SQLite, realtime (`sync.changes`), lista de chats, leitura com versões, Markdown, anexos (blobs) | idem + testes do Repo |
 | 3. Controle remoto | Estado do host, stream ao vivo, todos os comandos §8.6, cards de aprovação/questionário/retry, fila, upload de anexos, arquivos do host | desktop (build local) hospedando + celular controlando |
 | 4. Host no celular | Novo chat, persona, modelo e parâmetros; loop do agente com tools portáveis; `host.begin/takeover`, janelas, publicar stream, aceitar comandos; recusa chats com tools locais | celular hospedando + desktop controlando |
 | 5. Configurações | Provedores, personas, memórias, pesquisa na web, dispositivos, conta | e2e |
@@ -84,3 +86,32 @@ Pendências / TODO:
 - Trocar senha de criptografia e lista/revogação de dispositivos nas Configurações (fase 5; o
   `AccountService` já tem `changePassword`/`renameDevice`).
 - Mensagem do `hello` falho no WebSocket vem do `ws.ts` vendorado (`console.warn`, sem segredos).
+
+## Fase 2 — estado (2026-10-31)
+
+Feito: cache local no `expo-sqlite` (registros com plaintext decifrado uma vez, cursor, migrações,
+índices para lista/prévia/FTS5/estados de host), `SyncEngine` (pull paginado + `records/fetch`, ao vivo
+pelo `sync.changes` quando contíguo, resync no `410`, cascatas, revisão antiga ignorada, registros
+opacos/quebrados isolados, primitivo LWW com conflito e "exclusão vence"), anexos CCB1 sob demanda com
+SHA-256 conferido, wipe no logout/revogação/`keys.reset`/troca de conta, AES-GCM nativo (expo-crypto,
+conferido contra o noble antes do uso e nos vetores do self-test; ~85× mais rápido), lista de chats
+(busca por título e conteúdo, persona, prévia do caminho ativo, selo do host, puxar para atualizar,
+estados carregando/vazio/offline, renomear/apagar com confirmação), conversa somente leitura (sessões,
+versões com ‹ i/n › só na tela, todos os tipos de mensagem do desktop, Markdown próprio sobre `marked`,
+FlashList), anexos (miniatura, tela cheia com zoom, PDF no visualizador do sistema). Decisões e detalhes:
+README § "Dados (fase 2)".
+Verificado: `npm test` (126, servidor falso + `node:sqlite`), `npm run test:integration` (conta + dados
+contra o servidor real local, seed como desktop, ao vivo pelo WebSocket), self-test no aparelho (67/67)
+e E2E no AVD com adb + uiautomator (login, lista, conversa longa, versões, card de tool, imagem em tela
+cheia, rename/delete ao vivo vindos do "desktop", renomear/apagar/buscar no celular, reabrir offline com
+cache, sair apaga o cache).
+
+Pendências / TODO:
+- **Outbox offline**: escrita (renomear/apagar) exige conexão; fila local com `dirty_fields` fica para as
+  fases 3/5 (junto com as escritas de conteúdo e configurações).
+- **Bloquear não cifra o cache**: avaliar SQLCipher (`expo-sqlite` `useSQLCipher`) com chave derivada da DEK.
+- Fórmulas sem KaTeX (texto monoespaçado); código sem realce de sintaxe.
+- Pinça no visualizador de imagem só testada por duplo toque no emulador (adb não faz multitoque).
+- `present_file` mostra o card genérico (os arquivos ficam no host — `fs.read` é da fase 3);
+  `ProcessStartInfo` e as aprovações pendentes/ao vivo também chegam com o stream (fase 3).
+- Prévia/ordem da lista usam `chat.updatedAt` (o host reenvia o registro a cada mensagem, §4.3.6).

@@ -1,5 +1,6 @@
 // Executa os casos do self-test (vetores + plataforma) e mede o Argon2id/AES-GCM no aparelho.
 import { ARGON2_DEFAULT, encryptBlob, decryptBlob, passwordKek, type Subkeys } from '@/crypto'
+import { gcmBackend, setNativeGcmEnabled } from '@/platform/primitives'
 import { platformCases } from './platformChecks'
 import { vectorCases, type VectorCase } from './vectors'
 
@@ -45,6 +46,17 @@ export async function runBenchmarks(): Promise<Bench[]> {
   out.push({ name: 'AES-256-GCM cifrar 1 MiB (blob CCB1)', ms: Date.now() - t0 })
   t0 = Date.now()
   await decryptBlob(sk, 'u', 'b', ct)
-  out.push({ name: 'AES-256-GCM decifrar 1 MiB (blob CCB1)', ms: Date.now() - t0 })
+  out.push({
+    name: `AES-256-GCM decifrar 1 MiB (blob CCB1, ${await gcmBackend()})`,
+    ms: Date.now() - t0
+  })
+  setNativeGcmEnabled(false)
+  try {
+    t0 = Date.now()
+    await decryptBlob(sk, 'u', 'b', ct)
+    out.push({ name: 'AES-256-GCM decifrar 1 MiB (blob CCB1, noble JS)', ms: Date.now() - t0 })
+  } finally {
+    setNativeGcmEnabled(true)
+  }
   return out
 }

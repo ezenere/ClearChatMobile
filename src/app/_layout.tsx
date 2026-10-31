@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { KeyboardProvider } from 'react-native-keyboard-controller'
 import { startAccount } from '@/account/native'
 import { useSession } from '@/account/react'
+import { startData } from '@/data/native'
 import { ToastProvider } from '@/ui/Toast'
 import { colors } from '@/ui/theme'
 
@@ -29,6 +30,7 @@ export default function RootLayout() {
   const { phase } = useSession()
 
   useEffect(() => {
+    startData()
     void startAccount()
       .catch(() => undefined)
       .finally(() => void SplashScreen.hideAsync().catch(() => undefined))

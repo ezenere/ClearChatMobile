@@ -50,7 +50,8 @@ const GROUPS = {
       'crypto/envelope.ts',
       'crypto/blob.ts',
       'crypto/setup.ts',
-      'lib/password.ts'
+      'lib/password.ts',
+      'data/voice.ts'
     ]
   },
   shared: {
@@ -82,6 +83,21 @@ const GROUPS = {
   desktop: {
     from: 'ClearChatDesktop/src/main',
     files: ['sync/http.ts', 'sync/ws.ts', 'sync/stream.ts']
+  },
+  // lógica pura da UI do desktop (sem React/DOM): ramos na tela, aprovação, raciocínio, datas,
+  // cercas/fórmulas do Markdown, resumos das tools de memória e skills
+  renderer: {
+    from: 'ClearChatDesktop/src/renderer/src/lib',
+    files: [
+      'branchView.ts',
+      'approvalOutcome.ts',
+      'reasoning.ts',
+      'dates.ts',
+      'fences.ts',
+      'math.ts',
+      'memory.ts',
+      'skills.ts'
+    ]
   }
 }
 
