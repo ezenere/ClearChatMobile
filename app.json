@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "ClearChat",
+    "slug": "clearchat-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "clearchat",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b0b0f",
+    "ios": {
+      "bundleIdentifier": "com.ezenere.clearchat",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.ezenere.clearchat",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#6a4be0"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b0b0f",
+          "image": "./assets/images/icon.png",
+          "imageWidth": 120
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

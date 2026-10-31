@@ -1,0 +1,45 @@
+# dependências
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# nativo gerado pelo `expo prebuild` (CNG — ver README.md)
+/android
+/ios
+.kotlin/
+*.orig.*
+*.jks
+*.keystore
+!debug.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# build do módulo local
+modules/*/android/build/
+modules/*/android/.cxx/
+
+# Metro
+.metro-health-check*
+
+# logs e testes
+npm-debug.*
+*.log
+coverage/
+
+# SO / editores
+.DS_Store
+.idea/
+.vscode/
+
+# env locais
+.env*.local
+
+# typescript
+*.tsbuildinfo

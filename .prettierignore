@@ -1,0 +1,14 @@
+node_modules
+package-lock.json
+android
+ios
+.expo
+dist
+coverage
+
+# cópias geradas por `npm run vendor` (byte a byte iguais à origem — nunca formatar)
+src/vendor
+
+# texto mantido à mão (plano/regras) — não reformatar
+CLAUDE.md
+docs/

@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["expo.modules.clearchatargon2.ClearChatArgon2Module"]
+  }
+}

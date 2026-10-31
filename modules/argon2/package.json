@@ -1,0 +1,7 @@
+{
+  "name": "clearchat-argon2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Argon2id nativo (argon2kt / referência em C) para o ClearChat Mobile",
+  "main": "index.ts"
+}

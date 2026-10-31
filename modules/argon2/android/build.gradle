@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.ezenere.clearchat'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.clearchatargon2"
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  // Argon2 de referência (C, JNI) com .so alinhadas a 16 KB para todas as ABIs
+  implementation 'com.lambdapioneer.argon2kt:argon2kt:1.6.0'
+}
