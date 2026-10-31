@@ -1,44 +1,12 @@
-import Constants from 'expo-constants'
-import { Link } from 'expo-router'
-import { StyleSheet, Text, View } from 'react-native'
-import { colors, radius, spacing } from '@/ui/theme'
+// "/" decide a tela pela fase da conta. Também é para onde o Stack raiz volta quando uma fase
+// fecha o grupo atual (ex.: desbloqueou → (auth) fica inacessível → aqui → /home).
+import { Redirect } from 'expo-router'
+import { useSession } from '@/account/react'
 
-export default function Home() {
-  return (
-    <View style={styles.root}>
-      <Text style={styles.title}>ClearChat</Text>
-      <Text style={styles.subtitle}>
-        Mobile {Constants.expoConfig?.version ?? ''} — fase 0 (fundação)
-      </Text>
-      {__DEV__ && (
-        <Link href="/dev/selftest" style={styles.link}>
-          Abrir o self-test da cripto
-        </Link>
-      )}
-    </View>
-  )
+export default function Index() {
+  const { phase } = useSession()
+  if (phase === 'unlocked') return <Redirect href="/home" />
+  if (phase === 'locked') return <Redirect href="/unlock" />
+  if (phase === 'needs-setup') return <Redirect href="/setup" />
+  return <Redirect href="/login" />
 }
-
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.bg,
-    padding: spacing.xl
-  },
-  title: { color: colors.fg, fontSize: 28, fontWeight: '600' },
-  subtitle: { color: colors.muted, fontSize: 14 },
-  link: {
-    marginTop: spacing.lg,
-    color: colors.accentStrong,
-    fontSize: 15,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    overflow: 'hidden'
-  }
-})

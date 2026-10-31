@@ -11,6 +11,7 @@
   "include": [
     "./**/*.ts",
     "../vitest.config.ts",
+    "../vitest.integration.config.ts",
     "../src/**/*.ts",
     "../src/**/*.tsx",
     "../expo-env.d.ts"

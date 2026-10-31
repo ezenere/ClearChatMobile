@@ -45,8 +45,8 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 
 | Fase | Entrega | Verificação |
 |---|---|---|
-| 0. Fundação | Expo dev build Android rodando no emulador; TS estrito, ESLint/Prettier; `vendor`/`vendor:check`; camada `platform/`; cripto passando em **todos** os vetores | `npm test` (vetores), build debug instalado no AVD |
-| 1. Conta | Login por código (captcha via WebView), registro do dispositivo, desbloqueio por senha/chave de recuperação, DEK no SecureStore, sair/revogado | contra servidor local (Docker) |
+| 0. Fundação ✅ | Expo dev build Android rodando no emulador; TS estrito, ESLint/Prettier; `vendor`/`vendor:check`; camada `platform/`; cripto passando em **todos** os vetores | `npm test` (vetores), build debug instalado no AVD |
+| 1. Conta ✅ | Login por código (captcha via WebView), registro do dispositivo, desbloqueio por senha/chave de recuperação, DEK no SecureStore, sair/revogado | contra servidor local (Docker) |
 | 2. Dados | Pull/push + cache SQLite, realtime (`sync.changes`), lista de chats, leitura com versões, Markdown, anexos (blobs) | idem + testes do Repo |
 | 3. Controle remoto | Estado do host, stream ao vivo, todos os comandos §8.6, cards de aprovação/questionário/retry, fila, upload de anexos, arquivos do host | desktop (build local) hospedando + celular controlando |
 | 4. Host no celular | Novo chat, persona, modelo e parâmetros; loop do agente com tools portáveis; `host.begin/takeover`, janelas, publicar stream, aceitar comandos; recusa chats com tools locais | celular hospedando + desktop controlando |
@@ -58,3 +58,29 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 - Unitários (Vitest, Node) nos módulos puros e na cripto (vetores).
 - Integração contra o servidor local (`docker compose` do `../ClearChatWebsite` na máquina de dev).
 - UI no emulador (Maestro ou adb + uiautomator), com screenshots revisados.
+
+## Fase 1 — estado (2026-10-31)
+
+Feito: escolha do servidor (oficial/self-host validado por `/api/info`, aviso de `http://`), login por
+código (colar/autofill, reenviar com espera, 429 com `Retry-After`), registro do dispositivo
+(`client: mobile`, `platform`, `can_host: true`, nome editável), captcha §15 (WebView isolada, nonce,
+`/captcha/done` interceptado), setup de chaves no aparelho (mesmo fluxo do site: chave de recuperação
+mostrada antes do envio, confirmação dos 4 últimos), desbloqueio por senha (Argon2id nativo) e por chave
+de recuperação (senha nova obrigatória + sugestão de nova chave), "Lembrar neste dispositivo",
+bloquear, sair (revoga), refresh rotativo no corpo, fim de sessão por 401/403/4403
+(`device_revoked`, `account.deleted`), `keys.changed`/`keys.reset`, WebSocket fechado em segundo plano.
+Verificado: `npm test` (servidor falso), `npm run test:integration` (servidor real local) e E2E no
+emulador com adb + uiautomator (servidor local, código lido do log, desbloqueio, reabrir lembrado,
+bloquear → recuperação, revogação pelo "site", setup, sair).
+
+Pendências / TODO:
+- **Biometria**: implementada (`requireAuthentication`, entrada separada, cancelado → senha), mas só
+  aparece com biometria cadastrada; o AVD de teste não tem digital — não foi exercitada no emulador.
+  Testar num aparelho real (e no emulador com `adb emu finger touch` após cadastrar PIN + digital).
+- **Captcha**: lógica coberta por testes unitários; não exercitado no aparelho (o servidor local roda
+  sem a página `/captcha` do site e sem Turnstile). Testar contra uma instância com o site + chaves de
+  teste da Cloudflare.
+- `FLAG_SECURE` (bloquear screenshot/tela de recentes) nas telas da chave de recuperação e senha.
+- Trocar senha de criptografia e lista/revogação de dispositivos nas Configurações (fase 5; o
+  `AccountService` já tem `changePassword`/`renameDevice`).
+- Mensagem do `hello` falho no WebSocket vem do `ws.ts` vendorado (`console.warn`, sem segredos).

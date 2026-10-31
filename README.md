@@ -23,7 +23,9 @@ Node ≥ 22 e `npm install`.
 | ----------------------------------------- | --------------------------------------------------------------------- |
 | `npm run typecheck`                       | `tsc` do app (inclui `src/vendor/`) e dos testes                      |
 | `npm run lint`                            | ESLint (config do Expo) + Prettier (`--check`)                        |
-| `npm test`                                | Vitest (Node): todos os vetores + testes da camada de plataforma      |
+| `npm test`                                | Vitest (Node): vetores, plataforma, conta (servidor falso)            |
+| `npm run test:integration`                | conta contra o servidor de sync REAL local (pulado sem as variáveis)  |
+| `npm run test-server -- up\|down\|status` | servidor de sync local para testes (Docker + backend do site)         |
 | `npm run vendor` / `npm run vendor:check` | copia / confere as cópias de `src/vendor/` (falha em qualquer desvio) |
 | `npm run prebuild`                        | gera `android/` (`expo prebuild --platform android`)                  |
 | `npm start`                               | Metro (bundler)                                                       |
@@ -54,6 +56,52 @@ adb shell am start -a android.intent.action.VIEW -d clearchat://dev/selftest
 adb logcat -s ReactNativeJS | grep CLEARCHAT_SELFTEST           # linha de resumo (PASS/FAIL, contagens, tempos)
 ```
 
+## Conta (fase 1)
+
+Login por código, registro do dispositivo, chaves e sessão ficam em `src/account/` (sem React Native no
+núcleo — testável no Node):
+
+- `session.ts` — máquina de estados pura (`boot → signed-out → needs-setup → locked → unlocked`) e os
+  avisos de fim de sessão; `service.ts` — `AccountService` (servidor, código por e-mail, setup/desbloqueio/
+  recuperação, refresh rotativo no corpo via `SyncHttp` vendorado, WebSocket via `RealtimeClient`
+  vendorado só para `device_revoked`/`keys.changed`/`keys.reset`/`account.deleted`, primeiro/segundo
+  plano); `native.ts` — implementações do aparelho e a instância única; `captcha.ts` — §15 (nonce, URL,
+  interceptação do `/captcha/done`).
+- **Onde fica cada coisa**: tokens e DEK só no `expo-secure-store` (Keystore; tokens gravados de forma
+  **síncrona** porque o refresh rotaciona e reusar o antigo revoga o aparelho); o resto (servidor escolhido,
+  e-mail, ids, wraps em cache, preferências) no `expo-sqlite/kv-store` — nada disso é segredo.
+- "Lembrar neste dispositivo" (padrão ligado) guarda a DEK; "Exigir biometria" aparece só com biometria
+  cadastrada (`requireAuthentication` do SecureStore, entrada separada; prompt cancelado → pede a senha).
+  Bloquear apaga a DEK guardada; Sair revoga o aparelho (`POST /auth/logout`) e apaga tudo.
+- Rotas (`src/app`): `/` decide pela fase; `(auth)` = `login`, `code`, `server`, `captcha`, `setup`,
+  `unlock`, `recover` (cada fase libera só as suas via `Stack.Protected`); `(app)` = `home`,
+  `recovery-key`. Componentes em `src/ui/` (botões, campos, código de 6 dígitos, cartões, banners,
+  diálogo, toast, chave de recuperação, senha nova com medidor).
+- `EXPO_PUBLIC_CLEARCHAT_SYNC_URL` fixa o servidor (desenvolvimento), como o `CLEARCHAT_SYNC_URL` do desktop.
+
+## Servidor local para testes
+
+Nunca produção. O script sobe um Postgres descartável no Docker (`--tmpfs`, sem volume) e a API de
+`../ClearChatWebsite/backend` em `127.0.0.1:8100`, com `MAIL_BACKEND=console` (códigos no log), sem
+captcha e configurada só por variáveis de ambiente (o `.env` do site não é lido):
+
+```sh
+# uma vez: Python ≥ 3.12 com as dependências do backend
+make -C ../ClearChatWebsite/backend venv          # ou aponte CLEARCHAT_SERVER_PYTHON para outro Python
+npm run test-server -- up                          # imprime as variáveis abaixo
+export CLEARCHAT_SYNC_TEST_URL=http://127.0.0.1:8100
+export CLEARCHAT_SYNC_TEST_MAIL_LOG=${TMPDIR:-/tmp}/clearchat-mobile-test/api.log
+npm run test:integration                           # login → dispositivo → chaves → desbloqueio → refresh → revogação → recuperação → keys.reset → sair → conta apagada
+npm run test-server -- down                        # para a API e remove o contêiner (os dados somem)
+```
+
+Limites anti-abuso do servidor valem (5 códigos/h por e-mail, 20/h por IP): cada execução da integração
+pede 5 códigos; se der `429`, `down` + `up` zera tudo. No emulador: `adb reverse tcp:8100 tcp:8100` e,
+no app, Trocar servidor → Self-host → `http://127.0.0.1:8100`. Para o E2E manual,
+`E2E_TOOL=create E2E_STATE=<arquivo> npx vitest run --config vitest.integration.config.ts e2eTool` cria
+uma conta com chaves (senha e chave de recuperação no arquivo de estado) e `E2E_TOOL=revoke` revoga os
+celulares dela. Os elementos da UI têm `testID` (viram `resource-id` no `uiautomator dump`).
+
 ## Vendorização (`src/vendor/`)
 
 Código compartilhado é **copiado** dos repositórios irmãos por `scripts/vendor.mjs` (lista explícita; os
@@ -61,6 +109,7 @@ imports relativos e `@shared/...` são seguidos automaticamente para nada ficar 
 
 - `protocol/` ← `../docs`: `SYNC_PROTOCOL.md` e `test-vectors/*.json` (bytes idênticos);
 - `site/crypto/` ← `../ClearChatWebsite/frontend/src/crypto` (cripto do protocolo, sem os testes);
+- `site/lib/password.ts` ← política/medidor da senha de criptografia do site;
 - `shared/` ← `../ClearChatDesktop/src/shared` (tipos e módulos puros + fecho transitivo);
 - `desktop/sync/` ← `../ClearChatDesktop/src/main/sync/{http,ws,stream}.ts`.
 
@@ -93,12 +142,13 @@ Argon2 nativo é validado no aparelho pelo self-test (mesma saída do hash-wasm,
 ```
 index.ts               entrada: camada de plataforma → expo-router
 modules/argon2/        módulo Expo local (Kotlin + argon2kt)
-scripts/               vendor.mjs, platformAliases.cjs (redirecionamentos Metro/Vitest)
-src/app/               telas (expo-router); dev/selftest.tsx
+scripts/               vendor.mjs, platformAliases.cjs (redirecionamentos Metro/Vitest), test-server.sh
+src/account/           conta: máquina de estados, AccountService, captcha, Keystore/kv do aparelho
+src/app/               telas (expo-router): (auth), (app), dev/selftest.tsx
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)
 src/platform/          polyfills e trocas para o Hermes
 src/selftest/          casos dos vetores + checagens da plataforma (Vitest e aparelho)
-src/ui/                tema (tokens do desktop)
+src/ui/                tema (tokens do desktop) e componentes
 src/vendor/            cópias geradas — não editar
-tests/                 Vitest
+tests/                 Vitest (unitários) e tests/integration/ (servidor real)
 ```

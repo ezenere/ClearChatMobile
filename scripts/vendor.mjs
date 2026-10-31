@@ -49,7 +49,8 @@ const GROUPS = {
       'crypto/keys.ts',
       'crypto/envelope.ts',
       'crypto/blob.ts',
-      'crypto/setup.ts'
+      'crypto/setup.ts',
+      'lib/password.ts'
     ]
   },
   shared: {
