@@ -49,6 +49,12 @@ export interface RealtimeLike {
   start(): void
   stop(): void
   getState(): WsState
+  /** Requisição com `id` → ack (campos) ou erro `WsRequestError` (§10.1). */
+  request(
+    t: string,
+    fields?: Record<string, unknown>,
+    timeoutMs?: number
+  ): Promise<Record<string, unknown>>
 }
 
 /** Quem mais ouve o WebSocket da conta (o sync de dados: `sync.changes`, `chat.state`, welcome). */
@@ -146,6 +152,8 @@ export class AccountService {
   private rtListeners = new Set<RealtimeListener>()
   /** Cursor informado no `hello` (§10.3, informativo) — o sync de dados fornece. */
   helloCursor: () => number = () => 0
+  /** Chats inscritos no stream no `hello` (o chat aberto — controle remoto). */
+  helloSubscriptions: () => string[] = () => []
 
   constructor(deps: AccountDeps) {
     this.deps = deps
@@ -169,7 +177,7 @@ export class AccountService {
           cursor: this.helloCursor(),
           state_cursor: 0,
           active_windows: [],
-          subscriptions: []
+          subscriptions: this.helloSubscriptions()
         }
       },
       onWelcome: (w) => this.onWelcome(w),
@@ -189,6 +197,15 @@ export class AccountService {
   }
 
   // ---------------- estado observável ----------------
+
+  /** Requisição no WebSocket da conta (controle remoto: `remote.send`, `stream.*`, `host.pin`). */
+  wsRequest(
+    t: string,
+    fields?: Record<string, unknown>,
+    timeoutMs?: number
+  ): Promise<Record<string, unknown>> {
+    return this.ws.request(t, fields, timeoutMs)
+  }
 
   addRealtimeListener(l: RealtimeListener): () => void {
     this.rtListeners.add(l)
@@ -799,7 +816,7 @@ export class AccountService {
         void this.endSession('account-deleted')
         return
       default:
-        // sync.changes, chat.state → sync de dados (src/data); stream.*: fase 3
+        // sync.changes, chat.state → sync de dados (src/data); stream.*/remote.* → src/remote
         for (const l of this.rtListeners) l.onEvent?.(f)
     }
   }

@@ -5,14 +5,23 @@
 import { selectionToReach, selEquals, type BranchSel, type SiblingInfo } from '@shared/branches'
 import { isDisplayOnly, latestBoundaryIndex } from '@shared/context'
 import { isSiblingKind } from '@shared/siblings'
-import type { Session, StoredMessage } from '@shared/types'
+import type { Session, StoredMessage, StreamDraft } from '@shared/types'
 import { branchView } from '@vendor/renderer/branchView'
 import { dayStarts } from '@vendor/renderer/dates'
 import { isExtractionMessage } from '@vendor/renderer/memory'
 import type { LoadedChat } from '@/data/store'
 
 export type RowType =
-  'user' | 'assistant' | 'tool' | 'card' | 'marker' | 'error' | 'synthetic' | 'divider'
+  | 'user'
+  | 'assistant'
+  | 'tool'
+  | 'card'
+  | 'marker'
+  | 'error'
+  | 'synthetic'
+  | 'divider'
+  | 'draft'
+  | 'sending'
 
 export type Row =
   | {
@@ -28,6 +37,10 @@ export type Row =
       switcherAbove: boolean
     }
   | { kind: 'divider'; key: string; type: 'divider'; count: number; showOld: boolean }
+  /** Resposta ao vivo do host (stream §11) — sempre a última linha. */
+  | { kind: 'draft'; key: string; type: 'draft'; draft: StreamDraft; sessionId: string }
+  /** Mensagem enviada daqui esperando o `accepted` do host (§8.6: "enviando…"). */
+  | { kind: 'sending'; key: string; type: 'sending'; text: string; files: number }
 
 export interface SessionView {
   session: Session

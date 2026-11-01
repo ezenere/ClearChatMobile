@@ -97,6 +97,14 @@ export class AttachmentStore {
     return this.d.fs.uri(file)
   }
 
+  /** Grava um arquivo já conferido (anexo escolhido neste aparelho) e avisa quem espera por ele. */
+  put(file: string, data: Uint8Array): string {
+    if (!ATTACHMENT_FILE_RE.test(file)) throw new UserError('Anexo inválido.')
+    if (!this.local(file)) this.d.fs.write(file, data)
+    for (const fn of this.listeners) fn(file)
+    return this.d.fs.uri(file)
+  }
+
   clear(): void {
     this.inflight.clear()
     try {

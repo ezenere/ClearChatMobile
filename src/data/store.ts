@@ -559,6 +559,21 @@ export class LocalStore {
     return { chat, sessions, messages, broken }
   }
 
+  /** Ids das mensagens assistant do chat (controle remoto: troca o draft pela persistida). */
+  assistantIds(chatId: string): string[] {
+    return this.sql
+      .all<{ id: string }>("SELECT id FROM messages WHERE chat_id = ? AND role = 'assistant'", [
+        chatId
+      ])
+      .map((r) => r.id)
+  }
+
+  /** Uma mensagem decodificada (null = ausente, apagada ou ilegível). */
+  message(id: string): StoredMessage | null {
+    const p = this.getPlain('message', id)
+    return p ? messageFromPlain(id, p) : null
+  }
+
   // ---------------- estados de host (§8.2) ----------------
 
   replaceChatStates(states: ChatState[]): void {

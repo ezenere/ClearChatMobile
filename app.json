@@ -48,7 +48,16 @@
         }
       ],
       "expo-image",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O ClearChat acessa suas fotos para anexar imagens às mensagens.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      "expo-document-picker"
     ],
     "experiments": {
       "typedRoutes": true,

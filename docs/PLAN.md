@@ -32,7 +32,8 @@ src/
   account/           conta, chaves, sessão, WebSocket da conta (fase 1)
   data/              cache expo-sqlite, SyncEngine (pull/ao vivo/push LWW/resync), anexos (fase 2)
   chat/              modelo da conversa (caminho ativo), linhas das mensagens, cards, Markdown (fase 2)
-  sync/              (fase 3+) mirror do stream, comandos remotos, host (máquina de estados §8 sem tools locais)
+  remote/            espelho do stream, comandos remotos §8.6, upload de anexos, arquivos do host (fase 3)
+  sync/              (fase 4) host no celular (máquina de estados §8 sem tools locais)
   agent/             loop enxuto: request → adapter → SSE → tools portáveis → registros
   ui/                telas (expo-router), componentes, tema
 ```
@@ -50,7 +51,7 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 | 0. Fundação ✅ | Expo dev build Android rodando no emulador; TS estrito, ESLint/Prettier; `vendor`/`vendor:check`; camada `platform/`; cripto passando em **todos** os vetores | `npm test` (vetores), build debug instalado no AVD |
 | 1. Conta ✅ | Login por código (captcha via WebView), registro do dispositivo, desbloqueio por senha/chave de recuperação, DEK no SecureStore, sair/revogado | contra servidor local (Docker) |
 | 2. Dados ✅ | Pull/push + cache SQLite, realtime (`sync.changes`), lista de chats, leitura com versões, Markdown, anexos (blobs) | idem + testes do Repo |
-| 3. Controle remoto | Estado do host, stream ao vivo, todos os comandos §8.6, cards de aprovação/questionário/retry, fila, upload de anexos, arquivos do host | desktop (build local) hospedando + celular controlando |
+| 3. Controle remoto ✅ | Estado do host, stream ao vivo, todos os comandos §8.6, cards de aprovação/questionário/retry, fila, upload de anexos, arquivos do host | desktop (build local) hospedando + celular controlando |
 | 4. Host no celular | Novo chat, persona, modelo e parâmetros; loop do agente com tools portáveis; `host.begin/takeover`, janelas, publicar stream, aceitar comandos; recusa chats com tools locais | celular hospedando + desktop controlando |
 | 5. Configurações | Provedores, personas, memórias, pesquisa na web, dispositivos, conta | e2e |
 | 6. Voz e iOS | Ditado/chamada; build iOS no Mac | — |
@@ -115,3 +116,34 @@ Pendências / TODO:
 - `present_file` mostra o card genérico (os arquivos ficam no host — `fs.read` é da fase 3);
   `ProcessStartInfo` e as aprovações pendentes/ao vivo também chegam com o stream (fase 3).
 - Prévia/ordem da lista usam `chat.updatedAt` (o host reenvia o registro a cada mensagem, §4.3.6).
+
+## Fase 3 — estado (2026-11-01)
+
+Feito: `src/remote/` (espelho ao vivo com snapshot/deltas/buracos/drafts encerrados, cliente de todos os
+kinds do §8.6 com K_stream + AAD de comando, timeouts, `remote.failed`, recusas em pt-BR, `fs.list`/
+`fs.read`, `host.pin`, descartar versão divergente, upload de anexos antes do envio) e as telas: composer
+(anexos, skills do host, fila com ⚡/✕, ⚡ forçar, parar, status), resposta ao vivo (raciocínio, Markdown,
+tools), cards de aprovação (por item, Smart-Approve, whitelist/blacklist), questionário, retry,
+"Executar mesmo assim", subagentes, ações das mensagens (folha no toque longo), versões no host, menu do
+chat (fixar, arquivos, processos, compactar, memórias, parar subagentes), faixas de host offline/sem
+host/sem conexão/divergência/troca, arquivos do host (pastas, texto paginado, imagem). Detalhes: README §
+"Controle remoto (fase 3)".
+Verificado: `npm test` (171; 45 novos em `tests/remote.test.ts`: vetores realtime, espelho, comandos,
+fs, pedaços/UTF-8, anexos), `npm run test:integration` (com o host falso: todos os kinds, anexos, fixar,
+queda do host) e E2E no AVD com o **desktop real** hospedando (stream ao vivo, fila + forçar, ⚡, parar,
+aprovação por item executando o shell no PC, questionário com ajuda/múltipla/Outro, retry após corte de
+rede, regenerar, trocar versão no host, editar como nova versão, editar no lugar, apagar, imagem da galeria,
+arquivos do host com "Carregar mais", fixar host, compactar, extrair memórias, host offline → banner →
+takeover pelo desktop). Screenshots em `scratchpad/mobile/phase3/`.
+
+Pendências / TODO:
+- "Executar neste dispositivo" (`host.takeover`) e chat sem host → fase 4 (host no celular, só chats sem
+  ferramentas locais). A faixa explica e não oferece a ação.
+- Divergência: só "Descartar a versão de <D>" (o celular nunca tem versão local nesta fase); a resolução
+  com versão local chega com o host no celular.
+- Subagentes, Smart-Approve com juiz e processos não foram exercitados no E2E com o desktop (o provedor
+  falso não delega nem roda processos); cobertos pela integração (stop_subagents, smart_override) e pelos
+  unitários (processos no espelho).
+- Texto digitado no composer pelo `adb input text` perde caracteres quando a UI re-renderiza no meio —
+  só no teste (digitar caractere a caractere resolve); avaliar se acontece com teclado real.
+- Outbox offline para comandos não existe (protocolo: comandos só com o host online).

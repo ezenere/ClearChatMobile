@@ -9,6 +9,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller'
 import { startAccount } from '@/account/native'
 import { useSession } from '@/account/react'
 import { startData } from '@/data/native'
+import { startRemote } from '@/remote/native'
 import { ToastProvider } from '@/ui/Toast'
 import { colors } from '@/ui/theme'
 
@@ -31,6 +32,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     startData()
+    startRemote()
     void startAccount()
       .catch(() => undefined)
       .finally(() => void SplashScreen.hideAsync().catch(() => undefined))

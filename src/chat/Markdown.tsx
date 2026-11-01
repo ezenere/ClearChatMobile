@@ -91,7 +91,7 @@ function inline(tokens: Token[] | undefined, k: string): ReactNode[] {
   })
 }
 
-function CodeBlock({ text, lang }: { text: string; lang?: string }) {
+function CodeBlock({ text, lang, sel }: { text: string; lang?: string; sel: boolean }) {
   return (
     <View style={st.code} testID="md-code">
       <View style={st.codeHead}>
@@ -99,7 +99,7 @@ function CodeBlock({ text, lang }: { text: string; lang?: string }) {
         <CopyButton text={text} testID="md-code-copy" />
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={st.codeScroll}>
-        <Text style={st.codeText} selectable>
+        <Text style={st.codeText} selectable={sel}>
           {text}
         </Text>
       </ScrollView>
@@ -142,7 +142,14 @@ function Table({ t, k, base }: { t: Tokens.Table; k: string; base: TextStyle }) 
   )
 }
 
-function blocks(tokens: Token[], k: string, base: TextStyle, tight = false): ReactNode[] {
+/** `sel` = texto selecionável (desligado quando o toque longo abre as ações da mensagem). */
+function blocks(
+  tokens: Token[],
+  k: string,
+  base: TextStyle,
+  tight = false,
+  sel = true
+): ReactNode[] {
   const out: ReactNode[] = []
   tokens.forEach((t, i) => {
     const key = `${k}.${i}`
@@ -164,7 +171,7 @@ function blocks(tokens: Token[], k: string, base: TextStyle, tight = false): Rea
           }
         }
         out.push(
-          <Text key={key} style={[base, !tight && st.p]} selectable>
+          <Text key={key} style={[base, !tight && st.p]} selectable={sel}>
             {inline(p.tokens, key)}
           </Text>
         )
@@ -173,7 +180,7 @@ function blocks(tokens: Token[], k: string, base: TextStyle, tight = false): Rea
       case 'text': {
         const x = t as Tokens.Text
         out.push(
-          <Text key={key} style={base} selectable>
+          <Text key={key} style={base} selectable={sel}>
             {x.tokens ? inline(x.tokens, key) : x.text}
           </Text>
         )
@@ -196,14 +203,14 @@ function blocks(tokens: Token[], k: string, base: TextStyle, tight = false): Rea
       }
       case 'code': {
         const c = t as Tokens.Code
-        out.push(<CodeBlock key={key} text={c.text.replace(/\n$/, '')} lang={c.lang} />)
+        out.push(<CodeBlock key={key} text={c.text.replace(/\n$/, '')} lang={c.lang} sel={sel} />)
         return
       }
       case 'blockMath':
         out.push(
           <View key={key} style={st.mathBlock}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <Text style={st.mathText} selectable>
+              <Text style={st.mathText} selectable={sel}>
                 {(t as unknown as { text: string }).text}
               </Text>
             </ScrollView>
@@ -213,7 +220,13 @@ function blocks(tokens: Token[], k: string, base: TextStyle, tight = false): Rea
       case 'blockquote':
         out.push(
           <View key={key} style={st.quote}>
-            {blocks((t as Tokens.Blockquote).tokens, key, { ...base, color: colors.muted })}
+            {blocks(
+              (t as Tokens.Blockquote).tokens,
+              key,
+              { ...base, color: colors.muted },
+              false,
+              sel
+            )}
           </View>
         )
         return
@@ -232,7 +245,8 @@ function blocks(tokens: Token[], k: string, base: TextStyle, tight = false): Rea
                     it.tokens.filter((x) => x.type !== 'checkbox'),
                     `${key}.${n}`,
                     base,
-                    !l.loose
+                    !l.loose,
+                    sel
                   )}
                 </View>
               </View>
@@ -273,12 +287,14 @@ export const Markdown = memo(function Markdown({
   text,
   italic,
   size = 15,
-  color = colors.fg
+  color = colors.fg,
+  selectable = true
 }: {
   text: string
   italic?: boolean
   size?: number
   color?: string
+  selectable?: boolean
 }) {
   const base: TextStyle = {
     color,
@@ -286,7 +302,7 @@ export const Markdown = memo(function Markdown({
     lineHeight: Math.round(size * 1.55),
     ...(italic ? { fontStyle: 'italic' } : {})
   }
-  return <View style={st.root}>{blocks(lexMarkdown(text), 'md', base)}</View>
+  return <View style={st.root}>{blocks(lexMarkdown(text), 'md', base, false, selectable)}</View>
 })
 
 const st = StyleSheet.create({

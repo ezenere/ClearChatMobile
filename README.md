@@ -134,6 +134,67 @@ em monoespaçado (sem KaTeX); sem HTML cru nem imagens remotas (viram link); ima
 Anexos: miniatura (expo-image) → tela cheia com pinça/duplo toque e compartilhar; PDF/outros abrem no
 visualizador do sistema (`File.preview`) ou na folha de compartilhamento.
 
+## Controle remoto (fase 3)
+
+Núcleo sem React Native em `src/remote/` (testável no Node):
+
+- `crypto.ts` — envelopes do stream e dos comandos com `K_stream` e as AADs de stream/comando/resultado
+  (§3.10), moldura com deflate acima de 1 KiB; conferido byte a byte nos vetores `realtime.json`.
+- `mirror.ts` — `LiveMirror`: espelho ao vivo de um chat (porta da metade "controle remoto" do
+  `HostController` do desktop): `snapshot` completo, `draft.delta` (via `stream.ts` vendorado), `n`
+  contíguo por epoch (buraco/delta fora de ordem → `stream.resync`), drafts encerrados que ficam na tela
+  até a mensagem persistida chegar (teto de 8 s), status ao vivo por sessão, `branchSel` ao vivo, tools
+  (rodando/Smart-Approve avaliando/saída), fila, aprovações, questionários, retries, compactação,
+  processos, skills do host e erros. `liveStatus` = status a exibir (espelho → transitório com janela).
+- `controller.ts` — `RemoteController`: modo do host por chat (`remote`/`host-offline`/`none`/`local`/
+  `offline`/`diverged`, §8.2), inscrição no stream do chat aberto (`stream.subscribe`/`unsubscribe`,
+  `hello.subscriptions` na reconexão, `stream.resync` no welcome e quando o host volta), eventos
+  decifrados em série, avisos "O dispositivo remoto (X) caiu"/"voltou"; cliente de comandos para TODOS os
+  kinds do §8.6 (um método por kind; `regenerate` sai como `branch.regenerate`), `cmd_id` novo por
+  comando, timeout de 40 s, `remote.failed` e queda da conexão viram erro claro, recusas do host
+  (`attachment_missing`, `chat_busy`, `not_host`, versão antiga, `message.edit` numa mensagem digitada…)
+  em pt-BR; `fs.list`/`fs.read` com as mesmas validações do desktop; `host.pin`; "Descartar a versão de
+  <D>" (`divergence/resolve` com `keep: 'online'`, a única resolução segura no celular).
+- `upload.ts` — anexos: classifica como o desktop (`classifyAttachment`), grava `<sha256>.<ext>` no store,
+  `blob_id` = HMAC do sha256, `POST /blobs/check` e `PUT /blobs/{id}` (CCB1, `X-Content-SHA256` do
+  ciphertext) **antes** do `send` (§14).
+- `files.ts` — leitura em pedaços (3 em voo, tamanho/mtime conferidos a cada pedaço, corte de UTF-8).
+- `binding.ts`/`native.ts`/`react.ts` — liga ao WebSocket da conta (`AccountService.wsRequest`,
+  `helloSubscriptions`) e ao motor (mensagens novas trocam o draft); `useRemoteChat(chatId)`.
+
+Telas: a conversa (`chat/[id].tsx`) troca o rodapé somente leitura pelo **composer** com o host online
+(`src/chat/remote/Composer.tsx`: texto, anexos da galeria/arquivo com upload antecipado, lâmpada com as
+skills do host, enviar/“adicionar à fila”, ⚡ forçar — botão ou toque longo no enviar —, parar, fila com
+⚡/✕, linha de status "Trabalhando…/Executando Terminal…/Aguardando aprovação…"); resposta ao vivo como
+última linha da lista (raciocínio, Markdown e tool calls atualizando no lugar, segue o fim se você não
+rolou); cards (`Panels.tsx`): aprovação (simples ou por sub-comando no modo Listas, "Sim para todos",
+"⋯" → whitelist/blacklist com o padrão editável, veredito do Smart-Approve, "1 de N", vibração),
+questionário no lugar do composer (passo a passo, ícones lucide→Ionicons/emoji/imagem, ajuda em folha,
+imagem grande, múltipla escolha, "Outro") e falha de conexão; "Executar mesmo assim" (smart_override) no
+card da tool negada; faixa de subagentes rodando com "Parar"; toque longo numa mensagem → folha com
+copiar, selecionar texto, editar no lugar, editar como nova versão, regenerar, tentar de novo/compactar e
+tentar de novo, apagar; ‹ i/n › troca a versão **no host** (`branch.select`) na principal ociosa; menu do
+chat: fixar/desafixar host, arquivos do host, processos, compactar, extrair memórias, parar subagentes.
+Host offline/sem host/sem conexão/divergente/troca de host: faixa explicando (o celular não executa chats
+com ferramentas locais; "Executar neste dispositivo" fica para a fase 4). Arquivos do host:
+`files/[chat]` (pastas primeiro, raiz/confinamento do host) e `file/[chat]` (Markdown/código/texto em
+páginas de 128 KiB com "Carregar mais", imagem inteira com progresso, demais tipos "Baixar e abrir").
+Folhas inferiores próprias (`src/ui/Sheet.tsx`).
+
+**Cuidado com o React Compiler**: chamadas a objetos externos no render (ex.: `remote.view(id)`) são
+memoizadas pelas dependências visíveis — os hooks usam a versão do `useSyncExternalStore` como dependência.
+
+Integração (`tests/integration/remote.test.ts`): um **host falso** (`fakeHost.ts`, dispositivo desktop
+no WebSocket real seguindo o `HostController`: dedupe por `cmd_id`, janelas `host.begin`/`host.end`,
+push com `chat_bases` + `host_epochs`, snapshot/deltas com `n` contíguo, aprovação por item,
+questionário, retry, versões, `fs.*` numa árvore em memória) e o celular real mandam todos os kinds do
+§8.6, sobem anexo antes do envio, fixam o host e veem a queda do host (`host_dropped` → `host_offline`).
+
+E2E com o **desktop real** (Electron do `../ClearChatDesktop` compilado numa cópia no scratchpad, nunca
+no repositório irmão; `CLEARCHAT_USER_DATA` isolado; provedor LLM falso local que transmite devagar, pede
+`shell`/`ask_user` ou corta a conexão): um driver Playwright (`_electron`) loga na conta do E2E, cria o
+chat com `shell` em "Perguntar" e expõe um controle HTTP local para conferir o lado do desktop.
+
 ## Servidor local para testes
 
 Nunca produção. O script sobe um Postgres descartável no Docker (`--tmpfs`, sem volume) e a API de
@@ -218,6 +279,7 @@ src/account/           conta: máquina de estados, AccountService, captcha, Keys
 src/app/               telas (expo-router): (auth), (app) [chats, chat/[id], home = conta], dev/selftest.tsx
 src/chat/              conversa: modelo puro (viewModel), linhas das mensagens, cards de tool, Markdown, anexos
 src/data/              sync de dados: SQLite (store), motor (pull/ao vivo/push/resync), anexos, ligação com a conta
+src/remote/            controle remoto: espelho do stream, comandos §8.6, anexos (upload), arquivos do host
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)
 src/platform/          polyfills e trocas para o Hermes
 src/selftest/          casos dos vetores + checagens da plataforma (Vitest e aparelho)

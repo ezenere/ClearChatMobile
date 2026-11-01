@@ -13,6 +13,8 @@ export default function AppLayout() {
     >
       <Stack.Screen name="chats" />
       <Stack.Screen name="chat/[id]" />
+      <Stack.Screen name="files/[chat]" />
+      <Stack.Screen name="file/[chat]" />
       <Stack.Screen name="home" />
       <Stack.Screen name="recovery-key" />
     </Stack>

@@ -4,12 +4,12 @@
 // chamada, mensagens de outros chats/agente pai/irmãos, resultado de subagente, extração de memória.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { createContext, memo, useContext, useState, type ReactNode } from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import type { SiblingInfo } from '@shared/branches'
 import { contentText, messageAttachments, toolContentText } from '@shared/attachments'
 import { splitInterChatText } from '@shared/interChat'
 import { isSiblingKind, splitSiblingText } from '@shared/siblings'
-import type { Session, StoredMessage } from '@shared/types'
+import type { Session, StoredMessage, StreamDraft } from '@shared/types'
 import { callUsageLines, voiceBadgeText } from '@shared/voiceCallMarks'
 import { dayLabel } from '@vendor/renderer/dates'
 import { CHANGE_LABEL, extractionOf } from '@vendor/renderer/memory'
@@ -19,7 +19,8 @@ import { colors, font } from '@/ui/theme'
 import { MessageAttachments } from './Attachments'
 import { formatCost, formatDuration, formatTokens } from './format'
 import { Markdown } from './Markdown'
-import { EndCallLine, ToolCard } from './ToolCard'
+import { EndCallLine, ToolCard, type ToolLive } from './ToolCard'
+import type { ToolRun } from '@/remote/mirror'
 import type { Row } from './viewModel'
 import { BranchSwitcher, CopyButton, DayPill, MonoBlock, MsgTime } from './ui'
 
@@ -33,6 +34,25 @@ export interface RowContext {
   onSelectBranch: (msgId: string) => void
   onOpenSession: (sessionId: string) => void
   chatTitle: (chatId: string) => string | null
+  /** Controle remoto (§8.6, §11): estado ao vivo e ações. Ausente = somente leitura. */
+  live?: RowLive
+}
+
+export interface RowLive {
+  /** Tools rodando na sessão vista (por toolCallId). */
+  tools: Record<string, ToolRun>
+  /** Tool calls esperando aprovação/resposta (por toolCallId). */
+  awaiting: Record<string, 'approval' | 'question'>
+  onSmartOverride?: (messageId: string) => void
+  /** Toque longo numa mensagem → folha de ações. */
+  onLongPress?: (msg: StoredMessage) => void
+}
+
+function toolLive(c: RowContext, id: string): ToolLive | undefined {
+  if (!c.live) return undefined
+  const run = c.live.tools[id]
+  const awaiting = c.live.awaiting[id] ?? null
+  return run || awaiting ? { run, awaiting } : undefined
 }
 
 export const RowCtx = createContext<RowContext | null>(null)
@@ -137,7 +157,10 @@ function UserMessage({ msg }: { msg: StoredMessage }) {
       {atts ? <MessageAttachments parts={atts} /> : null}
       {body || !hasAtts ? (
         <View style={[st.bubble, accent && st.bubbleAccent]}>
-          <Text style={[st.bubbleText, msg.meta.voice?.source === 'call' && st.italic]} selectable>
+          <Text
+            style={[st.bubbleText, msg.meta.voice?.source === 'call' && st.italic]}
+            selectable={!c.live?.onLongPress}
+          >
             {body}
           </Text>
         </View>
@@ -243,7 +266,13 @@ function AssistantMessage({ msg }: { msg: StoredMessage }) {
   return (
     <View style={st.assistant} testID="msg-assistant">
       {m.reasoning ? <Reasoning msg={msg} text={m.reasoning} /> : null}
-      {content ? <Markdown text={content} italic={msg.meta.voice?.source === 'call'} /> : null}
+      {content ? (
+        <Markdown
+          text={content}
+          italic={msg.meta.voice?.source === 'call'}
+          selectable={!c.live?.onLongPress}
+        />
+      ) : null}
       {msg.meta.interrupted ? (
         <View style={st.interrupted}>
           <Ionicons name="close" size={11} color={colors.subtle} />
@@ -261,6 +290,8 @@ function AssistantMessage({ msg }: { msg: StoredMessage }) {
             subSession={c.childByToolCall.get(tc.id)}
             chatTitle={c.chatTitle}
             onOpenSession={c.onOpenSession}
+            live={toolLive(c, tc.id)}
+            onSmartOverride={c.live?.onSmartOverride}
           />
         )
       )}
@@ -505,6 +536,82 @@ function SystemMessage({ msg }: { msg: StoredMessage }) {
   )
 }
 
+// ---------------- ao vivo (controle remoto) ----------------
+
+function DraftReasoning({ text, thinking }: { text: string; thinking: boolean }) {
+  const [open, setOpen] = useState(false)
+  const tail = text.split('\n').filter(Boolean).slice(-3).join('\n')
+  return (
+    <View style={st.reasoning}>
+      <Pressable onPress={() => setOpen((o) => !o)} style={st.reasonHead} hitSlop={6}>
+        {thinking ? (
+          <ActivityIndicator size={11} color={colors.subtle} />
+        ) : (
+          <Ionicons name="bulb-outline" size={13} color={colors.subtle} />
+        )}
+        <Text style={st.reasonLabel}>{thinking ? 'Pensando…' : 'Raciocínio'}</Text>
+        <Ionicons
+          name={open ? 'chevron-down' : 'chevron-forward'}
+          size={12}
+          color={colors.subtle}
+        />
+      </Pressable>
+      {open || thinking ? (
+        <View style={st.reasonBox} testID="draft-reasoning">
+          <Text style={st.reasonText} numberOfLines={open ? undefined : 3}>
+            {open ? text : tail}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
+/** Resposta ao vivo do host: raciocínio, texto e tool calls atualizando no lugar (§11). */
+export const DraftMessage = memo(function DraftMessage({ draft }: { draft: StreamDraft }) {
+  const c = useRow()
+  const content = draft.content
+  const thinking = !!draft.reasoning && !content && !draft.toolCalls.length
+  const empty = !content && !draft.reasoning && !draft.toolCalls.length
+  return (
+    <View style={st.assistant} testID="msg-draft">
+      {draft.reasoning ? <DraftReasoning text={draft.reasoning} thinking={thinking} /> : null}
+      {content ? <Markdown text={content} selectable={false} /> : null}
+      {draft.toolCalls.map((tc, i) => (
+        <ToolCard
+          key={tc.id || `i${i}`}
+          call={{ id: tc.id, name: tc.name || '…', arguments: tc.arguments }}
+          live={toolLive(c, tc.id) ?? { run: { running: true } }}
+        />
+      ))}
+      {empty ? (
+        <View style={st.typing} testID="draft-typing">
+          <ActivityIndicator size={12} color={colors.accentStrong} />
+          <Text style={st.typingText}>Gerando resposta…</Text>
+        </View>
+      ) : null}
+    </View>
+  )
+})
+
+function SendingRow({ text, files }: { text: string; files: number }) {
+  return (
+    <View style={[st.userWrap, { opacity: 0.6 }]} testID="msg-sending">
+      {text ? (
+        <View style={st.bubble}>
+          <Text style={st.bubbleText}>{text}</Text>
+        </View>
+      ) : null}
+      <View style={st.bubbleFoot}>
+        <ActivityIndicator size={10} color={colors.subtle} />
+        <Text style={st.queued}>
+          enviando…{files ? ` · ${files} ${files === 1 ? 'anexo' : 'anexos'}` : ''}
+        </Text>
+      </View>
+    </View>
+  )
+}
+
 function MessageBody({ msg, old }: { msg: StoredMessage; old: boolean }) {
   const c = useRow()
   const role = msg.message.role
@@ -541,6 +648,18 @@ export const MessageRow = memo(function MessageRow({
   onToggleOld: () => void
 }) {
   const c = useRow()
+  if (row.kind === 'draft')
+    return (
+      <View style={st.row}>
+        <DraftMessage draft={row.draft} />
+      </View>
+    )
+  if (row.kind === 'sending')
+    return (
+      <View style={st.row}>
+        <SendingRow text={row.text} files={row.files} />
+      </View>
+    )
   if (row.kind === 'divider')
     return (
       <View style={st.divider} testID="compaction-divider">
@@ -558,6 +677,28 @@ export const MessageRow = memo(function MessageRow({
     )
   const { msg } = row
   const info = row.switcherAbove ? c.siblings.get(msg.id) : undefined
+  const onLong = c.live?.onLongPress
+  if (onLong)
+    return (
+      <Pressable
+        onLongPress={() => onLong(msg)}
+        delayLongPress={320}
+        style={({ pressed }) => [
+          st.row,
+          row.old && { opacity: 0.55 },
+          pressed && { backgroundColor: 'rgba(255,255,255,0.025)' }
+        ]}
+        testID={`row-${msg.id}`}
+      >
+        {row.dayStart ? <DayPill label={dayLabel(msg.createdAt, c.now)} /> : null}
+        {info ? (
+          <View style={{ flexDirection: 'row', paddingTop: 4 }}>
+            <BranchSwitcher info={info} onSelect={c.onSelectBranch} local={c.localOverride} />
+          </View>
+        ) : null}
+        <MessageBody msg={msg} old={row.old} />
+      </Pressable>
+    )
   return (
     <View style={[st.row, row.old && { opacity: 0.55 }]}>
       {row.dayStart ? <DayPill label={dayLabel(msg.createdAt, c.now)} /> : null}
@@ -734,5 +875,7 @@ const st = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14
   },
-  dividerText: { color: colors.subtle, fontSize: 11.5, flexShrink: 1 }
+  dividerText: { color: colors.subtle, fontSize: 11.5, flexShrink: 1 },
+  typing: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  typingText: { color: colors.subtle, fontSize: 13 }
 })

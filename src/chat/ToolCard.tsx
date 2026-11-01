@@ -4,12 +4,13 @@
 // respostas) e mídia devolvida (read_file de imagem/PDF). Somente leitura nesta fase.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { memo, useState } from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { toolContentText } from '@shared/attachments'
 import { approxTokens } from '@shared/limits'
 import { TOOL_LABELS } from '@shared/tools'
 import type { AskUserRecord, ContentPart, Session, StoredMessage, ToolName } from '@shared/types'
 import { approvalOutcome, type ApprovalOutcome } from '@vendor/renderer/approvalOutcome'
+import type { ToolRun } from '@/remote/mirror'
 import type { IconName } from '@/ui/Button'
 import { colors, font } from '@/ui/theme'
 import { FileChip, ImageThumb } from './Attachments'
@@ -155,12 +156,20 @@ function AskUserBody({
   )
 }
 
+/** Estado ao vivo de uma tool call (controle remoto, §11). */
+export interface ToolLive {
+  run?: ToolRun
+  awaiting?: 'approval' | 'question' | null
+}
+
 export const ToolCard = memo(function ToolCard({
   call,
   result,
   subSession,
   chatTitle,
-  onOpenSession
+  onOpenSession,
+  live,
+  onSmartOverride
 }: {
   call: { id: string; name: string; arguments: string }
   result?: StoredMessage
@@ -169,8 +178,12 @@ export const ToolCard = memo(function ToolCard({
   /** Título de outro chat (send_to_chat). */
   chatTitle?: (id: string) => string | null
   onOpenSession?: (sessionId: string) => void
+  live?: ToolLive
+  /** "Executar mesmo assim" depois de uma rejeição do Smart-Approve (comando smart_override). */
+  onSmartOverride?: (messageId: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [overriding, setOverriding] = useState(false)
   const [details, setDetails] = useState(false)
   const args = parseArgs(call.arguments)
   const name = call.name
@@ -197,7 +210,37 @@ export const ToolCard = memo(function ToolCard({
   const subId = result?.meta.subSessionId ?? subSession?.id
   const S = STATUS[status] ?? STATUS.ok
 
-  const chip = (
+  const smart = result?.meta.smartApprove
+  const liveChip =
+    !result && live?.awaiting === 'approval'
+      ? {
+          text: 'aguardando aprovação',
+          color: colors.warning,
+          spin: false,
+          icon: 'hand-left-outline' as IconName
+        }
+      : !result && live?.awaiting === 'question'
+        ? {
+            text: 'aguardando resposta',
+            color: colors.accentStrong,
+            spin: false,
+            icon: 'help-circle-outline' as IconName
+          }
+        : !result && live?.run?.judging
+          ? { text: 'Smart-Approve avaliando', color: colors.info, spin: true, icon: null }
+          : !result && live?.run
+            ? { text: 'executando', color: colors.accentStrong, spin: true, icon: null }
+            : null
+  const chip = liveChip ? (
+    <View style={st.chip} testID="tool-live-status">
+      {liveChip.spin ? (
+        <ActivityIndicator size={10} color={liveChip.color} />
+      ) : liveChip.icon ? (
+        <Ionicons name={liveChip.icon} size={12} color={liveChip.color} />
+      ) : null}
+      <Text style={[st.chipText, { color: liveChip.color }]}>{liveChip.text}</Text>
+    </View>
+  ) : (
     <Pressable
       disabled={!outcome}
       onPress={() => setDetails((d) => !d)}
@@ -216,6 +259,34 @@ export const ToolCard = memo(function ToolCard({
 
   const below = (
     <>
+      {smart?.decision === 'reject' && result ? (
+        <View style={st.smart} testID="smart-reject">
+          <Ionicons name="shield-outline" size={13} color={colors.danger} />
+          <Text style={st.smartText} numberOfLines={3}>
+            Negado pelo Smart-Approve{smart.reason ? ` — ${smart.reason}` : ''}
+          </Text>
+          {smart.overridden ? (
+            <Text style={st.smartDone}>Liberado · o agente pode repetir uma vez</Text>
+          ) : onSmartOverride ? (
+            <Pressable
+              testID="smart-override"
+              disabled={overriding}
+              onPress={() => {
+                setOverriding(true)
+                onSmartOverride(result.id)
+                setTimeout(() => setOverriding(false), 4000)
+              }}
+              style={({ pressed }) => [st.smartBtn, pressed && { backgroundColor: colors.hover }]}
+            >
+              {overriding ? (
+                <ActivityIndicator size={12} color={colors.fg} />
+              ) : (
+                <Text style={st.smartBtnText}>Executar mesmo assim</Text>
+              )}
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       {outcome?.kind === 'denied' ? (
         <Pressable onPress={() => setDetails((d) => !d)} style={st.denied} testID="tool-denied">
           <Ionicons name="ban-outline" size={13} color={colors.danger} />
@@ -308,13 +379,16 @@ export const ToolCard = memo(function ToolCard({
       below={below}
     >
       <MonoBlock label="Argumentos" text={prettyJson(call.arguments)} testID="tool-args" />
+      {!result && live?.run?.output ? (
+        <MonoBlock label="Saída ao vivo" text={live.run.output} testID="tool-live-output" />
+      ) : null}
       {result ? (
         <MonoBlock
           label={`Resultado · ${resultText.length.toLocaleString('pt-BR')} caracteres`}
           text={resultText}
           testID="tool-result"
         />
-      ) : (
+      ) : live?.run || live?.awaiting ? null : (
         <Text style={[st.reason, { padding: 12 }]}>Sem resultado registrado.</Text>
       )}
     </Collapsible>
@@ -342,6 +416,30 @@ export function EndCallLine({ args, result }: { args: string; result?: StoredMes
 }
 
 const st = StyleSheet.create({
+  smart: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    backgroundColor: 'rgba(248,113,113,0.04)'
+  },
+  smartText: { flex: 1, minWidth: 160, color: colors.muted, fontSize: 12.5, lineHeight: 18 },
+  smartDone: { color: colors.subtle, fontSize: 11.5 },
+  smartBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.elevated,
+    minWidth: 60,
+    alignItems: 'center'
+  },
+  smartBtnText: { color: colors.fg, fontSize: 12.5, fontWeight: '500' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   right: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
   size: { color: colors.faint, fontSize: 10.5, fontVariant: ['tabular-nums'] },

@@ -26,6 +26,9 @@ class FakeRealtime implements RealtimeLike {
   getState(): WsState {
     return this.state
   }
+  request(): Promise<Record<string, unknown>> {
+    return Promise.reject(new Error('sem WebSocket nos testes da conta'))
+  }
   get running(): boolean {
     return this.state !== 'stopped' && this.state !== 'idle'
   }

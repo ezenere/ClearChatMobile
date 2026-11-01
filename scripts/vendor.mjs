@@ -77,7 +77,9 @@ const GROUPS = {
       'models.ts',
       'webSearchSettings.ts',
       'autoTitle.ts',
-      'voiceCallMarks.ts'
+      'voiceCallMarks.ts',
+      'remoteFs.ts',
+      'smartApprove.ts'
     ]
   },
   desktop: {
