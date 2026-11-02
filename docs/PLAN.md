@@ -1,7 +1,7 @@
 # ClearChat Mobile — plano
 
 App Android (iOS depois) em **Expo SDK 58 / React Native 0.88**, com dev build (`expo prebuild`) —
-precisamos de módulos nativos. Implementa o protocolo de sync v1.5.0.
+precisamos de módulos nativos. Implementa o protocolo de sync v1.6.0.
 
 ## Escopo
 
@@ -58,7 +58,7 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 | 3. Controle remoto ✅ | Estado do host, stream ao vivo, todos os comandos §8.6, cards de aprovação/questionário/retry, fila, upload de anexos, arquivos do host | desktop (build local) hospedando + celular controlando |
 | 4a. Host no celular ✅ | Novo chat (persona, modelo, parâmetros, tools portáveis); loop do agente (web_search, browse_url, ask_user, list_models, aprovações/Smart-Approve); janelas `host.begin/end`, revisões com `chat_bases`/`host_epochs`; "Executar neste dispositivo"; o PC importa o chat (§8.8); recusa chats com tools locais e controle remoto; segundo plano interrompe | celular executando + desktop recusado/importando |
 | 4b. Host no celular (resto) ✅ | Memória (tools + extração), subagentes, entre chats, `read_history`, compactação, título automático e chamadas laterais; execução offline e divergência com versão local (§9) | idem |
-| 5. Configurações | Provedores, personas, memórias, pesquisa na web, dispositivos, conta | e2e |
+| 5. Configurações ✅ | Provedores, personas, memórias, pesquisa na web, novos chats, aprovações, dispositivos, conta (trocar senha, chave de recuperação, lembrar/biometria); FLAG_SECURE nas telas sensíveis | unitários + integração + e2e com o desktop real |
 | 6. Voz e iOS | Ditado/chamada; build iOS no Mac | — |
 
 ## Testes
@@ -88,9 +88,8 @@ Pendências / TODO:
 - **Captcha**: lógica coberta por testes unitários; não exercitado no aparelho (o servidor local roda
   sem a página `/captcha` do site e sem Turnstile). Testar contra uma instância com o site + chaves de
   teste da Cloudflare.
-- `FLAG_SECURE` (bloquear screenshot/tela de recentes) nas telas da chave de recuperação e senha.
-- Trocar senha de criptografia e lista/revogação de dispositivos nas Configurações (fase 5; o
-  `AccountService` já tem `changePassword`/`renameDevice`).
+- ~~`FLAG_SECURE` nas telas da chave de recuperação e senha~~ (fase 5).
+- ~~Trocar senha de criptografia e lista/revogação de dispositivos nas Configurações~~ (fase 5).
 - Mensagem do `hello` falho no WebSocket vem do `ws.ts` vendorado (`console.warn`, sem segredos).
 
 ## Fase 2 — estado (2026-10-31)
@@ -115,7 +114,7 @@ cache, sair apaga o cache).
 Pendências / TODO:
 - **Outbox offline**: escrita (renomear/apagar) exige conexão; fila local com `dirty_fields` fica para as
   fases 3/5 (junto com as escritas de conteúdo e configurações).
-- **Bloquear não cifra o cache**: avaliar SQLCipher (`expo-sqlite` `useSQLCipher`) com chave derivada da DEK.
+- **Bloquear não cifra o cache**: avaliado na fase 5 (SQLCipher) — ver "Fase 5 — estado" (recomendação: adiar).
 - Fórmulas sem KaTeX (texto monoespaçado); código sem realce de sintaxe.
 - Pinça no visualizador de imagem só testada por duplo toque no emulador (adb não faz multitoque).
 - `present_file` mostra o card genérico (os arquivos ficam no host — `fs.read` é da fase 3);
@@ -213,6 +212,94 @@ Pendências / TODO:
   Mudança de protocolo sugerida: `meta?: Pick<MessageMeta, 'kind'|'fromChatId'|'fromChatTitle'|'interChatHops'>` no `send`.
 - Desktop: o `send_to_chat` dele entrega localmente mesmo quando o chat de destino é executado em outro
   dispositivo (inclusive no celular, que recusa comandos) — precisa passar pelo portão do sync.
-- Criar/editar coleções e memórias à mão no celular: fase 5 (Configurações).
+- ~~Criar/editar coleções e memórias à mão no celular~~ (fase 5).
 - Coleta automática de contexto do Smart-Approve (resumidor) segue só no desktop.
 - O ponto verde do status do composer não muda sem conexão (a faixa explica).
+
+## Fase 5 — estado (2026-11-02)
+
+Feito: Configurações no celular (`src/settings/` + `src/app/(app)/settings/`), com os mesmos grupos e a
+mesma semântica do desktop: **Novos chats** (persona padrão, modelo padrão, system prompt padrão, título
+automático com modelo/memórias/limite/prompt, limite de saída das tools), **Personas** (lista com
+estrela = padrão, criar/editar/duplicar/apagar; editor com Modelo + parâmetros, Chat, Tools — as que
+rodam no celular e as só do computador — e Memória: é a persona que define as coleções ativas dos
+chats novos), **Aprovações** (modo global por item, padrões do Smart-Approve com o modelo do
+resumidor, whitelist/blacklist de comandos/processos/páginas), **Memórias** (coleções por categoria:
+criar/editar/apagar com as memórias; memórias à mão: título, resumo, detalhes com subir/descer,
+"Sempre carregar", mover, substitui/substituída, apagar; busca FTS), **Pesquisa na web** (ordem,
+liga/desliga, chave de API mascarada, resultados, profundidade do Tavily, intervalo; Brave pelo site
+marcado "só no computador"), **Provedores** (OpenAI-compatible, OpenRouter, Anthropic, ElevenLabs;
+chave mascarada; headers extras; "Testar conexão" = `testProvider` do desktop, inclusive `/key` do
+OpenRouter e `/v1/models` da ElevenLabs; "Ver modelos" → usar como padrão), **Dispositivos** (atual
+marcado, online/visto há…, renomear qualquer um, desconectar os outros com confirmação; desconectar o
+atual = sair) e **Conta** (renomear este aparelho, lembrar/biometria com o cofre aberto, trocar senha
+de criptografia, nova chave de recuperação, bloquear, sair). A antiga tela "Conta" (`home.tsx`) virou
+`settings/account.tsx`; o botão da lista de chats abre as Configurações.
+
+Decisões:
+- **Toda escrita pela outbox LWW** (`src/data/lww.ts`, a mesma das memórias da 4b): o cache muda na hora
+  e sobe depois — funciona offline. `provider`/`preset` = LWW por campo; para `config` da persona o
+  patch vai **chave a chave** e as chaves removidas ("Usar o padrão") seguem em `__configUnset` (só
+  orienta o merge, nunca vai ao servidor); `setting` = LWW inteiro. O formulário guarda a versão que
+  abriu e salvar aplica só o que o usuário mudou sobre a versão atual (`mergeEdits`): não desfaz uma
+  edição feita no PC enquanto a tela estava aberta. A outbox agora é retomada ao abrir o cofre e quando
+  o WebSocket volta (`startSettings`) — na 4b só uma escrita nova a disparava.
+- **Trocar senha pede a senha atual** (conferida no aparelho: Argon2id + desembrulhar e comparar a DEK;
+  errada → nada vai ao servidor). O protocolo só exige a DEK em memória (o desktop não pede); no celular,
+  mais fácil de ficar desbloqueado na mão de outra pessoa, a senha atual é exigida. A DEK não muda.
+- **FLAG_SECURE** por um módulo nativo local mínimo (`modules/secure-screen`, `setSecure` com contagem
+  de telas no JS, ligado só com a tela em foco via `useFocusEffect`) em vez do `expo-screen-capture`, que
+  adiciona permissões de armazenamento/mídia ao manifesto. Telas: desbloqueio, recuperação, setup, nova
+  chave de recuperação, trocar senha, editor de provedor e Pesquisa na web. Chaves digitadas ficam na
+  própria tela (o `Modal` do Android é outra janela e não herda o flag).
+- Settings do aparelho (§4.4) continuam locais: "lembrar"/biometria no kv/Keystore; nada de pasta.
+- Tipos do desktop que não dava para vendorar: o formulário do provedor (`renderer/src/lib/provider.ts`
+  importa React e o IPC) foi portado para `src/settings/records.ts`; o resto é vendorado (memória da UI:
+  `toggleCollection`/`setWriteTarget`/`moveTargets`/`cleanField`…, `webSearchSettings`, `approvalPolicy`,
+  `smartDefaults`, `autoTitle`, `presets`).
+- **Cuidado com o React Compiler (de novo)**: `menu!.id` dentro de um callback passado como prop vira
+  dependência lida no render (`Cannot read property 'id' of null` com o menu fechado). Nos callbacks,
+  testar e usar (`if (!menu) return; … menu.id`), nunca `!.`. As leituras do cache nas telas passam
+  pela versão (`readAt(version, …)`) para o compilador refazê-las quando o motor avisa
+  (`DataEvent.settings`, novo: provedores, personas, settings e memórias que chegam por pull/ao vivo).
+
+Verificado: `npm test` (228; `tests/settings.test.ts` com 10 novos — formulário, patch/merge com
+chaves removidas, persona sem `cwd`, buscadores, e o serviço contra o servidor falso: provedor mesclado
+com o PC, persona "usar o padrão" offline enquanto o PC muda o prompt, LWW inteiro de setting, chave e
+lista do web_search, coleção + memória e apagar a coleção — e 3 em `tests/account.test.ts`: trocar senha
+com a atual, lembrar/biometria, dispositivos), `npm run test:integration` (com
+`tests/integration/settings.test.ts`: celular grava → desktop decifra com o esquema do §4.3, desktop muda
+→ celular recebe ao vivo, conflito na persona mesclado, offline → sobe ao reconectar, cascata da coleção,
+padrão apagada, dispositivos renomear/desconectar, troca de senha com a DEK igual) e E2E no AVD com o
+**desktop real** (provedor criado no celular com teste de conexão e modelo padrão → visto no desktop;
+provedor renomeado no desktop → ao vivo no celular; persona com modelo/parâmetro/memória → desktop;
+persona padrão → o Novo chat abre com ela; coleção + memória à mão, fixada → desktop; desktop edita a
+memória → ao vivo; chave do Tavily + ligar + ordem → desktop; título automático, aprovação e whitelist
+→ desktop; renomear o PC e desconectar a sessão do site (401 depois); trocar senha → a antiga não abre
+mais nem no celular nem no desktop, a nova abre nos dois; lembrar desligar/ligar; FLAG_SECURE conferido
+no `dumpsys window` e no screencap preto). Screenshots em `scratchpad/mobile/phase5/` (as telas com
+FLAG_SECURE foram revisadas pelo framebuffer do emulador — `adb emu screenrecord screenshot`, lado do
+host).
+
+**SQLCipher (avaliação, não implementado).** O `expo-sqlite` suporta SQLCipher (`useSQLCipher` no
+plugin + `PRAGMA key`). Para valer a pena: o cache só abre depois do desbloqueio, com chave derivada da
+DEK só neste aparelho (ex.: HKDF(DEK, "clearchat/mobile/cache")), e bloquear fecha o banco. Hoje o
+`LocalStore` abre no import (`src/data/native.ts`) e é usado por todos os módulos antes do cofre: seria
+refatorar o ciclo de vida (abrir/fechar com a sessão), migrar (o mais simples: apagar o cache e puxar de
+novo) e ainda cifrar à parte os anexos decifrados em `Documents/attachments/`, que o SQLCipher não
+cobre. Ganho real só com "Lembrar" desligado — lembrado, a DEK está no Keystore e o app abre sozinho; e
+o Android já cifra os dados do app em repouso (FBE) com o aparelho bloqueado. **Recomendação: adiar**;
+fazer junto com a cifra dos anexos e um modo "não lembrar" mais visível, se a ameaça "aparelho
+desbloqueado e extraído" entrar no escopo.
+
+Pendências / TODO:
+- A integração completa passa do limite anti-abuso do servidor (20 códigos/h por IP, §17.3): rodar em
+  dois lotes com o servidor reiniciado entre eles (account/data/e2eTool/host · phase4b/remote/settings).
+- Biometria: o interruptor "Exigir biometria" só aparece com biometria cadastrada — não exercitado no AVD
+  (sem digital); coberto pelo teste unitário do `setRemember`.
+- Áudio (STT/TTS/chamada) e Skills ficam para a fase 6 / só desktop; o editor de persona do celular não
+  mostra voz, assinatura, raiz, contexto avançado (preservados como estão).
+- O desktop mostra o nome dele em cache depois de ser renomeado pelo celular (só no próprio desktop; o
+  servidor e os outros dispositivos veem o novo nome).
+- No E2E, digitar com `adb input text` dentro de um `Modal` (diálogo) com dois "r" seguidos recarrega o
+  app de desenvolvimento (atalho RR do RN): artefato do teste, não do app.

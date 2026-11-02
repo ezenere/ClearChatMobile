@@ -9,8 +9,10 @@ import { Banner, Spinner } from '@/ui/Card'
 import { RecoveryKeyPanel } from '@/ui/RecoveryKeyPanel'
 import { Hero, Screen, ScreenHeader } from '@/ui/Screen'
 import { useToast } from '@/ui/Toast'
+import { useSecureScreen } from '@/ui/secure'
 
 export default function NewRecoveryKey() {
+  useSecureScreen()
   const s = useSession()
   const router = useRouter()
   const toast = useToast()

@@ -1,6 +1,6 @@
 // Escrita LWW com outbox persistida (SYNC_PROTOCOL.md §7.4–7.5) para registros que o celular grava
-// sozinho, sem esperar a rede (hoje: `memory` e `memory_collection` das tools de memória e da
-// extração). A revisão vai ao cache na hora (`LocalStore.writeLww`) e sobe um registro por lote
+// sozinho, sem esperar a rede: `memory`/`memory_collection` (tools de memória, extração e
+// Configurações → Memórias) e `provider`/`preset`/`setting` (Configurações). A revisão vai ao cache na hora (`LocalStore.writeLww`) e sobe um registro por lote
 // (um conflito não segura o resto): `rev_mismatch` → os campos mudados aqui sobre a versão do
 // servidor (`updatedAt` = o maior), `gone` → a exclusão vence (apaga aqui), sem rede → tenta de
 // novo com espera crescente. Sem React Native.
@@ -21,8 +21,20 @@ export interface LwwDeps {
   uuid?: () => string
 }
 
-/** Tipos LWW por campo que passam por aqui, na ordem de envio (coleção antes da memória). */
-const ORDER: Record<string, number> = { memory_collection: 0, memory: 1 }
+/** Tipos que passam por aqui, na ordem de envio (coleção antes da memória). */
+const ORDER: Record<string, number> = {
+  setting: 0,
+  provider: 0,
+  preset: 0,
+  memory_collection: 1,
+  memory: 2
+}
+
+/**
+ * Chave do patch com as chaves de `config` removidas aqui (persona: "Usar o padrão" apaga
+ * `providerId`/`model`). Nunca vai ao servidor: só orienta o merge.
+ */
+export const CONFIG_UNSET = '__configUnset'
 
 const isNetwork = (e: unknown): boolean => e instanceof SyncNetworkError
 
@@ -32,9 +44,22 @@ function conflictOf(e: unknown): PushConflict | null {
   return Array.isArray(list) && list.length ? (list[0] as PushConflict) : null
 }
 
-/** Versão do servidor + os campos mudados aqui (`updatedAt` = o maior dos dois). */
+const isObj = (v: unknown): v is Plain => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/**
+ * Versão do servidor + os campos mudados aqui (`updatedAt` = o maior dos dois). `config`
+ * (persona, §7.5) mescla chave a chave: só as chaves mudadas aqui vão por cima, e as listadas em
+ * `__configUnset` saem.
+ */
 export function mergeLww(server: Plain, patch: Plain): Plain {
-  const out: Plain = { ...server, ...patch }
+  const { [CONFIG_UNSET]: unset, ...rest } = patch
+  const out: Plain = { ...server, ...rest }
+  if (isObj(rest.config) || Array.isArray(unset)) {
+    const mine = isObj(rest.config) ? rest.config : {}
+    const cfg: Plain = { ...(isObj(server.config) ? server.config : {}), ...mine }
+    if (Array.isArray(unset)) for (const k of unset) if (!(String(k) in mine)) delete cfg[String(k)]
+    out.config = cfg
+  }
   const a = typeof server.updatedAt === 'number' ? server.updatedAt : 0
   const b = typeof patch.updatedAt === 'number' ? patch.updatedAt : 0
   if (a || b) out.updatedAt = Math.max(a, b)

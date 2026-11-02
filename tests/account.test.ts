@@ -417,3 +417,73 @@ describe('sessão (§5.4, §10.2)', () => {
     expect(hello.access_token).not.toBe(t.access_token)
   })
 })
+
+describe('Configurações → Conta e Dispositivos (fase 5)', () => {
+  it('trocar senha confere a atual (sem tocar no servidor se errada) e regrava só a wrap', async () => {
+    await withKeys()
+    const a = make()
+    await signedIn(a)
+    await a.unlock(PASSWORD, { remember: true })
+    const rev = server.keys!.keys_rev
+    const dekBefore = secrets.dek
+    const wrong = await a
+      .changePasswordWithCurrent('não é a senha atual', 'uma senha nova bem comprida')
+      .catch((e: unknown) => e)
+    expect(describeError(wrong)).toBe('Senha de criptografia incorreta.')
+    expect(server.callsTo('/api/v1/keys/password')).toHaveLength(0)
+    await expect(a.changePasswordWithCurrent(PASSWORD, 'curta')).rejects.toBeInstanceOf(UserError)
+    await expect(a.changePasswordWithCurrent(PASSWORD, PASSWORD)).rejects.toThrow(/igual/)
+    await a.changePasswordWithCurrent(PASSWORD, 'uma senha nova bem comprida')
+    expect(server.keys!.keys_rev).toBe(rev + 1)
+    // a DEK não muda (os outros dispositivos seguem funcionando) e a lembrada continua valendo
+    expect(secrets.dek).toBe(dekBefore)
+    await a.lock()
+    await expect(a.unlock(PASSWORD, { remember: false })).rejects.toBeTruthy()
+    await a.unlock('uma senha nova bem comprida', { remember: false })
+    expect(a.getState().phase).toBe('unlocked')
+  })
+
+  it('lembrar/biometria com o cofre aberto regravam (ou apagam) a DEK guardada', async () => {
+    await withKeys()
+    secrets.biometrics = true
+    const a = make()
+    await signedIn(a)
+    await a.unlock(PASSWORD, { remember: false })
+    expect(secrets.dek).toBeNull()
+    await a.setRemember({ remember: true, biometric: true })
+    expect(secrets.dek).not.toBeNull()
+    expect(secrets.dekBiometric).toBe(true)
+    expect(a.getState()).toMatchObject({ remember: true, biometric: true })
+    await a.setRemember({ remember: false })
+    expect(secrets.dek).toBeNull()
+    expect(kv.get(KV.remember)).toBe('0')
+    expect(a.getState().remember).toBe(false)
+  })
+
+  it('lista os dispositivos, renomeia outro e desconecta outro; desconectar o atual = sair', async () => {
+    await withKeys()
+    server.devices.set('dev-pc', {
+      id: 'dev-pc',
+      name: 'PC',
+      client: 'desktop',
+      platform: 'linux',
+      revoked: false
+    })
+    const a = make()
+    await signedIn(a)
+    const list = await a.devices()
+    expect(list).toHaveLength(2)
+    const me = list.find((d) => d.current)!
+    const them = list.find((d) => !d.current)!
+    expect(me.id).toBe(a.getState().device!.id)
+    await a.renameDevice('PC do escritório', them.id)
+    expect(server.devices.get(them.id)!.name).toBe('PC do escritório')
+    expect(a.getState().device!.name).toBe('Meu celular')
+    await a.revokeDevice(them.id)
+    expect(server.devices.get(them.id)!.revoked).toBe(true)
+    expect((await a.devices()).map((d) => d.id)).toEqual([me.id])
+    await a.revokeDevice(me.id)
+    expect(a.getState().phase).toBe('signed-out')
+    expect(server.callsTo('/api/v1/auth/logout')).toHaveLength(1)
+  })
+})

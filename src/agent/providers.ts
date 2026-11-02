@@ -1,7 +1,9 @@
-// Modelos dos provedores (porta de ClearChatDesktop/src/main/providers.ts sem ElevenLabs/IPC):
+// Modelos dos provedores (porta de ClearChatDesktop/src/main/providers.ts sem IPC):
 // GET {baseUrl}/models pelo adaptador do provedor (OpenAI-compatible/OpenRouter: mapModel;
-// Anthropic nativa: paginado), com cache de 5 min por provedor. As chaves vêm dos registros
-// `provider` sincronizados (decifrados no aparelho) e nunca vão para logs.
+// Anthropic nativa: paginado), com cache de 5 min por provedor, e o "Testar conexão" das
+// Configurações (o /models do OpenRouter é público: a chave é validada em /key; ElevenLabs = voz,
+// GET /v1/models). As chaves vêm dos registros `provider` sincronizados (decifrados no aparelho) e
+// nunca vão para logs.
 import { openRouterReasoning, openRouterSupportedParams } from '@shared/modelParams'
 import { isChatProvider, providerKind, type ProviderKind } from '@shared/providerKinds'
 import type { ModelInfo, Provider } from '@shared/types'
@@ -97,6 +99,66 @@ async function fetchModels(p: ModelsInput): Promise<ModelInfo[]> {
     .map((m) => (m && typeof m === 'object' ? mapModel(m as Record<string, unknown>) : null))
     .filter((m): m is ModelInfo => !!m)
     .sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** Modelos de voz da ElevenLabs (GET /v1/models com `xi-api-key`) — só para o "Testar conexão". */
+async function fetchElevenLabsModels(p: ModelsInput): Promise<ModelInfo[]> {
+  const base = p.baseUrl.replace(/\/+$/, '')
+  const headers = adapterFor('elevenlabs').getHeaders({
+    apiKey: p.apiKey,
+    headers: p.headers ?? {}
+  })
+  const j = await getJson(`${base}/v1/models`, headers)
+  const list = Array.isArray(j)
+    ? j
+    : Array.isArray((j as { models?: unknown }).models)
+      ? (j as { models: unknown[] }).models
+      : null
+  if (!list) throw new Error('Formato inesperado da resposta de /v1/models da ElevenLabs.')
+  return list.flatMap((m) => {
+    const o = (m && typeof m === 'object' ? m : {}) as Record<string, unknown>
+    const id = typeof o.model_id === 'string' ? o.model_id : ''
+    if (!id || o.can_do_text_to_speech === false) return []
+    return [{ id, name: typeof o.name === 'string' && o.name ? o.name : id }]
+  })
+}
+
+export interface ProviderTestResult {
+  ok: boolean
+  error?: string
+  modelCount?: number
+  /** Modelos listados (para "Ver modelos" e escolher o padrão). */
+  models?: ModelInfo[]
+}
+
+/** "Testar conexão" (= desktop `testProvider`): lista os modelos; no OpenRouter valida a chave. */
+export async function testProvider(p: ModelsInput): Promise<ProviderTestResult> {
+  try {
+    const base = (p.baseUrl ?? '').trim().replace(/\/+$/, '')
+    const kind = providerKind({ baseUrl: base, kind: p.kind })
+    const input = { kind, baseUrl: base, apiKey: (p.apiKey ?? '').trim(), headers: p.headers ?? {} }
+    if (!/^https?:\/\//i.test(base)) throw new Error('Base URL inválida (use http:// ou https://).')
+    const models =
+      kind === 'elevenlabs' ? await fetchElevenLabsModels(input) : await fetchModels(input)
+    if (kind === 'openrouter') {
+      if (!input.apiKey)
+        return { ok: false, error: 'Informe a API key.', modelCount: models.length, models }
+      const headers = adapterFor(kind).getHeaders(input)
+      const res = await fetch(`${base}/key`, { headers, signal: AbortSignal.timeout(20_000) })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        return {
+          ok: false,
+          error: readableError(res.status, res.statusText, text),
+          modelCount: models.length,
+          models
+        }
+      }
+    }
+    return { ok: true, modelCount: models.length, models }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message }
+  }
 }
 
 export async function listModels(provider: Provider): Promise<ModelInfo[]> {

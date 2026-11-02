@@ -1,4 +1,4 @@
-// Dentro da conta (cofre aberto): lista de chats, conversa, conta/aparelho e chave de recuperação.
+// Dentro da conta (cofre aberto): lista de chats, conversa, Configurações e chave de recuperação.
 import { Stack } from 'expo-router'
 import { colors } from '@/ui/theme'
 
@@ -16,7 +16,7 @@ export default function AppLayout() {
       <Stack.Screen name="new" options={{ animation: 'slide_from_bottom' }} />
       <Stack.Screen name="files/[chat]" />
       <Stack.Screen name="file/[chat]" />
-      <Stack.Screen name="home" />
+      <Stack.Screen name="settings" />
       <Stack.Screen name="recovery-key" />
     </Stack>
   )

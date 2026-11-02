@@ -11,6 +11,7 @@ import { useSession } from '@/account/react'
 import { startData } from '@/data/native'
 import { startRemote } from '@/remote/native'
 import { startHost } from '@/host/native'
+import { startSettings } from '@/settings/native'
 import { ToastProvider } from '@/ui/Toast'
 import { colors } from '@/ui/theme'
 
@@ -35,6 +36,7 @@ export default function RootLayout() {
     startData()
     startRemote()
     startHost()
+    startSettings()
     void startAccount()
       .catch(() => undefined)
       .finally(() => void SplashScreen.hideAsync().catch(() => undefined))

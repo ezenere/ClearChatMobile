@@ -1,0 +1,7 @@
+{
+  "name": "clearchat-secure-screen",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FLAG_SECURE (sem screenshot nem prévia nos recentes) nas telas sensíveis do ClearChat Mobile",
+  "main": "index.ts"
+}

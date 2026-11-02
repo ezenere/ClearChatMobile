@@ -161,7 +161,34 @@ export class FakeServer {
       this.keys = { ...this.keys, keys_rev: this.keys.keys_rev + 1 }
       return { status: 200, json: this.keys }
     }
+    if (c.method === 'GET' && c.path === '/api/v1/devices') {
+      const me = this.authed(c.headers)
+      if (!me) return err(401, 'unauthorized')
+      return {
+        status: 200,
+        json: [...this.devices.values()]
+          .filter((d) => !d.revoked)
+          .map((d) => ({
+            id: d.id,
+            name: d.name,
+            platform: 'android',
+            client: 'mobile',
+            app_version: '0.1.0',
+            can_host: true,
+            created_at: null,
+            last_seen_at: null,
+            online: d.id === me.id,
+            current: d.id === me.id
+          }))
+      }
+    }
     const m = /^\/api\/v1\/devices\/([^/]+)$/.exec(c.path)
+    if (m && c.method === 'DELETE') {
+      const id = decodeURIComponent(m[1])
+      if (!this.devices.has(id)) return err(404, 'not_found')
+      this.revoke(id)
+      return { status: 204 }
+    }
     if (m && c.method === 'PATCH') {
       const d = this.devices.get(decodeURIComponent(m[1]))
       if (!d) return err(404, 'not_found')

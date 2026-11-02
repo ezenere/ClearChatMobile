@@ -1,107 +1,35 @@
-// Conta e aparelho (aberta pela lista de chats): conta, instância, aparelho, conexão e cache local;
-// Bloquear e Sair.
+// Configurações → Conta: conta e instância, este aparelho (renomear), lembrar/biometria, dados no
+// aparelho, segurança (trocar senha de criptografia, nova chave de recuperação), bloquear e sair.
 import { useRouter } from 'expo-router'
 import { useState } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, View } from 'react-native'
 import { account } from '@/account/native'
 import { hostOf, useAction, useSession } from '@/account/react'
-import type { Connection } from '@/account/session'
-import { Button } from '@/ui/Button'
-import { Banner, Card, Divider, ListItem, SectionLabel, StatusPill } from '@/ui/Card'
-import { ConfirmDialog, Dialog } from '@/ui/Dialog'
-import { Screen, ScreenHeader } from '@/ui/Screen'
-import { TextField } from '@/ui/TextField'
-import { colors, spacing } from '@/ui/theme'
 import { syncLabel } from '@/chat/ChatBits'
 import { engine, store, useSyncStatus } from '@/data/react'
+import { SettingsScreen } from '@/settings/ui'
+import { RenameDialog } from '@/settings/RenameDialog'
+import { Button } from '@/ui/Button'
+import { Banner, Card, Divider, ListItem, SectionLabel, ToggleRow } from '@/ui/Card'
+import { ConfirmDialog } from '@/ui/Dialog'
+import { useToast } from '@/ui/Toast'
+import { spacing } from '@/ui/theme'
 
-const CONNECTION: Record<
-  Connection,
-  { tone: 'success' | 'warning' | 'danger' | 'muted'; label: string }
-> = {
-  online: { tone: 'success', label: 'Conectado' },
-  connecting: { tone: 'warning', label: 'Conectando…' },
-  offline: { tone: 'muted', label: 'Offline' },
-  error: { tone: 'danger', label: 'Erro de conexão' }
-}
-
-function RenameDevice({ onClose }: { onClose: () => void }) {
-  const s = useSession()
-  const [name, setName] = useState(s.device?.name ?? '')
-  const { busy, error, run } = useAction()
-  return (
-    <Dialog
-      visible
-      withInput
-      title="Nome deste aparelho"
-      onClose={onClose}
-      actions={
-        <>
-          <Button
-            title="Cancelar"
-            variant="secondary"
-            full={false}
-            style={{ flex: 1 }}
-            onPress={onClose}
-          />
-          <Button
-            testID="rename-save"
-            title="Salvar"
-            full={false}
-            style={{ flex: 1 }}
-            loading={busy}
-            disabled={!name.trim()}
-            onPress={() =>
-              void run(async () => {
-                await account.renameDevice(name)
-                onClose()
-              })
-            }
-          />
-        </>
-      }
-    >
-      <TextField
-        testID="rename-input"
-        value={name}
-        onChangeText={(v) => setName(v.slice(0, 64))}
-        icon="phone-portrait-outline"
-        autoFocus
-        error={error}
-        hint="Aparece na lista de dispositivos da conta."
-      />
-    </Dialog>
-  )
-}
-
-export default function Home() {
+export default function AccountSettings() {
   const s = useSession()
   const router = useRouter()
+  const toast = useToast()
   const [renaming, setRenaming] = useState(false)
   const lock = useAction()
   const out = useAction()
-  const conn = CONNECTION[s.connection]
+  const remember = useAction()
   const sync = useSyncStatus()
   const stats = store.stats()
-
   const [confirmOut, setConfirmOut] = useState(false)
-  const logout = () => setConfirmOut(true)
+  const bio = account.canUseBiometrics
 
   return (
-    <Screen
-      testID="screen-home"
-      header={<ScreenHeader title="Conta" onBack={() => router.back()} />}
-    >
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.hello}>ClearChat</Text>
-          <Text style={styles.email} numberOfLines={1} testID="home-email">
-            {s.account?.email}
-          </Text>
-        </View>
-        <StatusPill testID="home-connection" tone={conn.tone} label={conn.label} />
-      </View>
-
+    <SettingsScreen title="Conta" testID="screen-home">
       {s.notice ? (
         <Banner
           tone={s.notice.tone}
@@ -109,7 +37,7 @@ export default function Home() {
           onClose={() => account.dismissNotice()}
           action={
             s.notice.action === 'new-recovery-key' ? (
-              <View style={styles.noticeAction}>
+              <View style={st.noticeAction}>
                 <Button
                   title="Gerar nova chave"
                   size="sm"
@@ -148,28 +76,47 @@ export default function Home() {
           onPress={() => setRenaming(true)}
           chevron
         />
-        <Divider />
-        <ListItem
-          icon={
-            s.remember
-              ? s.biometric
-                ? 'finger-print'
-                : 'shield-checkmark-outline'
-              : 'shield-outline'
-          }
-          title={s.remember ? 'Lembrado neste aparelho' : 'Não lembrado'}
-          subtitle={
-            s.remember
-              ? s.biometric
-                ? 'Abre com biometria.'
-                : 'Abre direto; use Bloquear para pedir a senha.'
-              : 'A senha será pedida quando o app abrir de novo.'
-          }
-        />
       </Card>
 
-      <SectionLabel>Dados neste aparelho</SectionLabel>
+      <SectionLabel>Neste aparelho</SectionLabel>
       <Card padded={false}>
+        <View style={st.pad}>
+          <ToggleRow
+            title="Lembrar neste aparelho"
+            subtitle={
+              s.remember
+                ? 'Abre direto; use Bloquear para pedir a senha.'
+                : 'A senha será pedida quando o app abrir de novo.'
+            }
+            value={s.remember}
+            disabled={remember.busy}
+            onChange={(v) =>
+              void remember.run(async () => {
+                await account.setRemember({ remember: v, biometric: v && s.biometric })
+                toast(v ? 'Lembrado neste aparelho' : 'A senha será pedida na próxima abertura')
+              })
+            }
+            testID="account-remember"
+          />
+        </View>
+        {bio ? (
+          <>
+            <Divider />
+            <View style={st.pad}>
+              <ToggleRow
+                title="Exigir biometria"
+                subtitle="A chave guardada só abre com a sua digital/rosto."
+                value={s.remember && s.biometric}
+                disabled={!s.remember || remember.busy}
+                onChange={(v) =>
+                  void remember.run(() => account.setRemember({ remember: true, biometric: v }))
+                }
+                testID="account-biometric"
+              />
+            </View>
+          </>
+        ) : null}
+        <Divider />
         <ListItem
           testID="home-sync"
           icon="sync-outline"
@@ -182,9 +129,19 @@ export default function Home() {
           onPress={() => void engine.sync()}
         />
       </Card>
+      {remember.error ? <Banner tone="danger">{remember.error}</Banner> : null}
 
       <SectionLabel>Segurança</SectionLabel>
       <Card padded={false}>
+        <ListItem
+          testID="account-password"
+          icon="lock-closed-outline"
+          title="Trocar senha de criptografia"
+          subtitle="Os outros dispositivos continuam funcionando."
+          onPress={() => router.push('/settings/password')}
+          chevron
+        />
+        <Divider />
         <ListItem
           testID="home-recovery-key"
           icon="key-outline"
@@ -196,7 +153,7 @@ export default function Home() {
       </Card>
 
       {lock.error || out.error ? <Banner tone="danger">{lock.error ?? out.error}</Banner> : null}
-      <View style={styles.actions}>
+      <View style={st.actions}>
         <Button
           testID="home-lock"
           title="Bloquear"
@@ -211,10 +168,17 @@ export default function Home() {
           variant="dangerGhost"
           icon="log-out-outline"
           loading={out.busy}
-          onPress={logout}
+          onPress={() => setConfirmOut(true)}
         />
       </View>
-      {renaming ? <RenameDevice onClose={() => setRenaming(false)} /> : null}
+      {renaming ? (
+        <RenameDialog
+          title="Nome deste aparelho"
+          initial={s.device?.name ?? ''}
+          onSave={(name) => account.renameDevice(name)}
+          onClose={() => setRenaming(false)}
+        />
+      ) : null}
       <ConfirmDialog
         visible={confirmOut}
         title="Sair da conta?"
@@ -225,14 +189,12 @@ export default function Home() {
         onClose={() => setConfirmOut(false)}
         onConfirm={() => void out.run(() => account.logout())}
       />
-    </Screen>
+    </SettingsScreen>
   )
 }
 
-const styles = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
-  hello: { color: colors.fg, fontSize: 26, fontWeight: '700' },
-  email: { color: colors.muted, fontSize: 14, marginTop: 2 },
+const st = StyleSheet.create({
+  pad: { paddingHorizontal: spacing.lg, paddingVertical: spacing.xs },
   noticeAction: { marginTop: spacing.sm, flexDirection: 'row' },
   actions: { gap: spacing.sm, marginTop: spacing.xs }
 })

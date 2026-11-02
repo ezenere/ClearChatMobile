@@ -67,8 +67,11 @@ export interface SyncStatus {
 }
 
 export type DataEvent =
-  /** Registros mudaram: `chats` = chats tocados; `list` = a lista precisa recarregar. */
-  | { kind: 'data'; chats: string[]; list: boolean; all?: boolean }
+  /**
+   * Registros mudaram: `chats` = chats tocados; `list` = a lista precisa recarregar; `settings` =
+   * provedores, personas, settings ou memórias mudaram (as Configurações recarregam).
+   */
+  | { kind: 'data'; chats: string[]; list: boolean; all?: boolean; settings?: boolean }
   | { kind: 'states'; chats: string[] }
   | { kind: 'status' }
 
@@ -78,6 +81,9 @@ const FETCH_BATCH = 500
 const YIELD_MS = 12
 
 const key = (type: string, id: string): string => `${type}\u0000${id}`
+
+/** Tipos que as Configurações mostram (mudou um deles → evento com `settings`). */
+const SETTINGS_TYPES = new Set(['provider', 'preset', 'setting', 'memory_collection', 'memory'])
 
 export function conflictOf(e: unknown): PushConflict | null {
   if (!(e instanceof SyncApiError) || e.code !== 'conflict') return null
@@ -137,6 +143,11 @@ export class SyncEngine {
   /** Escrita local (host no celular) mudou o cache: a tela recarrega. */
   notifyLocal(chats: string[], list = true): void {
     this.emit({ kind: 'data', chats, list })
+  }
+
+  /** Configuração gravada aqui (provedor, persona, setting, memória): as telas recarregam. */
+  notifySettings(list = false): void {
+    this.emit({ kind: 'data', chats: [], list, settings: true })
   }
 
   private setStatus(p: Partial<SyncStatus>): void {
@@ -365,7 +376,8 @@ export class SyncEngine {
     this.d.store.refreshDirtyChats()
     this.d.store.setCursor(head)
     this.statesLoaded = false
-    if (gone.length) this.emit({ kind: 'data', chats: gone, list: true })
+    // o que sumiu pode incluir provedores/personas/memórias: as Configurações recarregam
+    this.emit({ kind: 'data', chats: gone, list: true, settings: true })
   }
 
   async loadChatStates(): Promise<void> {
@@ -440,6 +452,7 @@ export class SyncEngine {
     if (!this.running || gen !== this.gen) throw new Error('sync parado')
     const chats = new Set<string>()
     let list_ = false
+    let settings = false
     store.sql.tx(() => {
       for (const c of list) {
         const touched = this.applyOne(c, opened.get(c))
@@ -448,14 +461,18 @@ export class SyncEngine {
           chats.add(c.id)
           list_ = true
         } else if ((c.type === 'message' || c.type === 'session') && c.scope) chats.add(c.scope)
-        else if (c.type === 'preset') list_ = true
+        else if (SETTINGS_TYPES.has(c.type)) {
+          settings = true
+          if (c.type === 'preset') list_ = true
+        }
       }
       for (const id of store.refreshDirtyChats()) {
         chats.add(id)
         list_ = true
       }
     })
-    if (chats.size || list_) this.emit({ kind: 'data', chats: [...chats], list: list_ })
+    if (chats.size || list_ || settings)
+      this.emit({ kind: 'data', chats: [...chats], list: list_, ...(settings ? { settings } : {}) })
   }
 
   /** Aplica uma mudança (dentro da transação). true = algo mudou no cache. */

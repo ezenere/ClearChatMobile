@@ -95,6 +95,8 @@ export type SessionEvent =
   | { type: 'device-renamed'; name: string }
   | { type: 'keys-ready' }
   | { type: 'unlocked'; remember: boolean; biometric: boolean }
+  /** "Lembrar neste dispositivo"/biometria trocados com o cofre aberto (Configurações → Conta). */
+  | { type: 'remember'; remember: boolean; biometric: boolean }
   | { type: 'locked'; notice?: Notice }
   | { type: 'keys-reset' }
   | { type: 'signed-out'; reason: SignOutReason }
@@ -211,6 +213,10 @@ export function reduceSession(s: SessionState, e: SessionEvent): SessionState {
     case 'unlocked':
       if (s.phase !== 'locked' && s.phase !== 'needs-setup') return s
       return { ...s, phase: 'unlocked', remember: e.remember, biometric: e.biometric, notice: null }
+    case 'remember':
+      if (s.phase !== 'unlocked') return s
+      if (s.remember === e.remember && s.biometric === e.biometric) return s
+      return { ...s, remember: e.remember, biometric: e.biometric }
     case 'locked':
       if (s.phase !== 'unlocked' && s.phase !== 'locked') return s
       return { ...s, phase: 'locked', notice: e.notice ?? null }

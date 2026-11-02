@@ -105,6 +105,20 @@ export interface PendingRecoveryKey {
   commit: () => Promise<void>
 }
 
+/** Dispositivo da conta (§6.6 `GET /devices`). */
+export interface DeviceRow {
+  id: string
+  name: string
+  platform: string
+  client: string
+  app_version: string
+  can_host: boolean
+  created_at: string | null
+  last_seen_at: string | null
+  online: boolean
+  current: boolean
+}
+
 interface AuthResult {
   access_token: string
   access_expires_in: number
@@ -635,6 +649,24 @@ export class AccountService {
     this.dispatch({ type: 'notice', notice: NEW_RECOVERY_KEY_NOTICE })
   }
 
+  /**
+   * Configurações → Conta → Trocar senha: confere a senha ATUAL (Argon2id + desembrulhar, sem
+   * rede se as chaves estão em cache) e só então troca. O protocolo só exige a DEK em memória; no
+   * celular — mais fácil de ficar desbloqueado na mão de outra pessoa — a senha atual é pedida.
+   */
+  async changePasswordWithCurrent(current: string, next: string): Promise<void> {
+    if (!this.dek) throw new UserError('Desbloqueie a conta primeiro.')
+    if (!current) throw new UserError('Digite a senha atual.')
+    this.checkNewPassword(next)
+    if (current === next) throw new UserError('A senha nova é igual à atual.')
+    const keys = await this.currentKeys()
+    const dek = await unlockWithPassword(this.userId, keys, current, this.deps.kekFn)
+    const same = dek.length === this.dek.length && dek.every((b, i) => b === this.dek![i])
+    dek.fill(0)
+    if (!same) throw new UserError('A senha atual não abre a chave desta conta.')
+    await this.changePassword(next)
+  }
+
   /** Troca a senha de criptografia (exige o cofre aberto). */
   async changePassword(newPassword: string, skipPolicy = false): Promise<void> {
     if (!this.dek) throw new UserError('Desbloqueie a conta primeiro.')
@@ -698,16 +730,57 @@ export class AccountService {
     }
   }
 
-  // ---------------- dispositivo (§6.6) ----------------
+  /**
+   * "Lembrar neste dispositivo" / "Exigir biometria" com o cofre aberto: regrava (ou apaga) a DEK
+   * no Keystore. Biometria indisponível na hora → fica sem lembrar (como no desbloqueio).
+   */
+  async setRemember(opts: RememberOptions): Promise<void> {
+    const dek = this.dek
+    if (!dek || this.state.phase !== 'unlocked')
+      throw new UserError('Desbloqueie a conta primeiro.')
+    const { kv, secrets } = this.deps
+    let biometric = !!opts.biometric && opts.remember && secrets.canUseBiometrics()
+    let remember = opts.remember
+    if (remember) {
+      try {
+        await secrets.setDek(b64u(dek), { biometric })
+      } catch {
+        await secrets.setDek(null).catch(() => undefined)
+        remember = biometric = false
+      }
+    } else await secrets.setDek(null)
+    kv.set(KV.remember, remember ? '1' : '0')
+    kv.set(KV.biometric, biometric ? '1' : '0')
+    this.dispatch({ type: 'remember', remember, biometric })
+    if (opts.remember && !remember)
+      throw new UserError('Não foi possível guardar a chave com biometria neste aparelho.')
+  }
 
-  async renameDevice(name: string): Promise<void> {
+  // ---------------- dispositivos (§6.6) ----------------
+
+  /** Dispositivos da conta (o atual marcado com `current`). */
+  async devices(): Promise<DeviceRow[]> {
+    const list = await this.http.get<DeviceRow[]>('/api/v1/devices')
+    return Array.isArray(list) ? list : []
+  }
+
+  /** Renomeia este aparelho (sem `id`) ou outro dispositivo da conta. */
+  async renameDevice(name: string, id?: string): Promise<void> {
     const dev = this.state.device
     if (!dev) throw new UserError('Entre na conta primeiro.')
     const n = name.trim().slice(0, 64)
     if (!n) throw new UserError('Dê um nome ao aparelho.')
-    await this.http.patch(`/api/v1/devices/${encodeURIComponent(dev.id)}`, { name: n })
+    const target = id ?? dev.id
+    await this.http.patch(`/api/v1/devices/${encodeURIComponent(target)}`, { name: n })
+    if (target !== dev.id) return
     this.deps.kv.set(KV.deviceName, n)
     this.dispatch({ type: 'device-renamed', name: n })
+  }
+
+  /** Desconecta outro dispositivo (`DELETE /devices/{id}`); o atual = sair. */
+  async revokeDevice(id: string): Promise<void> {
+    if (id === this.state.device?.id) return this.logout()
+    await this.http.del(`/api/v1/devices/${encodeURIComponent(id)}`)
   }
 
   // ---------------- bloquear / sair ----------------

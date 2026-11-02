@@ -77,8 +77,8 @@ núcleo — testável no Node):
   cadastrada (`requireAuthentication` do SecureStore, entrada separada; prompt cancelado → pede a senha).
   Bloquear apaga a DEK guardada; Sair revoga o aparelho (`POST /auth/logout`) e apaga tudo.
 - Rotas (`src/app`): `/` decide pela fase; `(auth)` = `login`, `code`, `server`, `captcha`, `setup`,
-  `unlock`, `recover` (cada fase libera só as suas via `Stack.Protected`); `(app)` = `home`,
-  `recovery-key`. Componentes em `src/ui/` (botões, campos, código de 6 dígitos, cartões, banners,
+  `unlock`, `recover` (cada fase libera só as suas via `Stack.Protected`); `(app)` = `settings/*`
+  (fase 5; a antiga `home` virou `settings/account`), `recovery-key`. Componentes em `src/ui/` (botões, campos, código de 6 dígitos, cartões, banners,
   diálogo, toast, chave de recuperação, senha nova com medidor).
 - `EXPO_PUBLIC_CLEARCHAT_SYNC_URL` fixa o servidor (desenvolvimento), como o `CLEARCHAT_SYNC_URL` do desktop.
 
@@ -340,6 +340,41 @@ resolvida mantendo a local num chat e a online no outro). O provedor falso ganho
 `/whoami`, `/delegate[-bg]`, `/wait`, `/sleep`, `/tell`, `/ask-chat`, `/chats`, `/history`, `/big`) e
 respostas às chamadas laterais (resumo, título, extração).
 
+## Configurações (fase 5)
+
+`src/settings/` (núcleo sem React Native: `records.ts` e `service.ts`) + telas em
+`src/app/(app)/settings/` (abertas pelo ícone de engrenagem da lista de chats):
+
+- `records.ts` — plaintexts de `provider`/`preset`/`setting` com a semântica do desktop (porta do
+  formulário do provedor: tipo ↔ URL/nome padrão, headers JSON, validação; persona sanitizada e sem
+  `cwd`), o patch LWW por campo (`config` da persona chave a chave, chaves removidas em
+  `__configUnset`), `mergeEdits` (salvar aplica só o que o usuário mudou sobre a versão atual), a lista
+  de buscadores (= `webSearchConfig.ts` do desktop: ligar API sem chave é recusado; apagar a chave
+  desliga) e a persona resolvida para o editor.
+- `service.ts` — `SettingsService`: provedores, personas (apagar a padrão zera `defaultPresetId`),
+  settings (LWW inteiro, `null` = removida), pesquisa na web e memórias (MemoryStore vendorado sobre o
+  índice local; apagar coleção = tombstone + cascata). Escreve pela **outbox LWW** da 4b (offline ok;
+  retomada ao abrir o cofre e ao reconectar — `native.ts`/`startSettings`). `react.ts`:
+  `useSettingsVersion` (eventos do motor com `settings`) e `readAt(version, …)`.
+- Componentes: `ModelPicker`/`ModelField` e `ParamsEditor` (também usados pelo Novo chat),
+  `MemoryConfigEditor` (folha "Memória…" do chat e aba Memória da persona), `memoryUi`, `ui`
+  (tela, segmentado, campo numérico, ícones, linhas), `RenameDialog`.
+- Telas: Novos chats, Personas (+ editor), Aprovações, Memórias (coleção, memória), Pesquisa na web,
+  Provedores (+ editor com "Testar conexão" — `testProvider` em `src/agent/providers.ts`), Dispositivos,
+  Conta e Trocar senha.
+- Conta (`AccountService`): `devices()`, `renameDevice(name, id?)`, `revokeDevice(id)` (o atual =
+  sair), `changePasswordWithCurrent` (confere a senha atual no aparelho antes do `PUT /keys/password`),
+  `setRemember` (lembrar/biometria com o cofre aberto).
+- **FLAG_SECURE**: módulo local `modules/secure-screen` + `useSecureScreen()` (`src/ui/secure.ts`) nas
+  telas de senha, desbloqueio, recuperação, setup, chave de recuperação, provedor e pesquisa na web
+  (o screencap sai preto; para revisar o layout no E2E, `adb emu screenrecord screenshot <pasta>` pega
+  o framebuffer do emulador).
+
+Testes: `tests/settings.test.ts`, os novos casos de `tests/account.test.ts` e
+`tests/integration/settings.test.ts` (servidor real: celular ↔ "desktop", conflito, offline,
+dispositivos, troca de senha). A integração inteira passa do limite de 20 códigos/h por IP: rodar em
+dois lotes com `test-server down`/`up` entre eles.
+
 ## Servidor local para testes
 
 Nunca produção. O script sobe um Postgres descartável no Docker (`--tmpfs`, sem volume) e a API de
@@ -426,9 +461,10 @@ Argon2 nativo é validado no aparelho pelo self-test (mesma saída do hash-wasm,
 ```
 index.ts               entrada: camada de plataforma → expo-router
 modules/argon2/        módulo Expo local (Kotlin + argon2kt)
+modules/secure-screen/ módulo Expo local (FLAG_SECURE)
 scripts/               vendor.mjs, platformAliases.cjs (redirecionamentos Metro/Vitest), test-server.sh
 src/account/           conta: máquina de estados, AccountService, captcha, Keystore/kv do aparelho
-src/app/               telas (expo-router): (auth), (app) [chats, chat/[id], home = conta], dev/selftest.tsx
+src/app/               telas (expo-router): (auth), (app) [chats, chat/[id], new, settings/*], dev/selftest.tsx
 src/chat/              conversa: modelo puro (viewModel), linhas das mensagens, cards de tool, Markdown, anexos
 src/data/              sync de dados: SQLite (store), motor (pull/ao vivo/push/resync), anexos, ligação com a conta
 src/remote/            controle remoto: espelho do stream, comandos §8.6, anexos (upload), arquivos do host
@@ -436,6 +472,7 @@ src/agent/             agente no celular: request, runner, tools portáveis (ven
 src/host/              chats executados no celular: outbox, janelas, troca de host, recusas, novo chat,
                        divergência com versão local, send_to_chat entre dispositivos
 src/memory/            memória: índice local (SQLite em memória) + outbox LWW + MemoryService
+src/settings/          Configurações: registros/serviço (outbox LWW) + componentes das telas
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)
 src/platform/          polyfills e trocas para o Hermes
 src/selftest/          casos dos vetores + checagens da plataforma (Vitest e aparelho)

@@ -14,6 +14,7 @@ import { RememberOptions } from '@/ui/RememberOptions'
 import { ConfirmDialog } from '@/ui/Dialog'
 import { Hero, Screen } from '@/ui/Screen'
 import { colors, spacing } from '@/ui/theme'
+import { useSecureScreen } from '@/ui/secure'
 
 function Point({ icon, children }: { icon: IconName; children: React.ReactNode }) {
   return (
@@ -25,6 +26,7 @@ function Point({ icon, children }: { icon: IconName; children: React.ReactNode }
 }
 
 export default function Setup() {
+  useSecureScreen()
   const s = useSession()
   const [pw, setPw] = useState('')
   const [confirm, setConfirm] = useState('')

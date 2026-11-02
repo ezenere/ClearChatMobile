@@ -12,7 +12,7 @@ import type { IconName } from '@/ui/Button'
 import { colors, radius } from '@/ui/theme'
 
 /** Ícones lucide curados das personas (desktop: presetIcons.ts) → Ionicons. */
-const PRESET_ICONS: Record<string, IconName> = {
+export const PRESET_ICONS: Record<string, IconName> = {
   sparkles: 'sparkles-outline',
   bot: 'happy-outline',
   brain: 'bulb-outline',

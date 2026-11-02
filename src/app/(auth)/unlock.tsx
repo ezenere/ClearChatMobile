@@ -12,8 +12,10 @@ import { ConfirmDialog } from '@/ui/Dialog'
 import { Hero, Screen } from '@/ui/Screen'
 import { TextField } from '@/ui/TextField'
 import { colors, spacing } from '@/ui/theme'
+import { useSecureScreen } from '@/ui/secure'
 
 export default function Unlock() {
+  useSecureScreen()
   const s = useSession()
   const router = useRouter()
   const [pw, setPw] = useState('')

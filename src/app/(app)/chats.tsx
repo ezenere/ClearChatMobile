@@ -142,13 +142,13 @@ export default function Chats() {
         <Text style={st.h1}>Chats</Text>
         <SyncIndicator status={status} onPress={() => void engine.sync()} />
         <Pressable
-          onPress={() => router.push('/home')}
+          onPress={() => router.push('/settings')}
           hitSlop={8}
           style={st.iconBtn}
-          accessibilityLabel="Conta e aparelho"
+          accessibilityLabel="Configurações"
           testID="open-account"
         >
-          <Ionicons name="person-circle-outline" size={26} color={colors.muted} />
+          <Ionicons name="settings-outline" size={24} color={colors.muted} />
         </Pressable>
       </View>
       <View style={st.search}>

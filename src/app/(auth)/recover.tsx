@@ -13,8 +13,10 @@ import { RememberOptions } from '@/ui/RememberOptions'
 import { Hero, Screen, ScreenHeader } from '@/ui/Screen'
 import { TextField } from '@/ui/TextField'
 import { colors, spacing } from '@/ui/theme'
+import { useSecureScreen } from '@/ui/secure'
 
 export default function Recover() {
+  useSecureScreen()
   const s = useSession()
   const router = useRouter()
   const [step, setStep] = useState<'key' | 'password'>(account.recoveryPending ? 'password' : 'key')
