@@ -176,7 +176,7 @@ copiar, selecionar texto, editar no lugar, editar como nova versão, regenerar, 
 tentar de novo, apagar; ‹ i/n › troca a versão **no host** (`branch.select`) na principal ociosa; menu do
 chat: fixar/desafixar host, arquivos do host, processos, compactar, extrair memórias, parar subagentes.
 Host offline/sem host/sem conexão/divergente/troca de host: faixa explicando (o celular não executa chats
-com ferramentas locais; "Executar neste dispositivo" fica para a fase 4). Arquivos do host:
+com ferramentas locais; nos outros, "Executar neste dispositivo" — fase 4a). Arquivos do host:
 `files/[chat]` (pastas primeiro, raiz/confinamento do host) e `file/[chat]` (Markdown/código/texto em
 páginas de 128 KiB com "Carregar mais", imagem inteira com progresso, demais tipos "Baixar e abrir").
 Folhas inferiores próprias (`src/ui/Sheet.tsx`).
@@ -194,6 +194,77 @@ E2E com o **desktop real** (Electron do `../ClearChatDesktop` compilado numa có
 no repositório irmão; `CLEARCHAT_USER_DATA` isolado; provedor LLM falso local que transmite devagar, pede
 `shell`/`ask_user` ou corta a conexão): um driver Playwright (`_electron`) loga na conta do E2E, cria o
 chat com `shell` em "Perguntar" e expõe um controle HTTP local para conferir o lado do desktop.
+
+## Host no celular (fase 4a)
+
+O celular executa os **próprios** chats (sem ferramentas locais, §8.9) chamando os provedores direto (as
+chaves vêm dos registros `provider` sincronizados, decifrados no aparelho; nunca vão para logs).
+**Decisão de produto:** chats executados no celular não são controlados remotamente — as tools são só
+conversacionais. O celular não publica o stream (§11) e responde todo `remote.command` na hora com
+`rejected` ("Este chat roda no celular e não aceita controle remoto. Use “Executar neste dispositivo”
+para trazê-lo para cá."); um computador que queira o chat o importa por `host.takeover` (§8.8).
+
+Agente (`src/agent/`, sem React Native):
+
+- **Vendorado** (byte a byte, `npm run vendor`): `agent/llm.ts` (SSE, acumulador, `applyChunk`,
+  `finalizeToolCalls`, `parseUsage`, `readableError`, `streamChat`), `agent/adapters/*`,
+  `agent/textTools.ts`, `agent/smartApprove.ts` (juiz), `tools/webSearch.ts` + `ddg`/`brave`/
+  `searchApis`, `tools/pageExtract.ts` (parse5) e `tools/models.ts`; `shared/contextCapture.ts`.
+- **Shims gerados**: o desktop importa `./request` e `./util` (Node: os/shell/fs). O `vendor.mjs` tem
+  `SHIMS`: em vez de copiar, gera `src/vendor/desktop/agent/request.ts` e `tools/util.ts` com
+  `export * from` as adaptações do celular (`src/agent/request.ts`, `src/agent/tools/util.ts`) — o
+  `vendor:check` confere o shim também.
+- **Escritos para o celular**: `request.ts` (mesma montagem do desktop; só as tools portáveis —
+  `web_search`, `browse_url`, `list_models`, `ask_user` — vão ao modelo; `<environment>` sem raiz/shell;
+  parâmetros que o modelo não aceita saem com nota), `providers.ts` (`/models` com cache, como o
+  desktop), `attachments.ts` (anexos por referência → base64 na cópia; o runner baixa os blobs antes,
+  §14), `registries.ts` (fila, aprovações, questionários, retries, `callWithNetworkRetry`) e
+  `runner.ts` (turno do desktop: stream → mensagem com modelo/tokens/custo/duração/raciocínio → tools
+  com aprovação (Sempre/Perguntar/Listas/Smart-Approve com juiz só se configurado) → resultados →
+  repete; fila e ⚡; Parar com parcial `interrupted`; card de falha de conexão; erro persistido;
+  regenerar/editar como versão/trocar de versão/editar/apagar). `tools/web.ts` = backends HTTP do
+  web_search (o Brave pelo site fica fora: precisa de navegador) e o `browse_url` por `fetch` com teto
+  de tamanho/tempo e o extrator do desktop; `tools/askUser.ts` resolve as imagens do questionário.
+- **Streaming**: no SDK 58 o `fetch` global já é o `expo/fetch` (corpo como `ReadableStream`), então o
+  `streamChat` vendorado roda sem troca. Prova no aparelho: `clearchat://dev/streamtest?base=…` (só dev)
+  contra o provedor falso — 1º delta em ~0,1 s de 24 s e centenas de atualizações (sem buffering).
+
+Host (`src/host/`, sem React Native):
+
+- `writer.ts` — **outbox persistida** (tabela `outbox`, migração 3): cada revisão vai ao cache na hora e
+  sobe em lotes (~250 ms): o registro `chat` (LWW; num conflito os campos mudados aqui são reaplicados
+  sobre a versão do servidor) antes, depois o conteúdo com `chat_bases[X]` = o head que o aparelho tem
+  (calculado no envio) e `host_epochs[X]` = epoch da janela (sem janela = replay, §8.4 B); blobs
+  conferidos/enviados antes (§14); `chat_busy`/`not_host`/`stale_base`/divergência tratados.
+- `repo.ts` — sessões/mensagens com a semântica de árvore do desktop (`parentId` sempre explícito,
+  `branchSel` sempre enviado, mensagem + sessão no mesmo lote).
+- `host.ts` — janelas `host.begin`/`host.end` (fecha ocioso e com a outbox vazia), `normalizeStale` ao
+  virar host, "Executar neste dispositivo" (`host.takeover`, com `confirm_pinned`), troca pedida por
+  outro dispositivo (`host.handover_request`: o turno para **na hora**, a outbox sobe, a janela fecha e
+  `host.release` repassa a fila), perda do host (`host.revoked`/`chat.state`), recusa de chats com
+  ferramentas locais e de comandos remotos, ações da tela (`local(kind, payload)` com os mesmos kinds do
+  §8.6) e o **espelho local**: os eventos do runner alimentam o mesmo `LiveMirror` do controle remoto.
+- Segundo plano: `AccountService.beforeBackground` roda antes de fechar o WebSocket — para os turnos
+  (parcial `interrupted`, sessão `interrupted`, fila descartada), envia a outbox **sem timers** (o
+  Android pausa os timers do JS em segundo plano) e fecha as janelas. `hello.active_windows` reabre as
+  janelas numa reconexão rápida.
+- `stack.ts` monta tudo (o mesmo código no aparelho — `native.ts` — e na integração no Node);
+  `policy.ts` = `usesLocalTools` (cópia da regra do desktop); `newChat.ts` = config de um chat novo
+  (padrões de "Novos chats" + persona; só tools portáveis, skills desligadas).
+
+Telas: **Novo chat** (botão na lista): persona, provedor + modelo (lista do `/models` com busca ou id
+digitado), parâmetros que o modelo aceita (`paramRules` vendorado), ferramentas portáveis e os buscadores
+configurados. A conversa (`useChatRuntime`) decide quem executa: este celular (selo "Executando neste
+celular", composer e cards ligados ao runner local) ou outro dispositivo (controle remoto da fase 3);
+"Executar neste dispositivo" no menu e na faixa de host offline (só chats sem ferramentas locais);
+chats com ferramentas locais mostram por que o celular não os executa.
+
+Testes: `tests/agent.test.ts` (acumulação OpenAI/Anthropic, request, runner contra o provedor falso
+HTTP), `tests/host.test.ts` (janelas, revisões, recusas, troca de host no meio do turno, segundo plano,
+espelho) e `tests/integration/host.test.ts` (servidor real). Provedor falso: `tests/fakes/fakeLlm.ts`
+(SSE OpenAI-compatible e Anthropic, `/models`, DuckDuckGo e páginas falsas; roda sozinho com
+`node tests/fakes/fakeLlm.ts 8790` para o E2E). No app de desenvolvimento,
+`EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG=http://127.0.0.1:8790/ddg` aponta o web_search para o falso.
 
 ## Servidor local para testes
 
@@ -242,6 +313,9 @@ imports relativos e `@shared/...` são seguidos automaticamente para nada ficar 
 - `site/data/voice.ts` ← leitura defensiva da voz no histórico (marcadores de chamada, rótulos);
 - `shared/` ← `../ClearChatDesktop/src/shared` (tipos e módulos puros + fecho transitivo);
 - `desktop/sync/` ← `../ClearChatDesktop/src/main/sync/{http,ws,stream}.ts`;
+- `desktop/agent/`, `desktop/tools/` ← agente e tools portáveis do desktop (`llm`, adaptadores,
+  `textTools`, `smartApprove`, `webSearch`, `pageExtract`, `models`); `request.ts`/`util.ts` são
+  **shims gerados** que reexportam as adaptações do celular (`SHIMS` no `vendor.mjs`);
 - `renderer/` ← lógica pura da UI do desktop (`src/renderer/src/lib`: `branchView`, `approvalOutcome`,
   `reasoning`, `dates`, `fences`, `math`, `memory`, `skills`) — sem React/DOM, só `@shared`.
 
@@ -280,6 +354,8 @@ src/app/               telas (expo-router): (auth), (app) [chats, chat/[id], hom
 src/chat/              conversa: modelo puro (viewModel), linhas das mensagens, cards de tool, Markdown, anexos
 src/data/              sync de dados: SQLite (store), motor (pull/ao vivo/push/resync), anexos, ligação com a conta
 src/remote/            controle remoto: espelho do stream, comandos §8.6, anexos (upload), arquivos do host
+src/agent/             agente no celular: request, runner, tools portáveis (vendorados + adaptações)
+src/host/              chats executados no celular: outbox, janelas, troca de host, recusas, novo chat
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)
 src/platform/          polyfills e trocas para o Hermes
 src/selftest/          casos dos vetores + checagens da plataforma (Vitest e aparelho)

@@ -79,12 +79,26 @@ const GROUPS = {
       'autoTitle.ts',
       'voiceCallMarks.ts',
       'remoteFs.ts',
-      'smartApprove.ts'
+      'smartApprove.ts',
+      'contextCapture.ts'
     ]
   },
   desktop: {
     from: 'ClearChatDesktop/src/main',
-    files: ['sync/http.ts', 'sync/ws.ts', 'sync/stream.ts']
+    files: [
+      'sync/http.ts',
+      'sync/ws.ts',
+      'sync/stream.ts',
+      // agente (fase 4): SSE/acumulador, adaptadores, tools em texto, juiz do Smart-Approve
+      'agent/llm.ts',
+      'agent/adapters/index.ts',
+      'agent/textTools.ts',
+      'agent/smartApprove.ts',
+      // tools portáveis: web_search (sem o Brave-site), extração de página do browse_url, list_models
+      'tools/webSearch.ts',
+      'tools/pageExtract.ts',
+      'tools/models.ts'
+    ]
   },
   // lógica pura da UI do desktop (sem React/DOM): ramos na tela, aprovação, raciocínio, datas,
   // cercas/fórmulas do Markdown, resumos das tools de memória e skills
@@ -109,7 +123,31 @@ const ALIASES = { '@shared/': 'shared' }
 /** Imports externos permitidos nos arquivos vendorados e quem os resolve no mobile. */
 const EXTERNALS = {
   'hash-wasm': 'src/platform/hashWasm.ts (Argon2id nativo)',
-  'node:crypto': 'src/platform/nodeCrypto.ts (randomUUID)'
+  'node:crypto': 'src/platform/nodeCrypto.ts (randomUUID)',
+  parse5: 'npm parse5 (JS puro; roda no Hermes)'
+}
+
+/**
+ * Arquivos importados pelos vendorados que NÃO são copiados: a origem depende do Node/Electron e o
+ * mobile tem uma adaptação fina em src/. O destino ganha um re-export gerado (conferido no --check)
+ * e os imports dele não são seguidos. `grupo:arquivo` → módulo do mobile (relativo à raiz).
+ */
+const SHIMS = {
+  // BuiltRequest/maskRequest/modelInfoFor (llm.ts, smartApprove.ts): request do mobile sem os/shell
+  'desktop:agent/request.ts': 'src/agent/request.ts',
+  // ok/fail/abortError/fmtNum… (tools): util do mobile sem fs/os/path e sem saída em arquivo
+  'desktop:tools/util.ts': 'src/agent/tools/util.ts'
+}
+
+const shimSource = (group, file) => {
+  const target = join(ROOT, SHIMS[`${group}:${file}`])
+  let rel = relative(dirname(join(VENDOR, group, file)), target).replace(/\\/g, '/')
+  rel = rel.replace(/\.tsx?$/, '')
+  if (!rel.startsWith('.')) rel = `./${rel}`
+  return (
+    `// VENDORED SHIM for ${posix.join(GROUPS[group].from, file)} — Node-only on desktop; mobile adaptation in ${SHIMS[`${group}:${file}`]}\n` +
+    `export * from '${rel}'\n`
+  )
 }
 
 const header = (group, file) =>
@@ -144,7 +182,7 @@ function collect() {
   for (const [group, g] of Object.entries(GROUPS)) for (const f of g.files) add(group, f)
   while (queue.length) {
     const { group, file } = queue.shift()
-    if (!isCode(file)) continue
+    if (!isCode(file) || SHIMS[`${group}:${file}`]) continue
     const src = readSource(group, file)
     for (const { fileName: spec } of ts.preProcessFile(src, true, true).importedFiles) {
       if (spec.startsWith('.')) {
@@ -174,13 +212,14 @@ function readSource(group, file) {
 
 /** Conteúdo esperado no destino: cabeçalho + fonte (código) ou bytes idênticos (.md/.json). */
 function expected(group, file) {
+  if (SHIMS[`${group}:${file}`]) return Buffer.from(shimSource(group, file), 'utf8')
   if (!isCode(file)) return readFileSync(join(PARENT, GROUPS[group].from, file))
   return Buffer.from(`${header(group, file)}\n${readSource(group, file)}`, 'utf8')
 }
 
 /** No --check o cabeçalho não conta: só o corpo precisa bater byte a byte com a origem. */
 function sameIgnoringHeader(group, file, have) {
-  if (!isCode(file)) return false
+  if (!isCode(file) || SHIMS[`${group}:${file}`]) return false
   const text = have.toString('utf8')
   const nl = text.indexOf('\n')
   if (nl < 0 || !text.startsWith('// VENDORED from ')) return false

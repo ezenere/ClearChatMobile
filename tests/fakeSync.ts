@@ -32,6 +32,8 @@ export class FakeSync implements EngineHttp {
   omitAbove = Infinity
   offline = false
   calls: string[] = []
+  /** Corpos dos pushes recebidos (chat_bases / host_epochs). */
+  pushes: PushBody[] = []
   /** Commit aplicado → mudanças (para simular o `sync.changes` do WebSocket). */
   onCommit: ((changes: Change[]) => void) | null = null
 
@@ -101,7 +103,14 @@ export class FakeSync implements EngineHttp {
         })
       } as T
     }
-    if (path === '/api/v1/sync/push') return this.push(json as PushBody, 'dev-mobile') as T
+    if (path === '/api/v1/sync/push') {
+      this.pushes.push(json as PushBody)
+      return this.push(json as PushBody, 'dev-mobile') as T
+    }
+    if (path === '/api/v1/blobs/check') {
+      const ids = (json as { ids: string[] }).ids
+      return { missing: ids.filter((id) => !this.blobs.has(id)) } as T
+    }
     this.err(404, 'not_found')
   }
 

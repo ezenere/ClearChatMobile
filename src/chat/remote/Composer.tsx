@@ -444,7 +444,8 @@ export function RemoteComposer({
               <View style={c.dot} />
             )}
             <Text style={c.statusText} numberOfLines={1} testID="composer-status">
-              {statusText ?? `Executa em ${hostName}`}
+              {statusText ??
+                (hostName === 'este celular' ? 'Executa neste celular' : `Executa em ${hostName}`)}
             </Text>
           </View>
           {busy ? (

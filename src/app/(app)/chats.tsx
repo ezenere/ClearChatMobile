@@ -215,7 +215,7 @@ export default function Chats() {
               ? `Nenhum chat com “${query}” no título ou nas mensagens.`
               : status.phase === 'offline'
                 ? 'Conecte-se para baixar suas conversas.'
-                : 'As conversas do app desktop aparecem aqui assim que sincronizam.'}
+                : 'As conversas do app desktop aparecem aqui assim que sincronizam — ou comece uma neste celular.'}
           </Text>
         </View>
       ) : (
@@ -224,7 +224,7 @@ export default function Chats() {
           keyExtractor={(c) => c.id}
           extraData={states}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -246,6 +246,16 @@ export default function Chats() {
           )}
         />
       )}
+      <Pressable
+        onPress={() => router.push('/new')}
+        style={[st.fab, { bottom: insets.bottom + 20 }]}
+        accessibilityLabel="Novo chat"
+        accessibilityRole="button"
+        testID="fab-new-chat"
+      >
+        <Ionicons name="add" size={22} color={colors.onAccent} />
+        <Text style={st.fabText}>Novo chat</Text>
+      </Pressable>
       {menu ? (
         <ChatActionsSheet
           title={chatTitle(menu.title)}
@@ -353,5 +363,22 @@ const st = StyleSheet.create({
     marginBottom: 4
   },
   centerTitle: { color: colors.fg, fontSize: 16.5, fontWeight: '600', textAlign: 'center' },
-  centerText: { color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center' }
+  centerText: { color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center' },
+  fab: {
+    position: 'absolute',
+    right: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: colors.accent,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 }
+  },
+  fabText: { color: colors.onAccent, fontSize: 15, fontWeight: '600' }
 })

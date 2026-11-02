@@ -10,6 +10,7 @@ import { startAccount } from '@/account/native'
 import { useSession } from '@/account/react'
 import { startData } from '@/data/native'
 import { startRemote } from '@/remote/native'
+import { startHost } from '@/host/native'
 import { ToastProvider } from '@/ui/Toast'
 import { colors } from '@/ui/theme'
 
@@ -33,6 +34,7 @@ export default function RootLayout() {
   useEffect(() => {
     startData()
     startRemote()
+    startHost()
     void startAccount()
       .catch(() => undefined)
       .finally(() => void SplashScreen.hideAsync().catch(() => undefined))
@@ -69,6 +71,15 @@ export default function RootLayout() {
                   headerStyle: { backgroundColor: colors.surface },
                   headerTintColor: colors.fg,
                   animation: 'default'
+                }}
+              />
+              <Stack.Screen
+                name="dev/streamtest"
+                options={{
+                  headerShown: true,
+                  title: 'Streaming (dev)',
+                  headerStyle: { backgroundColor: colors.surface },
+                  headerTintColor: colors.fg
                 }}
               />
             </Stack>

@@ -124,6 +124,11 @@ export class SyncEngine {
 
   getStatus = (): SyncStatus => this.status
 
+  /** Escrita local (host no celular) mudou o cache: a tela recarrega. */
+  notifyLocal(chats: string[], list = true): void {
+    this.emit({ kind: 'data', chats, list })
+  }
+
   private setStatus(p: Partial<SyncStatus>): void {
     const next = { ...this.status, ...p }
     if (

@@ -18,7 +18,7 @@ import { describeError } from '@/account/errors'
 import { HostBadge, RenameDialog } from '@/chat/ChatBits'
 import { MessageRow, RowCtx, type RowContext, type RowLive } from '@/chat/MessageRow'
 import { RemoteComposer, type SendInput } from '@/chat/remote/Composer'
-import { HostStateBanner, usesLocalTools } from '@/chat/remote/HostBanner'
+import { HostStateBanner } from '@/chat/remote/HostBanner'
 import { MessageActionsSheet, type MessageActionHandlers } from '@/chat/remote/MessageActions'
 import { ApprovalPanel, QuestionPanel, RetryPanel, Strip } from '@/chat/remote/Panels'
 import {
@@ -32,7 +32,9 @@ import {
 import { chatTitle } from '@/data/decode'
 import { engine, store, useChat, useNow } from '@/data/react'
 import { BUSY_STATUS, liveStatus } from '@/remote/mirror'
-import { remote, useRemoteChat, useRemoteNotices } from '@/remote/react'
+import { remote, useRemoteNotices } from '@/remote/react'
+import { host, onHostNotice, useChatRuntime } from '@/host/react'
+import { HostError } from '@/host/host'
 import { handoverOf } from '@/remote/types'
 import { ConfirmDialog } from '@/ui/Dialog'
 import { Sheet, SheetItem } from '@/ui/Sheet'
@@ -52,7 +54,13 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets()
   const toast = useToast()
   const { loaded, state } = useChat(id)
-  const { mode, view: live } = useRemoteChat(id, state)
+  const {
+    mode,
+    view: live,
+    local,
+    localTools,
+    driver
+  } = useChatRuntime(id, state, loaded?.chat.config)
   const [sessionId, setSessionId] = useState<string | null>(sessionParam ?? null)
   const [localSel, setLocalSel] = useState<LocalSel | null>(null)
   const [showOld, setShowOld] = useState(true)
@@ -71,10 +79,21 @@ export default function ChatScreen() {
   const stick = useRef(true)
   const now = useNow()
   const remoteOn = mode === 'remote'
+  /** Composer e ações ligados: controle remoto (host online) ou executado neste celular. */
+  const active = remoteOn || local
+  const [takeover, setTakeover] = useState(false)
+  const [takingOver, setTakingOver] = useState(false)
 
   useRemoteNotices(
     id,
     useCallback((n) => toast(n.text, n.tone === 'danger' ? 'danger' : n.tone), [toast])
+  )
+  useEffect(
+    () =>
+      onHostNotice(
+        (n) => n.chatId === id && toast(n.text, n.tone === 'danger' ? 'danger' : n.tone)
+      ),
+    [id, toast]
   )
 
   /** Sessões com a versão ativa ao vivo do host (o registro chega logo depois). */
@@ -128,15 +147,15 @@ export default function ChatScreen() {
     (msgId: string) => {
       if (!loaded || !view) return
       // controle remoto: a versão muda no host (branch.select); subsessão/host fora: só na tela
-      if (remoteOn && view.session.depth === 0 && !busy) {
-        void run(() => remote.selectBranch(id, msgId))
+      if (active && view.session.depth === 0 && !busy) {
+        void run(() => driver.selectBranch(id, msgId))
         return
       }
-      if (remoteOn && busy && view.session.depth === 0)
-        toast('Espere o agente terminar para trocar de versão no host — mostrando só aqui.', 'info')
+      if (active && busy && view.session.depth === 0)
+        toast('Espere o agente terminar para trocar de versão — mostrando só aqui.', 'info')
       setLocalSel(localSelectFor(view, { ...loaded, sessions }, msgId))
     },
-    [loaded, view, remoteOn, busy, run, id, sessions, toast]
+    [loaded, view, active, busy, run, id, sessions, toast, driver]
   )
   const onOpenSession = useCallback((s: string) => {
     setSessionId(s)
@@ -162,7 +181,7 @@ export default function ChatScreen() {
   }, [])
 
   const rowLive = useMemo<RowLive | undefined>(() => {
-    if (!remoteOn && !live) return undefined
+    if (!active && !live) return undefined
     const awaiting: Record<string, 'approval' | 'question'> = {}
     for (const a of live?.approvals ?? [])
       if (a.sessionId === sid) awaiting[a.toolCallId] = 'approval'
@@ -171,12 +190,12 @@ export default function ChatScreen() {
     return {
       tools: live?.tools[sid] ?? {},
       awaiting,
-      onSmartOverride: remoteOn
-        ? (messageId: string) => void run(() => remote.smartOverride(id, messageId), 'Liberado')
+      onSmartOverride: active
+        ? (messageId: string) => void run(() => driver.smartOverride(id, messageId), 'Liberado')
         : undefined,
       onLongPress: (m: StoredMessage) => setActionMsg(m)
     }
-  }, [remoteOn, live, sid, run, id])
+  }, [active, live, sid, run, id, driver])
 
   const ctx = useMemo<RowContext | null>(
     () =>
@@ -222,7 +241,7 @@ export default function ChatScreen() {
       ])
       stick.current = true
       try {
-        const r = await remote.send(
+        const r = await driver.send(
           id,
           sid,
           input.text,
@@ -231,6 +250,7 @@ export default function ChatScreen() {
           input.force && busy
         )
         if (r.queued && !input.force) toast('Na fila — vai no próximo passo do agente.', 'info')
+        if (local) stick.current = true
         return true
       } catch (e) {
         toast(describeError(e), 'danger')
@@ -239,27 +259,27 @@ export default function ChatScreen() {
         setSending((x) => x.filter((s) => s.key !== key))
       }
     },
-    [id, sid, busy, toast]
+    [id, sid, busy, toast, driver, local]
   )
 
   const handlers = useMemo<MessageActionHandlers>(
     () => ({
       editInPlace: (m: StoredMessage, message: ApiMessage) =>
-        run(() => remote.editMessage(id, m.id, message), 'Mensagem editada'),
+        run(() => driver.editMessage(id, m.id, message), 'Mensagem editada'),
       editBranch: (m: StoredMessage, message: ApiMessage) =>
-        run(() => remote.editBranch(id, m.id, message)),
-      remove: (m: StoredMessage) => run(() => remote.deleteMessage(id, m.id), 'Mensagem apagada'),
+        run(() => driver.editBranch(id, m.id, message)),
+      remove: (m: StoredMessage) => run(() => driver.deleteMessage(id, m.id), 'Mensagem apagada'),
       regenerate: (m: StoredMessage) =>
-        run(() => remote.regenerate(id, m.sessionId, m.meta.kind === 'error' ? undefined : m.id)),
-      compactRetry: () => run(() => remote.compact(id, sid, { retry: true }))
+        run(() => driver.regenerate(id, m.sessionId, m.meta.kind === 'error' ? undefined : m.id)),
+      compactRetry: () => run(() => driver.compact(id, sid, { retry: true }))
     }),
-    [run, id, sid]
+    [run, id, sid, driver]
   )
 
   const decideApproval = useCallback(
     (req: ApprovalRequest, decision: 'allow' | 'deny', items?: ApprovalItemDecision[]) =>
-      run(() => remote.approve(id, req.id, decision, items)),
-    [run, id]
+      run(() => driver.approve(id, req.id, decision, items)),
+    [run, id, driver]
   )
 
   // ---------------- estado derivado ----------------
@@ -297,8 +317,7 @@ export default function ChatScreen() {
                   ? 'Pensando…'
                   : 'Trabalhando…'
   const sessionError = live?.errors[sid]
-  const localTools = usesLocalTools(loaded?.chat.config)
-  const canAct = !remoteOn
+  const canAct = !active
     ? 'O host não está online — ações desativadas.'
     : busy
       ? 'Espere o agente terminar para mudar o conteúdo.'
@@ -325,7 +344,17 @@ export default function ChatScreen() {
         <Text style={st.title} numberOfLines={1}>
           {title}
         </Text>
-        {state?.host ? (
+        {local ? (
+          <View style={st.badgeRow} testID="host-badge-local">
+            {state?.pinned ? (
+              <Ionicons name="lock-closed" size={10} color={colors.subtle} testID="host-pinned" />
+            ) : null}
+            <Ionicons name="phone-portrait-outline" size={11} color={colors.accentStrong} />
+            <Text style={st.localBadge} numberOfLines={1}>
+              Executando neste celular{busy ? ' · rodando' : ''}
+            </Text>
+          </View>
+        ) : state?.host ? (
           <View style={st.badgeRow}>
             {state.pinned ? (
               <Ionicons name="lock-closed" size={10} color={colors.subtle} testID="host-pinned" />
@@ -489,8 +518,14 @@ export default function ChatScreen() {
               </Pressable>
             </View>
           ) : null}
-          {!remoteOn ? (
-            <HostStateBanner chatId={id} mode={mode} state={state} localTools={localTools} />
+          {!active ? (
+            <HostStateBanner
+              chatId={id}
+              mode={mode}
+              state={state}
+              localTools={localTools}
+              onTakeover={() => setTakeover(true)}
+            />
           ) : null}
           {remoteOn && handover ? (
             <Strip icon="swap-horizontal-outline" tone="accent" testID="strip-handover">
@@ -518,7 +553,7 @@ export default function ChatScreen() {
                 : `${busySubs.length} subagentes rodando`}
             </Strip>
           ) : null}
-          {remoteOn && sessionError && sessionError !== dismissedError ? (
+          {active && sessionError && sessionError !== dismissedError ? (
             <Strip
               icon="alert-circle-outline"
               tone="danger"
@@ -532,21 +567,21 @@ export default function ChatScreen() {
               {sessionError}
             </Strip>
           ) : null}
-          {remoteOn && question ? (
+          {active && question ? (
             <QuestionPanel
               key={question.id}
               request={question}
-              onAnswer={(answers) => run(() => remote.answer(id, question.id, answers))}
-              onCancel={() => run(() => remote.cancelQuestion(id, question.id))}
+              onAnswer={(answers) => run(() => driver.answer(id, question.id, answers))}
+              onCancel={() => run(() => driver.cancelQuestion(id, question.id))}
             />
           ) : null}
-          {remoteOn && !question && retry ? (
+          {active && !question && retry ? (
             <RetryPanel
               request={retry}
-              onDecide={(a) => run(() => remote.retry(id, retry.id, a))}
+              onDecide={(a) => run(() => driver.retry(id, retry.id, a))}
             />
           ) : null}
-          {remoteOn && !question && !retry ? (
+          {active && !question && !retry ? (
             <ApprovalPanel
               approvals={live?.approvals ?? []}
               sessions={sessions}
@@ -557,22 +592,26 @@ export default function ChatScreen() {
           ) : null}
           {/* o composer fica sempre na mesma posição (o rascunho e os anexos sobrevivem a uma
               queda da conexão — ex.: voltar do seletor de fotos — e ao questionário/retry) */}
-          {remoteOn || mode === 'offline' ? (
-            <View style={remoteOn && (question || retry) ? st.hidden : undefined}>
+          {active || mode === 'offline' ? (
+            <View style={active && (question || retry) ? st.hidden : undefined}>
               <RemoteComposer
-                busy={remoteOn && busy}
-                statusText={remoteOn ? statusText : 'Reconectando…'}
-                hostName={hostName}
-                queue={remoteOn ? queue : []}
-                skills={live?.skills ?? []}
+                busy={active && busy}
+                statusText={active ? statusText : 'Reconectando…'}
+                hostName={local ? 'este celular' : hostName}
+                queue={active ? queue : []}
+                skills={local ? [] : (live?.skills ?? [])}
                 placeholder={
-                  view?.session.depth ? 'Mensagem ao subagente…' : `Mensagem para ${hostName}…`
+                  view?.session.depth
+                    ? 'Mensagem ao subagente…'
+                    : local
+                      ? 'Mensagem…'
+                      : `Mensagem para ${hostName}…`
                 }
-                disabled={remoteOn ? null : 'Sem conexão — reconectando…'}
+                disabled={active ? null : 'Sem conexão — reconectando…'}
                 onSend={send}
-                onStop={() => run(() => remote.stop(id, sid))}
-                onQueueForce={(qid) => run(() => remote.queueForce(id, sid, qid))}
-                onQueueRemove={(qid) => run(() => remote.queueRemove(id, sid, qid))}
+                onStop={() => run(() => driver.stop(id, sid))}
+                onQueueForce={(qid) => run(() => driver.queueForce(id, sid, qid))}
+                onQueueRemove={(qid) => run(() => driver.queueRemove(id, sid, qid))}
               />
             </View>
           ) : null}
@@ -621,6 +660,18 @@ export default function ChatScreen() {
               )
             }}
             testID="chat-action-pin"
+          />
+        ) : null}
+        {(remoteOn || mode === 'host-offline') && !localTools ? (
+          <SheetItem
+            icon="phone-portrait-outline"
+            label="Executar neste dispositivo"
+            detail={`O chat passa a rodar neste celular (sai do ${hostName}).`}
+            onPress={() => {
+              setMenu(false)
+              setTakeover(true)
+            }}
+            testID="chat-action-takeover"
           />
         ) : null}
         {remoteOn ? (
@@ -735,6 +786,37 @@ export default function ChatScreen() {
           void run(() => remote.stopSubagents(id), 'Subagentes parados')
         }}
       />
+      <ConfirmDialog
+        visible={takeover}
+        title="Executar neste dispositivo?"
+        message={
+          state?.pinned
+            ? `O host deste chat está fixado no ${hostName}. Executar aqui mesmo assim? O chat passa a rodar neste celular${remoteOn ? ` quando o ${hostName} terminar o turno atual` : ''}.`
+            : `O chat passa a rodar neste celular${remoteOn ? ` quando o ${hostName} terminar o turno atual` : ''}. Ele não usa ferramentas locais.`
+        }
+        confirmLabel={state?.pinned ? 'Executar aqui mesmo assim' : 'Executar aqui'}
+        busy={takingOver}
+        onClose={() => setTakeover(false)}
+        onConfirm={() => {
+          setTakingOver(true)
+          host
+            .takeover(id, { mode: 'next_turn', confirmPinned: !!state?.pinned })
+            .then((r) =>
+              toast(
+                r === 'granted'
+                  ? 'Este celular agora executa o chat.'
+                  : `Aguardando ${hostName} terminar o turno…`
+              )
+            )
+            .catch((e: unknown) =>
+              toast(e instanceof HostError ? e.message : describeError(e), 'danger')
+            )
+            .finally(() => {
+              setTakingOver(false)
+              setTakeover(false)
+            })
+        }}
+      />
       {renaming ? (
         <RenameDialog
           initial={loaded.chat.title}
@@ -805,6 +887,7 @@ const st = StyleSheet.create({
   },
   tabOn: { backgroundColor: colors.active, borderColor: colors.borderStrong },
   tabText: { color: colors.subtle, fontSize: 12.5 },
+  localBadge: { color: colors.accentStrong, fontSize: 11.5 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 32 },
   goneTitle: { color: colors.fg, fontSize: 17, fontWeight: '600' },
   goneText: { color: colors.muted, fontSize: 14, textAlign: 'center' },

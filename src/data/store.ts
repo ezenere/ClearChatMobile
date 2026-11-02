@@ -44,6 +44,18 @@ export interface ChatListItem {
   snippet?: string
 }
 
+export interface OutboxRow {
+  type: string
+  id: string
+  scope: string | null
+  chatId: string
+  baseRev: number
+  deleted: boolean
+  plain: Plain | null
+  patch: Plain | null
+  mark: number
+}
+
 export interface LoadedChat {
   chat: ChatPlain & { id: string }
   sessions: Session[]
@@ -53,7 +65,7 @@ export interface LoadedChat {
   broken: number
 }
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -94,7 +106,17 @@ END;
 CREATE TABLE IF NOT EXISTS chat_states (chat_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 `,
   // prévia recalculada (limpeza de tabelas/listas no texto)
-  2: `UPDATE chats SET dirty = 1;`
+  2: `UPDATE chats SET dirty = 1;`,
+  // fase 4 (host no celular): outbox do conteúdo gravado aqui e dedupe de comandos remotos (§8.6)
+  3: `
+CREATE TABLE IF NOT EXISTS outbox (
+  type TEXT NOT NULL, id TEXT NOT NULL, scope TEXT, chat_id TEXT NOT NULL, base_rev INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0, plain TEXT, patch TEXT, mark INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (type, id)
+);
+CREATE INDEX IF NOT EXISTS outbox_chat ON outbox(chat_id);
+CREATE TABLE IF NOT EXISTS commands_seen (cmd_id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+`
 }
 
 /** Texto indexado na busca: só a conversa (usuário/assistente), cortado. */
@@ -172,7 +194,15 @@ export class LocalStore {
   /** Apaga tudo (logout, revogação, chaves redefinidas, outra conta/servidor). */
   wipe(): void {
     this.sql.tx(() => {
-      for (const t of ['records', 'chats', 'messages', 'chat_states', 'meta'])
+      for (const t of [
+        'records',
+        'chats',
+        'messages',
+        'chat_states',
+        'meta',
+        'outbox',
+        'commands_seen'
+      ])
         this.sql.run(`DELETE FROM ${t}`)
       this.sql.run(`INSERT INTO messages_fts(messages_fts) VALUES ('delete-all')`)
     })
@@ -608,6 +638,249 @@ export class LocalStore {
       chatId
     ])
     return (parse(r?.json ?? null) as unknown as ChatState) ?? null
+  }
+
+  // ---------------- escrita local (host no celular, §8.4) ----------------
+
+  /**
+   * Grava localmente uma revisão feita AQUI (o host) e a põe na outbox: rev = base + 1, onde base
+   * é a última revisão aceita pelo servidor (a da outbox, se já houver uma pendente). O `seq` fica o
+   * da última revisão aceita até o push. `patch` (registro `chat`, LWW) acumula os campos mudados
+   * aqui, reaplicados sobre a versão do servidor num conflito.
+   */
+  writeLocal(w: {
+    type: string
+    id: string
+    scope: string | null
+    chatId: string
+    plain: Plain | null
+    patch?: Plain
+  }): void {
+    this.sql.tx(() => {
+      const row = this.sql.get<{ base_rev: number; mark: number; patch: string | null }>(
+        'SELECT base_rev, mark, patch FROM outbox WHERE type = ? AND id = ?',
+        [w.type, w.id]
+      )
+      const meta = this.recordMeta(w.type, w.id)
+      const base = row ? row.base_rev : (meta?.rev ?? 0)
+      const rev = base + 1
+      const change: Change = {
+        type: w.type,
+        id: w.id,
+        scope: w.scope,
+        rev,
+        seq: meta?.seq ?? 0,
+        deleted: !w.plain,
+        size: 0,
+        blobs: w.plain ? this.recordBlobs(w.type, w.id) : [],
+        device_id: '',
+        updated_at: new Date().toISOString()
+      }
+      if (w.plain) this.putRecord(change, w.plain, RecordState.Ok)
+      else this.deleteRecord(change)
+      const patch = w.patch ? { ...(parse(row?.patch ?? null) ?? {}), ...w.patch } : null
+      if (patch && w.patch?.config && typeof w.patch.config === 'object') {
+        const prev = parse(row?.patch ?? null)?.config
+        patch.config = { ...(prev && typeof prev === 'object' ? prev : {}), ...w.patch.config }
+      }
+      this.sql.run(
+        `INSERT INTO outbox (type, id, scope, chat_id, base_rev, deleted, plain, patch, mark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+         ON CONFLICT(type, id) DO UPDATE SET deleted = excluded.deleted, plain = excluded.plain,
+           patch = excluded.patch, mark = outbox.mark + 1`,
+        [
+          w.type,
+          w.id,
+          w.scope,
+          w.chatId,
+          base,
+          w.plain ? 0 : 1,
+          w.plain ? JSON.stringify(w.plain) : null,
+          patch ? JSON.stringify(patch) : null
+        ]
+      )
+      this.refreshDirtyChats()
+    })
+  }
+
+  outbox(chatId: string): OutboxRow[] {
+    return this.sql
+      .all<{
+        type: string
+        id: string
+        scope: string | null
+        chat_id: string
+        base_rev: number
+        deleted: number
+        plain: string | null
+        patch: string | null
+        mark: number
+      }>('SELECT * FROM outbox WHERE chat_id = ?', [chatId])
+      .map((r) => ({
+        type: r.type,
+        id: r.id,
+        scope: r.scope,
+        chatId: r.chat_id,
+        baseRev: r.base_rev,
+        deleted: !!r.deleted,
+        plain: parse(r.plain),
+        patch: parse(r.patch),
+        mark: r.mark
+      }))
+  }
+
+  /** Chats com conteúdo local ainda não aceito. */
+  outboxChats(): string[] {
+    return this.sql
+      .all<{ chat_id: string }>('SELECT DISTINCT chat_id FROM outbox')
+      .map((r) => r.chat_id)
+  }
+
+  hasOutbox(chatId: string, types?: string[]): boolean {
+    const t = types?.length ? ` AND type IN (${types.map(() => '?').join(', ')})` : ''
+    return !!this.sql.get(`SELECT 1 FROM outbox WHERE chat_id = ?${t} LIMIT 1`, [
+      chatId,
+      ...(types ?? [])
+    ])
+  }
+
+  /**
+   * Push aceito: `seq`/`blobs` da revisão e a linha da outbox sai — salvo se mudou de novo durante o
+   * envio (`mark` diferente): aí a base passa a ser a revisão aceita e a local fica rev + 1.
+   */
+  commitOutbox(
+    rows: { type: string; id: string; mark: number; rev: number; seq: number; blobs: string[] }[]
+  ): void {
+    this.sql.tx(() => {
+      for (const r of rows) {
+        const cur = this.sql.get<{ mark: number }>(
+          'SELECT mark FROM outbox WHERE type = ? AND id = ?',
+          [r.type, r.id]
+        )
+        if (!cur) continue
+        if (cur.mark === r.mark) {
+          this.sql.run('DELETE FROM outbox WHERE type = ? AND id = ?', [r.type, r.id])
+          this.sql.run('UPDATE records SET seq = ?, rev = ?, blobs = ? WHERE type = ? AND id = ?', [
+            r.seq,
+            r.rev,
+            JSON.stringify(r.blobs),
+            r.type,
+            r.id
+          ])
+        } else {
+          this.sql.run('UPDATE outbox SET base_rev = ?, patch = NULL WHERE type = ? AND id = ?', [
+            r.rev,
+            r.type,
+            r.id
+          ])
+          this.sql.run('UPDATE records SET seq = ?, rev = ? WHERE type = ? AND id = ?', [
+            r.seq,
+            r.rev + 1,
+            r.type,
+            r.id
+          ])
+        }
+      }
+    })
+  }
+
+  /** Conflito LWW: a base passa a ser a revisão do servidor (o plaintext local já foi mesclado). */
+  rebaseOutbox(type: string, id: string, baseRev: number, plain: Plain): void {
+    this.sql.tx(() => {
+      this.sql.run('UPDATE outbox SET base_rev = ?, plain = ? WHERE type = ? AND id = ?', [
+        baseRev,
+        JSON.stringify(plain),
+        type,
+        id
+      ])
+      this.sql.run('UPDATE records SET rev = ?, plain = ? WHERE type = ? AND id = ?', [
+        baseRev + 1,
+        JSON.stringify(plain),
+        type,
+        id
+      ])
+    })
+  }
+
+  /** Descarta a outbox de um chat (apagado em outro lugar / divergência descartada). */
+  dropOutbox(chatId: string): void {
+    this.sql.run('DELETE FROM outbox WHERE chat_id = ?', [chatId])
+  }
+
+  /** `seq` da última mudança de conteúdo (sessão/mensagem) deste chat que o aparelho tem (§8.4). */
+  contentHead(chatId: string): number {
+    return (
+      this.sql.get<{ h: number | null }>(
+        "SELECT MAX(seq) AS h FROM records WHERE scope = ? AND type IN ('session', 'message')",
+        [chatId]
+      )?.h ?? 0
+    )
+  }
+
+  /** Sessões do chat (decodificadas), principal primeiro. */
+  sessionsOf(chatId: string): Session[] {
+    return this.sql
+      .all<{ id: string; plain: string | null }>(
+        "SELECT id, plain FROM records WHERE type = 'session' AND scope = ? AND deleted = 0 AND state = 0",
+        [chatId]
+      )
+      .flatMap((r) => {
+        const p = parse(r.plain)
+        return p ? [sessionFromPlain(r.id, p)] : []
+      })
+      .sort((a, b) => a.depth - b.depth || a.createdAt - b.createdAt)
+  }
+
+  /** Todas as mensagens (todas as versões) de uma sessão, na ordem da sessão. */
+  sessionMessages(sessionId: string): StoredMessage[] {
+    const rows = this.sql.all<{ id: string; rev: number; plain: string | null }>(
+      `SELECT r.id, r.rev, r.plain FROM messages m JOIN records r ON r.type = 'message' AND r.id = m.id
+        WHERE m.session_id = ? AND r.deleted = 0 AND r.state = 0`,
+      [sessionId]
+    )
+    const out: StoredMessage[] = []
+    for (const r of rows) {
+      const hit = this.parsed.get(r.id)
+      if (hit && hit.rev === r.rev) {
+        out.push(hit.msg)
+        continue
+      }
+      const p = parse(r.plain)
+      if (!p) continue
+      const msg = messageFromPlain(r.id, p)
+      this.parsed.set(r.id, { rev: r.rev, msg })
+      out.push(msg)
+    }
+    return out.sort(cmpMsg)
+  }
+
+  /** Comando remoto já visto (§8.6: dedupe por `cmd_id`); marca como visto. Guarda 7 dias. */
+  seenCommand(cmdId: string, now = Date.now()): boolean {
+    const hit = !!this.sql.get('SELECT 1 FROM commands_seen WHERE cmd_id = ?', [cmdId])
+    if (!hit) {
+      this.sql.run('INSERT OR IGNORE INTO commands_seen (cmd_id, at) VALUES (?, ?)', [cmdId, now])
+      this.sql.run('DELETE FROM commands_seen WHERE at < ?', [now - 7 * 86_400_000])
+    }
+    return hit
+  }
+
+  /** Plaintexts vivos de um tipo (provedores, personas, settings). */
+  plainsOf(type: string): { id: string; plain: Plain }[] {
+    return this.sql
+      .all<{ id: string; plain: string | null }>(
+        'SELECT id, plain FROM records WHERE type = ? AND deleted = 0 AND state = 0',
+        [type]
+      )
+      .flatMap((r) => {
+        const p = parse(r.plain)
+        return p ? [{ id: r.id, plain: p }] : []
+      })
+  }
+
+  /** `value` de um registro `setting` (§4.3.2); ausente/null = undefined. */
+  setting<T = unknown>(id: string): T | undefined {
+    const v = this.getPlain('setting', id)?.value
+    return v == null ? undefined : (v as T)
   }
 
   /** Contagens para diagnóstico (sem conteúdo). */

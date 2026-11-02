@@ -1,5 +1,5 @@
 // Faixas de estado do host no lugar do composer (SYNC_PROTOCOL.md §8.7–8.9, §9): host offline
-// (o celular não executa chats com ferramentas locais; "Executar neste dispositivo" chega na fase 4),
+// ("Executar neste dispositivo" nos chats sem ferramentas locais; os outros o celular não executa),
 // chat sem host, sem conexão, troca de host em andamento e divergência — com "Descartar a versão de
 // <D>" (manter a online, §9.3), a única resolução que o celular pode fazer com segurança.
 import Ionicons from '@expo/vector-icons/Ionicons'
@@ -15,31 +15,7 @@ import type { IconName } from '@/ui/Button'
 import { useToast } from '@/ui/Toast'
 import { colors, radius } from '@/ui/theme'
 
-/** Este chat usa ferramentas locais (§8.9) — o celular recusa ser host dele. */
-export function usesLocalTools(config: Record<string, unknown> | undefined): boolean {
-  const LOCAL = new Set([
-    'list_dir',
-    'read_file',
-    'search_files',
-    'find_files',
-    'write_file',
-    'edit_file',
-    'shell',
-    'process_start',
-    'process_logs',
-    'process_list',
-    'process_stop'
-  ])
-  const tools = Array.isArray(config?.enabledTools) ? (config.enabledTools as unknown[]) : []
-  const voice = (config?.voice as { tools?: { enabledTools?: unknown[] } } | undefined)?.tools
-    ?.enabledTools
-  const skills = (config?.skills as { enabled?: unknown } | undefined)?.enabled === true
-  return (
-    tools.some((t) => LOCAL.has(String(t))) ||
-    (Array.isArray(voice) && voice.some((t) => LOCAL.has(String(t)))) ||
-    skills
-  )
-}
+export { usesLocalTools } from '@/host/policy'
 
 function Panel({
   icon,
@@ -83,12 +59,15 @@ export function HostStateBanner({
   chatId,
   mode,
   state,
-  localTools
+  localTools,
+  onTakeover
 }: {
   chatId: string
   mode: HostMode
   state: ChatState | null
   localTools: boolean
+  /** "Executar neste dispositivo" (§8.7–8.8) — só chats sem ferramentas locais. */
+  onTakeover?: () => void
 }) {
   const toast = useToast()
   const [confirm, setConfirm] = useState(false)
@@ -159,10 +138,20 @@ export function HostStateBanner({
         text={
           localTools
             ? `Este chat usa ferramentas locais (shell, arquivos, processos ou skills) no ${name}. O celular não executa chats assim — abra o ClearChat no ${name} para continuar.`
-            : `Comandos remotos só funcionam com o host online. Executar este chat no celular chega numa próxima versão do app.`
+            : `Comandos remotos só funcionam com o host online. Você pode continuar o chat neste celular.`
         }
         testID="banner-host-offline"
-      />
+      >
+        {!localTools && onTakeover ? (
+          <Button
+            title="Executar neste dispositivo"
+            size="sm"
+            icon="phone-portrait-outline"
+            onPress={onTakeover}
+            testID="host-takeover"
+          />
+        ) : null}
+      </Panel>
     )
   if (mode === 'none')
     return (
@@ -172,19 +161,20 @@ export function HostStateBanner({
         title="Este chat não tem host"
         text={
           localTools
-            ? 'Ele usa ferramentas locais — abra-o num computador com o ClearChat para executá-lo.'
-            : 'Executar chats no celular chega numa próxima versão do app. Por enquanto, abra-o num computador.'
+            ? 'Ele usa ferramentas locais (arquivos, shell, processos ou skills) — o celular não executa chats assim. Abra-o num computador com o ClearChat.'
+            : 'Envie uma mensagem para executá-lo neste celular.'
         }
         testID="banner-no-host"
       />
     )
-  if (mode === 'local')
+  if (mode === 'local' && localTools)
     return (
       <Panel
         icon="phone-portrait-outline"
-        tone="muted"
-        title="Este aparelho é o host deste chat"
-        text="Executar chats no celular chega numa próxima versão do app."
+        tone="warning"
+        title="Este chat usa ferramentas locais"
+        text="O celular não executa chats com arquivos, shell, processos ou skills. Execute-o num computador (“Executar neste dispositivo” lá)."
+        testID="banner-local-tools"
       />
     )
   if (handover)

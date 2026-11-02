@@ -9,10 +9,13 @@ precisamos de módulos nativos. Implementa o protocolo de sync v1.5.0.
    mensagens (com anexos e skills do host), fila, forçar, parar, aprovações (por item), Smart-Approve
    override, questionários, retry, regenerar, editar/apagar mensagens, versões (branches), compactar,
    extrair memória, parar subagentes, visualizar arquivos do host (`fs.list`/`fs.read`), fixar host.
-2. **Host no celular** para chats **sem ferramentas locais**: o agente roda no aparelho chamando os
-   provedores direto (OpenRouter, Anthropic nativa, OpenAI-compatible), com ferramentas básicas —
-   pesquisa na web, `browse_url` (fetch), memória, `ask_user`, `list_models`, entre chats e subagentes.
-   Só com o app em primeiro plano (o SO suspende em segundo plano).
+2. **Chats executados no celular** (sem ferramentas locais): o agente roda no aparelho chamando os
+   provedores direto (OpenRouter, Anthropic nativa, OpenAI-compatible), com ferramentas
+   conversacionais — pesquisa na web, `browse_url` (fetch), memória, `ask_user`, `list_models`, entre
+   chats e subagentes. Só com o app em primeiro plano (o SO suspende em segundo plano). **Decisão de
+   produto:** chats executados no celular não são controlados remotamente (as tools são só
+   conversacionais): o celular não publica o stream e recusa comandos remotos; um computador que quiser
+   o chat o traz com "Executar neste dispositivo" (§8.8) e continua lá.
 3. Configurações sincronizadas: provedores, personas, memórias, pesquisa na web, novos chats, conta,
    dispositivos.
 4. Depois: voz (ditado e chamada), notificações, iOS.
@@ -33,7 +36,8 @@ src/
   data/              cache expo-sqlite, SyncEngine (pull/ao vivo/push LWW/resync), anexos (fase 2)
   chat/              modelo da conversa (caminho ativo), linhas das mensagens, cards, Markdown (fase 2)
   remote/            espelho do stream, comandos remotos §8.6, upload de anexos, arquivos do host (fase 3)
-  sync/              (fase 4) host no celular (máquina de estados §8 sem tools locais)
+  host/              (fase 4) chats executados no celular: janelas §8.3, outbox com chat_bases/host_epochs,
+                     troca de host, recusa de tools locais e de controle remoto, espelho local da tela
   agent/             loop enxuto: request → adapter → SSE → tools portáveis → registros
   ui/                telas (expo-router), componentes, tema
 ```
@@ -52,7 +56,8 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 | 1. Conta ✅ | Login por código (captcha via WebView), registro do dispositivo, desbloqueio por senha/chave de recuperação, DEK no SecureStore, sair/revogado | contra servidor local (Docker) |
 | 2. Dados ✅ | Pull/push + cache SQLite, realtime (`sync.changes`), lista de chats, leitura com versões, Markdown, anexos (blobs) | idem + testes do Repo |
 | 3. Controle remoto ✅ | Estado do host, stream ao vivo, todos os comandos §8.6, cards de aprovação/questionário/retry, fila, upload de anexos, arquivos do host | desktop (build local) hospedando + celular controlando |
-| 4. Host no celular | Novo chat, persona, modelo e parâmetros; loop do agente com tools portáveis; `host.begin/takeover`, janelas, publicar stream, aceitar comandos; recusa chats com tools locais | celular hospedando + desktop controlando |
+| 4a. Host no celular ✅ | Novo chat (persona, modelo, parâmetros, tools portáveis); loop do agente (web_search, browse_url, ask_user, list_models, aprovações/Smart-Approve); janelas `host.begin/end`, revisões com `chat_bases`/`host_epochs`; "Executar neste dispositivo"; o PC importa o chat (§8.8); recusa chats com tools locais e controle remoto; segundo plano interrompe | celular executando + desktop recusado/importando |
+| 4b. Host no celular (resto) | Memória (tools + extração), subagentes, entre chats, `read_history`, compactação, título automático e chamadas laterais; execução offline e divergência com versão local (§9) | idem |
 | 5. Configurações | Provedores, personas, memórias, pesquisa na web, dispositivos, conta | e2e |
 | 6. Voz e iOS | Ditado/chamada; build iOS no Mac | — |
 
@@ -147,3 +152,35 @@ Pendências / TODO:
 - Texto digitado no composer pelo `adb input text` perde caracteres quando a UI re-renderiza no meio —
   só no teste (digitar caractere a caractere resolve); avaliar se acontece com teclado real.
 - Outbox offline para comandos não existe (protocolo: comandos só com o host online).
+
+## Fase 4a — estado (2026-11-01)
+
+Feito: `src/agent/` (llm/adaptadores/textTools/juiz do Smart-Approve/webSearch/pageExtract/models
+**vendorados**; request, providers, anexos da request, registros e o runner escritos para o celular),
+`src/host/` (outbox persistida no SQLite com `chat_bases`/`host_epochs`, janelas, troca de host, recusas,
+espelho local) e as telas (Novo chat com persona/modelo/parâmetros/tools; a conversa troca entre "este
+celular" e controle remoto com o mesmo composer e os mesmos cards; selo "Executando neste celular";
+"Executar neste dispositivo" no menu e na faixa de host offline). Decisão de escopo: o celular não é
+controlado remotamente (sem stream publicado; todo `remote.command` recusado com texto em pt-BR); o PC
+importa o chat por `host.takeover` — o celular para o turno na hora (parcial `interrupted`), envia a
+outbox, fecha a janela e libera (a fila vai junto em `forwarded`). Detalhes: README § "Host no celular (fase 4a)".
+Verificado: `npm test` (198; 27 novos em `tests/agent.test.ts` e `tests/host.test.ts`), `npm run
+test:integration` (host contra o servidor real com o provedor falso: turnos, web_search com aprovação,
+recusa do controle remoto, recusa de tools locais, PC assumindo no meio do turno e continuando, segundo
+plano), prova do streaming no aparelho (`clearchat://dev/streamtest`: 1º delta em 136 ms de 24 s, 403
+atualizações — sem buffering; parse5 roda no Hermes) e E2E no AVD com o desktop real. Screenshots em
+`scratchpad/mobile/phase4a/`.
+
+Pendências / TODO (4b e depois):
+- Memória (tools + índice no prompt + extração), subagentes, `send_to_chat`/`list_chats`/`get_chat_info`,
+  `read_history`, compactação (manual/automática/"compactar e tentar de novo"), título automático e a
+  coleta de contexto do Smart-Approve: pontos de extensão em `request.ts` (`setExtraTools`, blocos do
+  system prompt) e em `runner.ts` (marcados "fase 4b"). Personas com memória ligada criam o chat com a
+  config, mas sem as tools/índice no celular por enquanto.
+- Execução offline (sem servidor) e divergência com versão local: a outbox já é persistida e sobe como
+  replay quando a janela não existe; falta a UI de divergência com a versão deste aparelho.
+- Fila descartada ao ir para o segundo plano (o turno é interrompido; os itens ainda não injetados somem).
+- O teto do `beforeBackground` depende de timers, que o Android pausa no segundo plano: o gancho não usa
+  timers (envio direto), mas um gancho travado deixaria o socket aberto até o SO matá-lo.
+- `browse_url` não executa JavaScript (fetch + extração): páginas montadas só no cliente vêm vazias.
+- A regra `usesLocalTools` é uma cópia (o original do desktop está em `sync/records.ts`, não vendorável).

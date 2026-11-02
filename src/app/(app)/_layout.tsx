@@ -13,6 +13,7 @@ export default function AppLayout() {
     >
       <Stack.Screen name="chats" />
       <Stack.Screen name="chat/[id]" />
+      <Stack.Screen name="new" options={{ animation: 'slide_from_bottom' }} />
       <Stack.Screen name="files/[chat]" />
       <Stack.Screen name="file/[chat]" />
       <Stack.Screen name="home" />

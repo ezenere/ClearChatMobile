@@ -134,6 +134,9 @@ function parseJson<T>(raw: string | null): T | null {
   }
 }
 
+/** Teto do `beforeBackground` (o SO dá poucos segundos ao app em segundo plano). */
+export const BACKGROUND_HOOK_MS = 4_000
+
 export class AccountService {
   readonly http: SyncHttp
   private readonly ws: RealtimeLike
@@ -154,6 +157,13 @@ export class AccountService {
   helloCursor: () => number = () => 0
   /** Chats inscritos no stream no `hello` (o chat aberto — controle remoto). */
   helloSubscriptions: () => string[] = () => []
+  /** Janelas de escrita abertas por este aparelho (host no celular, §8.3: reabre na reconexão). */
+  helloActiveWindows: () => { chat_id: string; epoch: number }[] = () => []
+  /**
+   * Antes de fechar o WebSocket ao ir para o segundo plano (host no celular: para o turno, envia o
+   * que falta e fecha as janelas). Teto de `BACKGROUND_HOOK_MS`.
+   */
+  beforeBackground: (() => Promise<void>) | null = null
 
   constructor(deps: AccountDeps) {
     this.deps = deps
@@ -176,7 +186,7 @@ export class AccountService {
           access_token: this.tokens?.access_token ?? '',
           cursor: this.helloCursor(),
           state_cursor: 0,
-          active_windows: [],
+          active_windows: this.helloActiveWindows(),
           subscriptions: this.helloSubscriptions()
         }
       },
@@ -770,7 +780,18 @@ export class AccountService {
   setForeground(fg: boolean): void {
     if (this.foreground === fg) return
     this.foreground = fg
-    this.updateRealtime()
+    const hook = this.beforeBackground
+    if (fg || !hook) {
+      this.updateRealtime()
+      return
+    }
+    // o teto só vale se os timers rodarem (o Android os pausa no segundo plano): o gancho não
+    // pode depender deles
+    const limit = new Promise<void>((r) => setTimeout(r, BACKGROUND_HOOK_MS))
+    void Promise.race([hook().catch(() => undefined), limit]).then(() => {
+      // voltou ao primeiro plano no meio: o socket fica
+      if (!this.foreground) this.updateRealtime()
+    })
   }
 
   private updateRealtime(): void {
