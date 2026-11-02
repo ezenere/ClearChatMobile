@@ -56,6 +56,7 @@ import { DEFAULT_COMPACT_PROMPT } from '@shared/defaults'
 import {
   interChatHeader,
   interChatText,
+  type InterChatSendMeta,
   nextInterChatHops,
   splitInterChatText,
   wouldCreateWaitCycle,
@@ -197,7 +198,12 @@ export interface InterChatRouter {
   /** Abre a janela de escrita do chat de destino executado aqui. Erro legível (pt-BR). */
   ensureLocal(chatId: string): Promise<void>
   /** Comando `send` ao host do destino. */
-  sendRemote(chatId: string, sessionId: string, text: string): Promise<{ queued: boolean }>
+  sendRemote(
+    chatId: string,
+    sessionId: string,
+    text: string,
+    meta: InterChatSendMeta
+  ): Promise<{ queued: boolean }>
   /**
    * Espera o turno do host remoto que trata `text` terminar (estado do chat + registros
    * sincronizados): resposta final, tempo esgotado ou erro.
@@ -3048,11 +3054,17 @@ export class Runner {
     try {
       const max = this.toolOutputLimit(chat)
       if (remote) {
-        // outro dispositivo executa o destino: comando `send` ao host dele (§8.6). O protocolo não
-        // leva `meta` no comando — lá a mensagem chega como texto com o cabeçalho de origem.
+        // outro dispositivo executa o destino: comando `send` ao host dele (§8.6) com a origem
+        // (`meta`, ≥ 1.6.0) — o host grava como mensagem entre chats e conta os saltos.
         let q: { queued: boolean }
         try {
-          q = await this.d.interChat!.sendRemote(target.id, targetSession.id, text)
+          q = await this.d.interChat!.sendRemote(target.id, targetSession.id, text, {
+            kind: 'inter-chat',
+            fromChatId: chat.id,
+            fromSessionId: session.id,
+            fromChatTitle: chat.title,
+            interChatHops: hops
+          })
         } catch (e) {
           return fail(
             `Erro: não foi possível entregar ao chat ${tname} no ${route.hostName}: ${errMsg(e)}`,

@@ -56,7 +56,8 @@ export const hostStack = createHostStack({
   },
   keys,
   openMemorySql: () => openNativeSql(':memory:'),
-  remoteSend: (chatId, sessionId, text) => remote.send(chatId, sessionId, text, [], []),
+  remoteSend: (chatId, sessionId, text, meta) =>
+    remote.sendInterChat(chatId, sessionId, text, meta),
   ws: { request: (t, f, ms) => account.wsRequest(t, f, ms) },
   deviceId: () => account.getState().device?.id ?? null,
   deviceName: () => account.getState().device?.name ?? 'Celular',

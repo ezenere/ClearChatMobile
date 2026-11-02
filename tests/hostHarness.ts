@@ -13,6 +13,7 @@ import { invalidateModels } from '../src/agent/providers'
 import { DesktopWriter, FakeSync } from './fakeSync'
 import { openNodeSql } from './nodeSql'
 import { startFakeLlm, type FakeLlm } from './fakes/fakeLlm'
+import type { InterChatSendMeta } from '@shared/interChat'
 
 export class FakeWs implements HostWs {
   epoch = 0
@@ -78,7 +79,13 @@ export interface Harness {
   notices: string[]
   /** send_to_chat ao host remoto (o teste troca). */
   remoteSend:
-    ((chatId: string, sessionId: string, text: string) => Promise<{ queued?: boolean }>) | null
+    | ((
+        chatId: string,
+        sessionId: string,
+        text: string,
+        meta: InterChatSendMeta
+      ) => Promise<{ queued?: boolean }>)
+    | null
   close(): Promise<void>
 }
 
@@ -139,8 +146,8 @@ export async function makeHarness(opts: { kind?: 'openai' | 'anthropic' } = {}):
     timing: { idleTickMs: 30, idleCloseMs: 60, draftMs: 20 },
     writerTiming: { debounceMs: 10, retryMs: 50 },
     notice: (n) => notices.push(n.text),
-    remoteSend: (c, s, t) =>
-      box.remoteSend ? box.remoteSend(c, s, t) : Promise.reject(new Error('sem host remoto')),
+    remoteSend: (c, s, t, m) =>
+      box.remoteSend ? box.remoteSend(c, s, t, m) : Promise.reject(new Error('sem host remoto')),
     interChatPollMs: 30
   })
   stack.host.onConnection(true)

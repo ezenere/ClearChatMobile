@@ -3,12 +3,13 @@
 // antes; executado por outro dispositivo ONLINE → comando `send` ao host dele (§8.6), como faria o
 // controle remoto; host offline/em tolerância, divergente ou chat com ferramentas locais sem host
 // online → recusa com texto claro (não há fila guardada no servidor, §8.7). Com wait_for_reply a
-// resposta é lida dos registros sincronizados depois que a janela do turno fecha. Limitação do
-// protocolo: o comando `send` não leva `meta`, então no host remoto a mensagem chega como texto do
-// usuário com o cabeçalho de origem (sem `kind: 'inter-chat'`). Sem React Native.
+// resposta é lida dos registros sincronizados depois que a janela do turno fecha. O `send` leva a
+// origem (`meta`, protocolo ≥ 1.6.0): o host grava como mensagem entre chats e conta os saltos.
+// Sem React Native.
 import { contentText } from '@shared/attachments'
 import { activePath } from '@shared/branches'
 import { isDisplayOnly } from '@shared/context'
+import type { InterChatSendMeta } from '@shared/interChat'
 import type { LocalStore } from '@/data/store'
 import type { ChatState } from '@/data/types'
 import type { ChatListEntry } from '@/agent/tools/util'
@@ -23,7 +24,12 @@ export interface InterChatDeps {
   state: (chatId: string) => ChatState | null
   ensureWindow: (chatId: string) => Promise<void>
   /** Comando `send` ao host remoto (RemoteController). Ausente = só entrega local. */
-  remoteSend?: (chatId: string, sessionId: string, text: string) => Promise<{ queued?: boolean }>
+  remoteSend?: (
+    chatId: string,
+    sessionId: string,
+    text: string,
+    meta: InterChatSendMeta
+  ) => Promise<{ queued?: boolean }>
   pollMs?: number
 }
 
@@ -93,8 +99,13 @@ export class InterChatBridge implements InterChatRouter {
     return this.d.ensureWindow(chatId)
   }
 
-  async sendRemote(chatId: string, sessionId: string, text: string): Promise<{ queued: boolean }> {
-    const r = await this.d.remoteSend!(chatId, sessionId, text)
+  async sendRemote(
+    chatId: string,
+    sessionId: string,
+    text: string,
+    meta: InterChatSendMeta
+  ): Promise<{ queued: boolean }> {
+    const r = await this.d.remoteSend!(chatId, sessionId, text, meta)
     return { queued: !!r.queued }
   }
 

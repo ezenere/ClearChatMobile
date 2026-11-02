@@ -4,6 +4,7 @@
 // "controle remoto" do HostController do desktop (src/main/sync/host.ts). Sem React Native.
 import { WsRequestError } from '@vendor/desktop/sync/ws'
 import type { ApprovalItemDecision } from '@shared/approvalPolicy'
+import type { InterChatSendMeta } from '@shared/interChat'
 import {
   REMOTE_FS_LIMITS,
   type RemoteDirResult,
@@ -514,6 +515,26 @@ export class RemoteController {
       attachments,
       skills,
       createdAt: this.now()
+    })
+  }
+  /**
+   * `send` do send_to_chat de um agente deste celular para um chat executado em outro dispositivo,
+   * com a origem (`meta`, protocolo ≥ 1.6.0, §8.6): o host grava como mensagem entre chats e conta
+   * os saltos. Hosts < 1.6.0 ignoram o meta (o texto já traz o cabeçalho de origem).
+   */
+  sendInterChat(
+    chatId: string,
+    sessionId: string,
+    text: string,
+    meta: InterChatSendMeta
+  ): Promise<CommandResult> {
+    return this.command(chatId, 'send', {
+      sessionId,
+      text,
+      attachments: [],
+      skills: [],
+      createdAt: this.now(),
+      meta
     })
   }
   queueForce(chatId: string, sessionId: string, queuedId: string): Promise<CommandResult> {

@@ -16,6 +16,7 @@ import { changedFields } from '../src/memory/system'
 import { canonical } from '../src/host/divergence'
 import { availableTools, buildRequest } from '../src/agent/request'
 import { makeHarness, until, type Harness } from './hostHarness'
+import type { InterChatSendMeta } from '@shared/interChat'
 
 let h: Harness
 beforeEach(async () => {
@@ -378,9 +379,9 @@ describe('entre chats e read_history', () => {
       diverged: null
     })
     h.store.upsertChatState(state('online'))
-    const sent: { chatId: string; text: string }[] = []
-    h.remoteSend = async (chatId, _sid, text) => {
-      sent.push({ chatId, text })
+    const sent: { chatId: string; text: string; meta: InterChatSendMeta }[] = []
+    h.remoteSend = async (chatId, _sid, text, meta) => {
+      sent.push({ chatId, text, meta })
       return { queued: false }
     }
     const a = newChat({ enabledTools: ['send_to_chat'] })
@@ -390,6 +391,14 @@ describe('entre chats e read_history', () => {
     expect(sent[0].text).toMatch(/^\[Mensagem do chat .*\]\nrode os testes$/)
     // sem a dica de responder por send_to_chat: o PC não alcança chats do celular
     expect(sent[0].text).not.toMatch(/use send_to_chat/)
+    // protocolo 1.6.0: a origem vai no `meta` do comando `send`
+    expect(sent[0].meta).toEqual({
+      kind: 'inter-chat',
+      fromChatId: a.chatId,
+      fromSessionId: a.sid,
+      fromChatTitle: expect.any(String),
+      interChatHops: 1
+    })
     expect(path(a.sid).find((m) => m.message.role === 'tool')!.message.content).toMatch(
       /executado no PC/
     )

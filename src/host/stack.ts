@@ -7,6 +7,7 @@ import {
 } from '@shared/approvalPolicy'
 import { isChatProvider } from '@shared/providerKinds'
 import type { ApprovalListItem, ModelInfo, Provider } from '@shared/types'
+import type { InterChatSendMeta } from '@shared/interChat'
 import type { streamChat } from '@vendor/desktop/agent/llm'
 import {
   blobIdFromSha256,
@@ -44,7 +45,12 @@ export interface HostStackDeps {
   /** Banco em memória do índice da memória (expo-sqlite `:memory:` / node:sqlite). */
   openMemorySql: () => Sql
   /** send_to_chat para um chat executado em outro dispositivo: comando `send` ao host (§8.6). */
-  remoteSend?: (chatId: string, sessionId: string, text: string) => Promise<{ queued?: boolean }>
+  remoteSend?: (
+    chatId: string,
+    sessionId: string,
+    text: string,
+    meta: InterChatSendMeta
+  ) => Promise<{ queued?: boolean }>
   keys: () => { userId: string; sk: Subkeys } | null
   ws: HostWs
   deviceId: () => string | null
