@@ -7,6 +7,8 @@ import { attachments, engine, store } from '@/data/native'
 import { hex, sha256 } from '@/crypto'
 import { setEnvSource } from '@/agent/request'
 import { setSearchBases } from '@/agent/tools/web'
+import { openNativeSql } from '@/data/sqlNative'
+import { remote } from '@/remote/native'
 import { bindHost } from './binding'
 import { createHostStack } from './stack'
 
@@ -42,6 +44,7 @@ export const hostStack = createHostStack({
   store,
   engine,
   http: {
+    get: (path) => account.http.get(path),
     post: (path, json) => account.http.post(path, json),
     putBlob: async (blobId, ct, sha) => {
       await account.http.req('PUT', `/api/v1/blobs/${encodeURIComponent(blobId)}`, {
@@ -52,6 +55,8 @@ export const hostStack = createHostStack({
     }
   },
   keys,
+  openMemorySql: () => openNativeSql(':memory:'),
+  remoteSend: (chatId, sessionId, text) => remote.send(chatId, sessionId, text, [], []),
   ws: { request: (t, f, ms) => account.wsRequest(t, f, ms) },
   deviceId: () => account.getState().device?.id ?? null,
   deviceName: () => account.getState().device?.name ?? 'Celular',

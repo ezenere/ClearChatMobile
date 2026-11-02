@@ -26,6 +26,7 @@ import type { CommandKind, CommandResult } from '@/remote/types'
 import type { Runner } from '@/agent/runner'
 import type { ChatRepo } from './repo'
 import type { ContentWriter } from './writer'
+import type { DivergenceService } from './divergence'
 import { LOCAL_TOOLS_REFUSAL, usesLocalTools } from './policy'
 
 export interface HostWs {
@@ -52,6 +53,8 @@ export interface HostDeps {
   log?: (msg: string) => void
   uuid?: () => string
   timing?: Partial<typeof HOST_TIMING>
+  /** Divergência com versão local (§9); o stack liga depois de criar. */
+  divergence?: () => DivergenceService | null
 }
 
 export const HOST_TIMING = {
@@ -82,7 +85,9 @@ const CONTENT_ACTIONS = new Set([
   'message.delete',
   'branch.edit',
   'branch.regenerate',
-  'branch.select'
+  'branch.select',
+  'compact',
+  'memory.extract'
 ])
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -127,6 +132,7 @@ export class HostService {
   private pendingDraft = new Map<string, StreamDraft | null>()
   private draftTimer: ReturnType<typeof setTimeout> | null = null
   private tools = new Map<string, Map<string, ToolRun>>()
+  private lastRefetch = 0
 
   constructor(deps: HostDeps) {
     this.d = deps
@@ -151,6 +157,8 @@ export class HostService {
     if (!this.offBus) this.offBus = this.d.runner.bus.on((e) => this.onAgentEvent(e))
     if (!this.idleTimer) this.idleTimer = setInterval(() => void this.idleTick(), this.t.idleTickMs)
     this.d.writer.resume()
+    // o app foi fechado no segundo plano com itens guardados na fila
+    this.restoreParked()
   }
 
   stop(): void {
@@ -200,6 +208,21 @@ export class HostService {
     return this.state(chatId)?.host?.device_id === this.me || this.windows.has(chatId)
   }
 
+  get isConnected(): boolean {
+    return this.connected
+  }
+
+  /**
+   * Estado novo devolvido pelo servidor fora do WebSocket (ex.: resolve da divergência); null =
+   * só limpa a divergência no estado otimista (o `chat.state` chega em seguida).
+   */
+  applyState(chatId: string, state: ChatState | null): void {
+    if (state?.chat_id) {
+      this.d.store.upsertChatState(state)
+      this.onChatState(state)
+    } else this.setOptimistic(chatId, { diverged: null })
+  }
+
   windowOpen(chatId: string): boolean {
     return this.windows.has(chatId)
   }
@@ -230,6 +253,8 @@ export class HostService {
   onWelcome(w: Record<string, unknown>): void {
     this.connected = true
     for (const id of (w.lost_windows as string[]) ?? []) this.windows.delete(id)
+    // estados de quando estávamos fora (ex.: o PC assumiu um chat deste celular enquanto offline)
+    for (const s of (w.chat_states as ChatState[]) ?? []) this.onChatState(s)
     this.d.writer.resume()
     this.changed()
   }
@@ -313,10 +338,20 @@ export class HostService {
 
   // ---------------- janela de escrita (§8.3, §8.5) ----------------
 
-  /** Garante a janela antes de rodar/editar. Erros legíveis (pt-BR). */
+  /** A versão divergente deste chat é deste aparelho (§9)? */
+  isDivergedSelf(chatId: string): boolean {
+    return !!this.d.divergence?.()?.isSelf(chatId)
+  }
+
+  /**
+   * Garante a janela antes de rodar/editar. Erros legíveis (pt-BR). Começar um turno exige o
+   * servidor; com o turno rodando e a janela aberta, as ações dele (fila, aprovação, parar…)
+   * continuam mesmo sem conexão — o conteúdo vai pela outbox quando a conexão voltar.
+   */
   async ensureWindow(chatId: string, purpose: 'run' | 'edit' | 'replay' = 'run'): Promise<void> {
     const refused = this.refusal(chatId)
     if (refused) throw new HostError('local_tools', refused)
+    if (this.windows.has(chatId) && this.busy(chatId) && this.foreground) return
     if (!this.connected)
       throw new HostError(
         'offline',
@@ -405,8 +440,22 @@ export class HostService {
       this.d.notice?.({
         chatId,
         tone: 'danger',
-        text: 'Este chat ficou divergente: o que rodou aqui não foi salvo online.'
+        text: 'Este chat ficou divergente: outra versão foi salva online enquanto este celular estava fora. Escolha qual manter.'
       })
+    if (code === 'divergence_discarded') {
+      const div = this.d.divergence?.()
+      if (div)
+        void div
+          .replaceContentWithOnline(chatId, true)
+          .then(() =>
+            this.d.notice?.({
+              chatId,
+              tone: 'info',
+              text: 'A versão deste celular foi descartada em outro dispositivo; o chat agora mostra a versão online.'
+            })
+          )
+          .catch((e) => this.log(`descartar versão local: ${errMsg(e)}`))
+    }
     this.changed()
   }
 
@@ -430,6 +479,11 @@ export class HostService {
   private async idleTick(): Promise<void> {
     if (!this.connected) return
     const now = Date.now()
+    // §9.2: chats marcados "precisa rebaixar" que já podem receber a versão online
+    if (now - this.lastRefetch > 2000) {
+      this.lastRefetch = now
+      void this.d.divergence?.()?.refetchPending()
+    }
     for (const chatId of [...this.windows.keys()]) {
       if (this.ending.has(chatId) || this.beginning.has(chatId)) continue
       if (this.busy(chatId) || this.d.writer.pendingContent(chatId)) {
@@ -579,8 +633,16 @@ export class HostService {
   async onBackground(): Promise<void> {
     this.foreground = false
     const chats = new Set([...this.d.runner.busyChats(), ...this.windows.keys()])
-    for (const chatId of chats)
+    for (const chatId of chats) {
+      // a fila ainda não injetada fica guardada (SQLite) e volta no primeiro plano
+      const items = this.d.runner.takeChatQueues(chatId)
+      if (items.length)
+        this.d.store.parkQueue(
+          chatId,
+          items.map((q) => ({ id: q.id, sessionId: q.sessionId, json: JSON.stringify(q) }))
+        )
       await this.d.runner.stopChat(chatId, true, 'interrupted').catch(() => undefined)
+    }
     // sem temporizadores aqui: no segundo plano o Android pausa os timers do JS
     for (const chatId of chats) {
       await this.d.writer.flushNow(chatId).catch(() => false)
@@ -592,7 +654,43 @@ export class HostService {
   onForeground(): void {
     this.foreground = true
     this.d.writer.resume()
+    this.restoreParked()
     this.changed()
+  }
+
+  /** Itens da fila guardados no segundo plano voltam à fila (sem iniciar turno) com um aviso. */
+  private restoreParked(): void {
+    let rows: { chatId: string; sessionId: string; json: string }[]
+    try {
+      rows = this.d.store.takeParked()
+    } catch {
+      return
+    }
+    const bySession = new Map<string, { chatId: string; items: QueuedMessage[] }>()
+    for (const r of rows) {
+      try {
+        const q = JSON.parse(r.json) as QueuedMessage
+        const g = bySession.get(r.sessionId) ?? { chatId: r.chatId, items: [] }
+        g.items.push(q)
+        bySession.set(r.sessionId, g)
+      } catch {
+        /* item ilegível */
+      }
+    }
+    const perChat = new Map<string, number>()
+    for (const [sid, g] of bySession) {
+      this.d.runner.restoreQueue(sid, g.items)
+      perChat.set(g.chatId, (perChat.get(g.chatId) ?? 0) + g.items.length)
+    }
+    for (const [chatId, n] of perChat)
+      this.d.notice?.({
+        chatId,
+        tone: 'info',
+        text:
+          n === 1
+            ? 'O app foi para o segundo plano e o turno parou; a mensagem da fila ficou guardada — toque ⚡ para enviar.'
+            : `O app foi para o segundo plano e o turno parou; ${n} mensagens da fila ficaram guardadas — toque ⚡ para enviar.`
+      })
   }
 
   // ---------------- ações da tela ----------------
@@ -615,8 +713,8 @@ export class HostService {
   ): Promise<CommandResult> {
     const runner = this.d.runner
     const k = kind === 'regenerate' ? 'branch.regenerate' : kind
-    if (k === 'compact' || k === 'memory.extract' || k === 'fs.list' || k === 'fs.read')
-      throw new HostError('unsupported', 'Ainda não disponível em chats executados no celular.')
+    if (k === 'fs.list' || k === 'fs.read')
+      throw new HostError('unsupported', 'Chats executados no celular não têm arquivos de host.')
     if (CONTENT_ACTIONS.has(k)) await this.ensureWindow(chatId, cmdPurpose(k))
     const ok = (queued?: boolean): CommandResult => ({
       status: 'accepted',
@@ -681,8 +779,18 @@ export class HostService {
         runner.editMessage(String(p.messageId), p.message as ApiMessage)
         return ok()
       case 'message.delete':
-        runner.deleteMessage(String(p.messageId))
+        await runner.deleteMessage(String(p.messageId))
         return ok()
+      case 'compact': {
+        const opts = (p.opts ?? {}) as { retry?: boolean }
+        const r = runner.compact(this.sessionInChat(p.sessionId, chatId), { retry: !!opts.retry })
+        return { status: 'accepted', ...(r.scheduled ? { queued: true } : {}) }
+      }
+      case 'memory.extract': {
+        const rec = await runner.extractMemory(this.sessionInChat(p.sessionId, chatId))
+        if (rec.error) throw new HostError('extract', rec.error)
+        return ok()
+      }
     }
     throw new HostError('unsupported', `Ação desconhecida: ${kind}`)
   }
@@ -779,6 +887,14 @@ export class HostService {
       case 'error':
         payload = { kind: 'error', sessionId: e.sessionId, error: e.error }
         break
+      case 'compaction':
+        payload = {
+          kind: 'compaction',
+          sessionId: e.sessionId,
+          state: e.state,
+          ...(e.text ? { text: e.text } : {})
+        }
+        break
     }
     if (payload) this.feed(payload)
   }
@@ -818,7 +934,7 @@ export class HostService {
         status: s.status,
         draft: d ? toStreamDraft(d) : null,
         tools,
-        compaction: null
+        compaction: runner.compaction(s.id)
       }
       const q = runner.getQueue(s.id)
       if (q.length) queues[s.id] = q

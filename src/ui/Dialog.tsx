@@ -66,31 +66,46 @@ export function ConfirmDialog({
   destructive?: boolean
   busy?: boolean
 }) {
+  // rótulo longo (ex.: "Apagar a outra versão e manter esta", §9.2): botões empilhados, sem cortar
+  const stacked = confirmLabel.length > 22
+  const cancel = (
+    <Button
+      title="Cancelar"
+      variant="secondary"
+      full={stacked}
+      style={stacked ? undefined : styles.action}
+      onPress={onClose}
+      testID="dialog-cancel"
+    />
+  )
+  const confirm = (
+    <Button
+      title={confirmLabel}
+      variant={destructive ? 'danger' : 'primary'}
+      full={stacked}
+      style={stacked ? undefined : styles.action}
+      loading={busy}
+      onPress={onConfirm}
+      testID="dialog-confirm"
+    />
+  )
   return (
     <Dialog
       visible={visible}
       title={title}
       onClose={onClose}
       actions={
-        <>
-          <Button
-            title="Cancelar"
-            variant="secondary"
-            full={false}
-            style={styles.action}
-            onPress={onClose}
-            testID="dialog-cancel"
-          />
-          <Button
-            title={confirmLabel}
-            variant={destructive ? 'danger' : 'primary'}
-            full={false}
-            style={styles.action}
-            loading={busy}
-            onPress={onConfirm}
-            testID="dialog-confirm"
-          />
-        </>
+        stacked ? (
+          <View style={styles.stack}>
+            {confirm}
+            {cancel}
+          </View>
+        ) : (
+          <>
+            {cancel}
+            {confirm}
+          </>
+        )
       }
     >
       {message}
@@ -120,5 +135,6 @@ const styles = StyleSheet.create({
   title: { color: colors.fg, fontSize: 18, fontWeight: '600' },
   text: { color: colors.muted, fontSize: 15, lineHeight: 22 },
   actions: { flexDirection: 'row', gap: spacing.sm },
-  action: { flex: 1 }
+  action: { flex: 1 },
+  stack: { flex: 1, gap: spacing.sm }
 })

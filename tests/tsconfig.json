@@ -5,7 +5,8 @@
     "paths": {
       "@/*": ["../src/*"],
       "@vendor/*": ["../src/vendor/*"],
-      "@shared/*": ["../src/vendor/shared/*"]
+      "@shared/*": ["../src/vendor/shared/*"],
+      "better-sqlite3": ["../src/platform/betterSqlite.d.ts"]
     }
   },
   "include": [

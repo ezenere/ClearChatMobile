@@ -36,6 +36,20 @@ export class FakeSync implements EngineHttp {
   pushes: PushBody[] = []
   /** Commit aplicado → mudanças (para simular o `sync.changes` do WebSocket). */
   onCommit: ((changes: Change[]) => void) | null = null
+  /** Divergências (§9) e descartes (`chat|device|base`). */
+  diverged = new Map<
+    string,
+    { divergence_id: string; device_id: string; base: number; head: number }
+  >()
+  discards = new Set<string>()
+
+  contentHead(chatId: string): number {
+    let h = 0
+    for (const r of this.records.values())
+      if (r.scope === chatId && (r.type === 'session' || r.type === 'message') && r.seq > h)
+        h = r.seq
+    return h
+  }
 
   private now = () => new Date().toISOString()
 
@@ -75,8 +89,9 @@ export class FakeSync implements EngineHttp {
     if (u.pathname === '/api/v1/records') {
       const after = Number(u.searchParams.get('after') ?? 0)
       const limit = Number(u.searchParams.get('limit') ?? 500)
+      const scope = u.searchParams.get('scope')
       const all = [...this.records.values()]
-        .filter((r) => !r.deleted && r.seq > after)
+        .filter((r) => !r.deleted && r.seq > after && (scope == null || r.scope === scope))
         .sort((a, b) => a.seq - b.seq)
       const page = all.slice(0, limit)
       return {
@@ -107,6 +122,8 @@ export class FakeSync implements EngineHttp {
       this.pushes.push(json as PushBody)
       return this.push(json as PushBody, 'dev-mobile') as T
     }
+    const div = /^\/api\/v1\/chats\/([^/]+)\/divergence\/resolve$/.exec(path)
+    if (div) return this.resolveDivergence(decodeURIComponent(div[1]), json as never) as T
     if (path === '/api/v1/blobs/check') {
       const ids = (json as { ids: string[] }).ids
       return { missing: ids.filter((id) => !this.blobs.has(id)) } as T
@@ -126,10 +143,57 @@ export class FakeSync implements EngineHttp {
     this.err(404, 'not_found')
   }
 
+  /** §9.3 (subconjunto): keep online → descarte; keep local → aplica os itens sem checar o head. */
+  resolveDivergence(
+    chatId: string,
+    body: { divergence_id: string; keep: 'online' | 'local'; items?: PushItem[] }
+  ): unknown {
+    const d = this.diverged.get(chatId)
+    if (!d || d.divergence_id !== body.divergence_id) this.err(409, 'divergence_mismatch')
+    this.diverged.delete(chatId)
+    if (body.keep === 'online') {
+      this.discards.add(`${chatId}|${d.device_id}|${d.base}`)
+      return { ok: true }
+    }
+    const results = (body.items ?? []).map((it) => this.commitItem(it, d.device_id))
+    this.onCommit?.(results.map((r) => this.view(r, true)))
+    return {
+      results: results.map((r) => ({ type: r.type, id: r.id, rev: r.rev, seq: r.seq })),
+      head: this.seq
+    }
+  }
+
   /** Push (§7.4) — atômico; `device` = quem grava. */
   push(body: PushBody, device: string): unknown {
     const prev = this.receipts.get(body.push_id)
     if (prev) return prev
+    // conteúdo do chat (§8.4, subconjunto: base/divergência; a janela do host não é checada)
+    for (const [chatId, base] of Object.entries(body.chat_bases ?? {})) {
+      const d = this.diverged.get(chatId)
+      if (d) this.err(409, 'chat_diverged', { chat_id: chatId })
+      const head = this.contentHead(chatId)
+      if (base > head) this.err(409, 'stale_base', { chat_id: chatId, head })
+      if (base < head) {
+        if (this.discards.has(`${chatId}|${device}|${base}`))
+          this.err(409, 'divergence_discarded', { chat_id: chatId })
+        const other = [...this.records.values()].some(
+          (r) =>
+            r.scope === chatId &&
+            (r.type === 'session' || r.type === 'message') &&
+            r.seq > base &&
+            r.device_id !== device
+        )
+        if (other) {
+          this.diverged.set(chatId, {
+            divergence_id: crypto.randomUUID(),
+            device_id: device,
+            base,
+            head
+          })
+          this.err(409, 'chat_diverged', { chat_id: chatId })
+        }
+      }
+    }
     const conflicts: unknown[] = []
     for (const it of body.items) {
       if (it.rev !== it.base_rev + 1) this.err(400, 'invalid_request')

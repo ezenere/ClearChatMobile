@@ -237,6 +237,12 @@ export class ContentWriter {
     }
   }
 
+  /** Ids de blob citados por um plaintext (§14). */
+  async blobsFor(plain: Plain): Promise<string[]> {
+    const keys = this.d.keys()
+    return keys ? this.blobsOf(keys.sk, plain) : []
+  }
+
   private async blobsOf(sk: Subkeys, plain: Plain | null): Promise<string[]> {
     if (!plain) return []
     const shas = new Set<string>()

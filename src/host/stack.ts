@@ -20,10 +20,16 @@ import {
 import type { SyncEngine } from '@/data/engine'
 import type { LocalStore } from '@/data/store'
 import type { Plain } from '@/data/types'
+import type { Sql } from '@/data/sql'
+import { chatTitle } from '@/data/decode'
+import { historyStore } from '@/agent/historyStore'
 import { listModels as fetchModels } from '@/agent/providers'
-import { setProviderNamesSource } from '@/agent/request'
+import { setMemorySources, setProviderNamesSource, setSiblingsSource } from '@/agent/request'
 import { Runner, type RunnerFiles } from '@/agent/runner'
+import { createMemorySystem, type MemorySystem } from '@/memory/system'
+import { DivergenceService } from './divergence'
 import { HostService, type HostDeps, type HostWs } from './host'
+import { InterChatBridge } from './interChat'
 import { ChatRepo } from './repo'
 import { ContentWriter } from './writer'
 
@@ -31,9 +37,14 @@ export interface HostStackDeps {
   store: LocalStore
   engine: SyncEngine
   http: {
+    get<T = unknown>(path: string): Promise<T>
     post<T = unknown>(path: string, json?: unknown): Promise<T>
     putBlob(blobId: string, ciphertext: Uint8Array, sha256Hex: string): Promise<void>
   }
+  /** Banco em memória do índice da memória (expo-sqlite `:memory:` / node:sqlite). */
+  openMemorySql: () => Sql
+  /** send_to_chat para um chat executado em outro dispositivo: comando `send` ao host (§8.6). */
+  remoteSend?: (chatId: string, sessionId: string, text: string) => Promise<{ queued?: boolean }>
   keys: () => { userId: string; sk: Subkeys } | null
   ws: HostWs
   deviceId: () => string | null
@@ -47,6 +58,7 @@ export interface HostStackDeps {
   listModels?: (p: Provider) => Promise<ModelInfo[]>
   timing?: HostDeps['timing']
   writerTiming?: { debounceMs?: number; retryMs?: number }
+  interChatPollMs?: number
 }
 
 /** Registro `provider` (§4.3.1) → Provider (a chave fica só em memória/no cache privado). */
@@ -75,6 +87,8 @@ export interface HostStack {
   writer: ContentWriter
   runner: Runner
   host: HostService
+  memory: MemorySystem
+  divergence: DivergenceService
   providers: () => Provider[]
 }
 
@@ -119,6 +133,54 @@ export function createHostStack(d: HostStackDeps): HostStack {
     ...d.writerTiming
   })
   const repo = new ChatRepo(d.store, writer)
+  const memory = createMemorySystem({
+    cache: d.store,
+    open: d.openMemorySql,
+    http: d.http,
+    keys: d.keys,
+    sessions: {
+      read: (sid) => repo.sessionMemory(sid),
+      write: (sid, state) => repo.setSessionMemory(sid, state)
+    },
+    notify: () => d.engine.notifyLocal([], false),
+    log: d.log,
+    writerTiming: d.writerTiming
+  })
+  // fontes da request: índice congelado/help no system prompt e tools de memória (= desktop)
+  setMemorySources({
+    prompt: (chat, session) => {
+      try {
+        return memory.service.promptParts(chat, session)
+      } catch (e) {
+        d.log?.(`memória (prompt): ${(e as Error).message}`)
+        return null
+      }
+    },
+    tools: (chat, session) => {
+      try {
+        return memory.service.active(chat, session).tools
+      } catch (e) {
+        d.log?.(`memória (tools): ${(e as Error).message}`)
+        return []
+      }
+    }
+  })
+  setSiblingsSource(({ id, parentSessionId }) => {
+    const parent = repo.session(parentSessionId)
+    return (
+      !!parent &&
+      repo.sessions(parent.chatId).some((s) => s.parentSessionId === parentSessionId && s.id !== id)
+    )
+  })
+  const bridge = new InterChatBridge({
+    store: d.store,
+    me: () => d.deviceId() ?? '',
+    connected: () => !!host?.isConnected,
+    state: (chatId) => host?.state(chatId) ?? d.store.chatState(chatId),
+    ensureWindow: (chatId) => host!.ensureWindow(chatId, 'run'),
+    remoteSend: d.remoteSend,
+    pollMs: d.interChatPollMs
+  })
   const runner = new Runner({
     repo,
     provider: (id) => providers().find((p) => p.id === id) ?? null,
@@ -129,7 +191,20 @@ export function createHostStack(d: HostStackDeps): HostStack {
     files: d.files,
     listModels: d.listModels ?? fetchModels,
     stream: d.stream,
-    log: d.log
+    log: d.log,
+    memory: memory.service,
+    historyStore: () => historyStore(d.store),
+    listChats: () =>
+      d.store.listChats().map((c) => {
+        const cfg = d.store.getPlain('chat', c.id)?.config as Record<string, unknown> | undefined
+        return {
+          id: c.id,
+          title: chatTitle(c.title),
+          model: typeof cfg?.model === 'string' ? cfg.model : '',
+          updatedAt: c.updatedAt
+        }
+      }),
+    interChat: bridge
   })
   const addListEntries = async (
     entries: { item: ApprovalListItem; list: 'allow' | 'deny'; entry: string }[]
@@ -158,7 +233,30 @@ export function createHostStack(d: HostStackDeps): HostStack {
     pull: () => d.engine.sync(),
     notice: d.notice,
     log: d.log,
-    timing: d.timing
+    timing: d.timing,
+    divergence: () => divergence
   })
-  return { repo, writer, runner, host, providers }
+  const divergence = new DivergenceService({
+    store: d.store,
+    http: d.http,
+    keys: d.keys,
+    deviceId: d.deviceId,
+    state: (chatId) => host?.state(chatId) ?? d.store.chatState(chatId),
+    onState: (chatId, state) => host?.applyState(chatId, state),
+    blobsOf: (plain) => writer.blobsFor(plain),
+    ensureBlobs: async (plains) => {
+      const files = new Set<string>()
+      for (const p of plains)
+        for (const m of JSON.stringify(p).matchAll(
+          /clearchat-attachment:\/\/([0-9a-f]{64}(?:\.[a-z0-9]{1,10})?)/g
+        ))
+          files.add(m[1])
+      await ensureBlobs([...files])
+    },
+    notify: (chats) => d.engine.notifyLocal(chats),
+    resume: (chatId) => writer.schedule(chatId, 0),
+    log: d.log
+  })
+  d.engine.setHoldContent((chatId) => divergence.hold(chatId))
+  return { repo, writer, runner, host, memory, divergence, providers }
 }

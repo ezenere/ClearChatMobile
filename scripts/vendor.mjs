@@ -97,7 +97,21 @@ const GROUPS = {
       // tools portáveis: web_search (sem o Brave-site), extração de página do browse_url, list_models
       'tools/webSearch.ts',
       'tools/pageExtract.ts',
-      'tools/models.ts'
+      'tools/models.ts',
+      // fase 4b: memória (store/schema/config/índice/extração e tools), subagentes, compactação,
+      // título automático, list_chats/get_chat_info e read_history (+ partes puras da busca)
+      'memory/config.ts',
+      'memory/render.ts',
+      'memory/store.ts',
+      'memory/schema.ts',
+      'memory/extraction.ts',
+      'tools/memory.ts',
+      'agent/compaction.ts',
+      'agent/subagents.ts',
+      'agent/autoTitle.ts',
+      'tools/chats.ts',
+      'tools/history.ts',
+      'searchIndex.ts'
     ]
   },
   // lógica pura da UI do desktop (sem React/DOM): ramos na tela, aprovação, raciocínio, datas,
@@ -124,6 +138,10 @@ const ALIASES = { '@shared/': 'shared' }
 const EXTERNALS = {
   'hash-wasm': 'src/platform/hashWasm.ts (Argon2id nativo)',
   'node:crypto': 'src/platform/nodeCrypto.ts (randomUUID)',
+  // memory/store.ts usa randomBytes/randomUUID do Node
+  crypto: 'src/platform/nodeCrypto.ts (randomUUID, randomBytes)',
+  // só tipos (import type): a conexão no celular é o adaptador src/memory/sqlite.ts
+  'better-sqlite3': 'src/platform/betterSqlite.d.ts (tipos; adaptador em src/memory/sqlite.ts)',
   parse5: 'npm parse5 (JS puro; roda no Hermes)'
 }
 
@@ -136,7 +154,11 @@ const SHIMS = {
   // BuiltRequest/maskRequest/modelInfoFor (llm.ts, smartApprove.ts): request do mobile sem os/shell
   'desktop:agent/request.ts': 'src/agent/request.ts',
   // ok/fail/abortError/fmtNum… (tools): util do mobile sem fs/os/path e sem saída em arquivo
-  'desktop:tools/util.ts': 'src/agent/tools/util.ts'
+  'desktop:tools/util.ts': 'src/agent/tools/util.ts',
+  // MemoryService: o snapshot do índice e lastExtractedSeq ficam no registro `session` (§4.3.7)
+  'desktop:memory/service.ts': 'src/memory/service.ts',
+  // read_history em outros chats: consultas sobre o cache local (FTS própria)
+  'desktop:historyStore.ts': 'src/agent/historyStore.ts'
 }
 
 const shimSource = (group, file) => {

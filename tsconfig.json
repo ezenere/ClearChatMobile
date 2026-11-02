@@ -7,7 +7,9 @@
       "@/*": ["./src/*"],
       "@vendor/*": ["./src/vendor/*"],
       "@shared/*": ["./src/vendor/shared/*"],
-      "node:crypto": ["./src/platform/nodeCrypto.ts"]
+      "node:crypto": ["./src/platform/nodeCrypto.ts"],
+      "crypto": ["./src/platform/nodeCrypto.ts"],
+      "better-sqlite3": ["./src/platform/betterSqlite.d.ts"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],

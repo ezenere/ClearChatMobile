@@ -60,13 +60,17 @@ export function ChatAvatar({ icon, size = 40 }: { icon?: string | null; size?: n
 /** "PC de casa" + estado do host; "rodando" com janela aberta. */
 export function HostBadge({
   state,
-  compact
+  compact,
+  selfId
 }: {
   state: ChatState | null | undefined
   compact?: boolean
+  /** Id deste aparelho: o host sou eu → "neste celular". */
+  selfId?: string | null
 }) {
   const h = state?.host
   if (!h) return null
+  const self = !!selfId && h.device_id === selfId
   const running = !!state?.window
   const dot =
     h.status === 'online' ? colors.success : h.status === 'grace' ? colors.warning : colors.faint
@@ -74,8 +78,9 @@ export function HostBadge({
     <View style={st.host} testID="host-badge">
       <View style={[st.dot, { backgroundColor: running ? colors.accentStrong : dot }]} />
       <Text style={st.hostText} numberOfLines={1}>
-        {compact ? '' : 'Executando em '}
-        {h.name}
+        {self ? (compact ? 'Este celular' : 'Executando neste celular') : null}
+        {self ? null : compact ? '' : 'Executando em '}
+        {self ? null : h.name}
         {running
           ? ' · rodando'
           : h.status === 'offline'

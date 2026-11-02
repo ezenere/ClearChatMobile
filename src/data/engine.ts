@@ -45,6 +45,11 @@ export interface EngineDeps {
   /** Cede a thread do JS (a UI respira entre lotes de decifragem). */
   yieldToUi?: () => Promise<void>
   uuid?: () => string
+  /**
+   * §9.2: conteúdo remoto de um chat com conteúdo local pendente (ou com a versão divergente deste
+   * aparelho) NÃO é aplicado — só avança o cursor e marca o chat "precisa rebaixar".
+   */
+  holdContent?: (chatId: string) => boolean
 }
 
 export type SyncPhase = 'locked' | 'idle' | 'syncing' | 'offline' | 'error'
@@ -109,6 +114,11 @@ export class SyncEngine {
 
   get store(): LocalStore {
     return this.d.store
+  }
+
+  /** O host liga a regra do §9.2 depois de montado. */
+  setHoldContent(fn: ((chatId: string) => boolean) | undefined): void {
+    this.d.holdContent = fn
   }
 
   // ---------------- observável ----------------
@@ -346,6 +356,8 @@ export class SyncEngine {
     this.d.store.sql.tx(() => {
       for (const l of this.d.store.liveRecords()) {
         if (online.has(key(l.type, l.id)) || l.type === 'setting') continue
+        // escrito aqui e ainda não aceito (outbox): não é "sumiu do servidor"
+        if (this.d.store.isPending(l.type, l.id)) continue
         this.d.store.removeRecord(l.type, l.id, l.scope)
         if (l.type === 'chat') gone.push(l.id)
       }
@@ -459,6 +471,14 @@ export class SyncEngine {
     }
     if (local && c.rev === local.rev && local.deleted === !!c.deleted) {
       store.bumpSeq(c.type, c.id, c.seq)
+      return false
+    }
+    if (
+      (c.type === 'session' || c.type === 'message') &&
+      c.scope &&
+      this.d.holdContent?.(c.scope)
+    ) {
+      store.setMeta(`refetch:${c.scope}`, '1')
       return false
     }
     if (c.deleted) {

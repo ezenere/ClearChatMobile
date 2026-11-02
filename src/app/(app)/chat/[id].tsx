@@ -16,6 +16,9 @@ import type { ApiMessage, ApprovalRequest, Session, StoredMessage, ToolName } fr
 import { regenerateTargets, trailingErrorId } from '@vendor/renderer/branchView'
 import { describeError } from '@/account/errors'
 import { HostBadge, RenameDialog } from '@/chat/ChatBits'
+import { CompactSheet } from '@/chat/local/CompactSheet'
+import { DivergencePanel } from '@/chat/local/DivergencePanel'
+import { MemorySheet } from '@/chat/local/MemorySheet'
 import { MessageRow, RowCtx, type RowContext, type RowLive } from '@/chat/MessageRow'
 import { RemoteComposer, type SendInput } from '@/chat/remote/Composer'
 import { HostStateBanner } from '@/chat/remote/HostBanner'
@@ -33,9 +36,12 @@ import { chatTitle } from '@/data/decode'
 import { engine, store, useChat, useNow } from '@/data/react'
 import { BUSY_STATUS, liveStatus } from '@/remote/mirror'
 import { remote, useRemoteNotices } from '@/remote/react'
-import { host, onHostNotice, useChatRuntime } from '@/host/react'
+import { host, hostStack, onHostNotice, useChatRuntime } from '@/host/react'
 import { HostError } from '@/host/host'
-import { handoverOf } from '@/remote/types'
+import type { DivergenceDetails } from '@/host/divergence'
+import { divergedOf, handoverOf } from '@/remote/types'
+import { normalizeMemoryConfig } from '@shared/memory'
+import { autoTitleEnabled, normalizeAutoTitleSettings } from '@shared/autoTitle'
 import { ConfirmDialog } from '@/ui/Dialog'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
@@ -53,13 +59,30 @@ export default function ChatScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const toast = useToast()
-  const { loaded, state } = useChat(id)
+  const { loaded: cached, state } = useChat(id)
+  const [showOnline, setShowOnline] = useState(false)
+  const [divDetails, setDivDetails] = useState<DivergenceDetails | null>(null)
+  const [memorySheet, setMemorySheet] = useState(false)
+  const [compactSheet, setCompactSheet] = useState(false)
+  // divergência com versão local: a "Versão online" é só para ver (baixada inteira, §9.2)
+  const loaded = useMemo(
+    () =>
+      cached && showOnline && divDetails
+        ? {
+            ...cached,
+            sessions: divDetails.online.sessions,
+            messages: new Map(Object.entries(divDetails.online.messages))
+          }
+        : cached,
+    [cached, showOnline, divDetails]
+  )
   const {
     mode,
     view: live,
     local,
     localTools,
-    driver
+    driver,
+    connected
   } = useChatRuntime(id, state, loaded?.chat.config)
   const [sessionId, setSessionId] = useState<string | null>(sessionParam ?? null)
   const [localSel, setLocalSel] = useState<LocalSel | null>(null)
@@ -324,6 +347,14 @@ export default function ChatScreen() {
       : null
 
   const title = loaded ? chatTitle(loaded.chat.title) : ''
+  const selfDiverged = mode === 'diverged' && divergedOf(state)?.device_id === host.deviceId
+  const chatCfg = loaded?.chat.config as Record<string, unknown> | undefined
+  const memCfg = normalizeMemoryConfig(chatCfg?.memory)
+  const canExtract =
+    memCfg.enabled &&
+    Object.values(memCfg.writeTo).some((x) => !!x) &&
+    memCfg.collections.length > 0
+  const titleOn = autoTitleEnabled(normalizeAutoTitleSettings(store.setting('autoTitle')))
 
   const header = (
     <View style={[st.header, { paddingTop: insets.top + 4 }]}>
@@ -359,7 +390,7 @@ export default function ChatScreen() {
             {state.pinned ? (
               <Ionicons name="lock-closed" size={10} color={colors.subtle} testID="host-pinned" />
             ) : null}
-            <HostBadge state={state} />
+            <HostBadge state={state} selfId={host.deviceId} />
           </View>
         ) : view && view.session.depth > 0 ? (
           <Text style={st.sub} numberOfLines={1}>
@@ -518,7 +549,15 @@ export default function ChatScreen() {
               </Pressable>
             </View>
           ) : null}
-          {!active ? (
+          {selfDiverged ? (
+            <DivergencePanel
+              chatId={id}
+              state={state}
+              showOnline={showOnline}
+              onShowOnline={setShowOnline}
+              onDetails={setDivDetails}
+            />
+          ) : !active ? (
             <HostStateBanner
               chatId={id}
               mode={mode}
@@ -527,13 +566,20 @@ export default function ChatScreen() {
               onTakeover={() => setTakeover(true)}
             />
           ) : null}
+          {local && !connected ? (
+            <Strip icon="cloud-offline-outline" tone="accent" testID="strip-local-offline">
+              {busy
+                ? 'Sem conexão: o turno termina neste celular e sobe quando a conexão voltar.'
+                : 'Sem conexão com o servidor: o que rodou aqui sobe quando a conexão voltar; novos turnos esperam a conexão.'}
+            </Strip>
+          ) : null}
           {remoteOn && handover ? (
             <Strip icon="swap-horizontal-outline" tone="accent" testID="strip-handover">
               {handover.to_name} vai assumir este chat{' '}
               {handover.mode === 'force' ? 'agora' : 'ao fim do turno'}.
             </Strip>
           ) : null}
-          {remoteOn && busySubs.length ? (
+          {active && busySubs.length ? (
             <Strip
               icon="git-network-outline"
               tone="accent"
@@ -607,7 +653,13 @@ export default function ChatScreen() {
                       ? 'Mensagem…'
                       : `Mensagem para ${hostName}…`
                 }
-                disabled={active ? null : 'Sem conexão — reconectando…'}
+                disabled={
+                  !active
+                    ? 'Sem conexão — reconectando…'
+                    : local && !connected && !busy
+                      ? 'Sem conexão — novos turnos esperam o servidor'
+                      : null
+                }
                 onSend={send}
                 onStop={() => run(() => driver.stop(id, sid))}
                 onQueueForce={(qid) => run(() => driver.queueForce(id, sid, qid))}
@@ -673,6 +725,67 @@ export default function ChatScreen() {
             }}
             testID="chat-action-takeover"
           />
+        ) : null}
+        {local ? (
+          <>
+            <SheetItem
+              icon="layers-outline"
+              label="Compactar conversa…"
+              detail="Resumo do histórico, contexto usado e compactação automática."
+              onPress={() => {
+                setMenu(false)
+                setCompactSheet(true)
+              }}
+              testID="chat-action-compact"
+            />
+            <SheetItem
+              icon="bookmarks-outline"
+              label="Memória…"
+              detail={
+                memCfg.enabled
+                  ? `${memCfg.collections.length} coleç${memCfg.collections.length === 1 ? 'ão ativa' : 'ões ativas'}`
+                  : 'Desligada neste chat'
+              }
+              onPress={() => {
+                setMenu(false)
+                setMemorySheet(true)
+              }}
+              testID="chat-action-memory-config"
+            />
+            {canExtract ? (
+              <SheetItem
+                icon="sparkles-outline"
+                label="Extrair memórias agora"
+                onPress={() => {
+                  setMenu(false)
+                  void run(() => driver.extractMemory(id, sid), 'Memórias extraídas')
+                }}
+                testID="chat-action-memory"
+              />
+            ) : null}
+            {titleOn ? (
+              <SheetItem
+                icon="text-outline"
+                label="Gerar título"
+                detail="Com o modelo do título (Configurações → Novos chats)."
+                onPress={() => {
+                  setMenu(false)
+                  void run(() => hostStack.runner.generateTitle(id), 'Título gerado')
+                }}
+                testID="chat-action-title"
+              />
+            ) : null}
+            <SheetItem
+              icon="stop-circle-outline"
+              label="Parar subagentes"
+              disabled={!busySubs.length}
+              onPress={() => {
+                setMenu(false)
+                setConfirmStopSubs(true)
+              }}
+              testID="chat-action-stop-subagents"
+            />
+          </>
         ) : null}
         {remoteOn ? (
           <>
@@ -777,15 +890,43 @@ export default function ChatScreen() {
       <ConfirmDialog
         visible={confirmStopSubs}
         title="Parar subagentes?"
-        message="Os subagentes em segundo plano deste chat param no host; os parciais ficam salvos."
+        message={
+          local
+            ? 'Os subagentes deste chat param agora; os parciais ficam salvos e o resultado chega como mensagem.'
+            : 'Os subagentes em segundo plano deste chat param no host; os parciais ficam salvos.'
+        }
         confirmLabel="Parar"
         destructive
         onClose={() => setConfirmStopSubs(false)}
         onConfirm={() => {
           setConfirmStopSubs(false)
-          void run(() => remote.stopSubagents(id), 'Subagentes parados')
+          void run(() => driver.stopSubagents(id), 'Subagentes parados')
         }}
       />
+      {local && sid ? (
+        <>
+          <MemorySheet
+            chatId={id}
+            sessionId={view?.session.depth === 0 ? sid : (loaded?.chat.mainSessionId ?? sid)}
+            visible={memorySheet}
+            onClose={() => setMemorySheet(false)}
+          />
+          <CompactSheet
+            chatId={id}
+            sessionId={loaded?.chat.mainSessionId || sid}
+            visible={compactSheet}
+            busy={busy}
+            onClose={() => setCompactSheet(false)}
+            onCompact={() => {
+              setCompactSheet(false)
+              void run(
+                () => driver.compact(id, loaded?.chat.mainSessionId || sid),
+                busy ? 'Compactação agendada para o próximo passo' : 'Compactando…'
+              )
+            }}
+          />
+        </>
+      ) : null}
       <ConfirmDialog
         visible={takeover}
         title="Executar neste dispositivo?"

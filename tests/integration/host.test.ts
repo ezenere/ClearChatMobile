@@ -165,6 +165,7 @@ describe.skipIf(!enabled)('host no celular contra o servidor real (provedor fals
       store,
       engine,
       http: {
+        get: (path) => account.http.get(path),
         post: (path, json) => account.http.post(path, json),
         putBlob: async (blobId, ct, sha) => {
           await account.http.req('PUT', `/api/v1/blobs/${encodeURIComponent(blobId)}`, {
@@ -174,6 +175,7 @@ describe.skipIf(!enabled)('host no celular contra o servidor real (provedor fals
         }
       },
       keys,
+      openMemorySql: () => openNodeSql(),
       ws: { request: (t, f, ms) => account.wsRequest(t, f, ms) },
       deviceId: () => account.getState().device?.id ?? null,
       deviceName: () => account.getState().device?.name ?? 'Celular',

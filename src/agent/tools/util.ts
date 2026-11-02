@@ -4,7 +4,8 @@
 // cortado no teto `maxToolOutputChars` (início + fim), como a rede de segurança do desktop.
 // Os módulos vendorados (webSearch, pageExtract, models) importam daqui pelo shim gerado.
 import { LIMITS } from '@shared/limits'
-import type { ContentPart, ModelInfo } from '@shared/types'
+import type { ContentPart, ModelInfo, StoredMessage } from '@shared/types'
+import type { HistoryStore } from '../historyStore'
 
 export const MAX_OUTPUT: number = LIMITS.maxToolOutputChars
 
@@ -30,6 +31,37 @@ export interface ToolContext {
       list: () => Promise<ModelInfo[]>
     }[]
   }
+  /** get_chat_info / list_chats: dados do chat chamador e dos outros chats (o runner fornece). */
+  chats?: { self: () => ChatInfoData; list: () => ChatListEntry[] }
+  /** read_history: mensagens persistidas da sessão chamadora (inclui as anteriores às fronteiras). */
+  history?: () => StoredMessage[]
+  /** read_history com chat_id / scope "all": outros chats + índice FTS do cache local. */
+  historyStore?: HistoryStore
+}
+
+/** get_chat_info: o chat/sessão que chamou a tool (no celular, `root` = sem diretório raiz). */
+export interface ChatInfoData {
+  chatId: string
+  title: string
+  sessionId: string
+  mainSessionId: string
+  depth: number
+  parentSessionId: string | null
+  sessionTitle: string
+  model: string
+  providerName: string
+  root: string
+  createdAt: number
+}
+
+/** list_chats: uma linha por chat. */
+export interface ChatListEntry {
+  id: string
+  title: string
+  model: string
+  status: 'idle' | 'running' | 'awaiting_approval' | 'awaiting_input' | 'awaiting_retry'
+  updatedAt: number
+  self: boolean
 }
 
 export interface ToolResult {

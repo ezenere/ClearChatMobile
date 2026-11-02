@@ -4,7 +4,8 @@
 // - só as tools PORTÁVEIS vão (`MOBILE_TOOLS`): o resto nunca é oferecido ao modelo;
 // - <environment> sem raiz/shell (o celular não executa tools locais): só o SO;
 // - anexos: o leitor (base64) vem pronto do runner, que baixou os blobs antes (§14);
-// - memória/skills/voz: fontes registráveis (fase 4b), padrão = nada.
+// - memória: fontes registráveis (índice congelado + help, tools pela config — como o desktop);
+//   skills e voz: nunca no celular.
 // É o módulo que o shim `src/vendor/desktop/agent/request.ts` reexporta (BuiltRequest, maskRequest,
 // modelInfoFor para llm.ts / smartApprove.ts vendorados).
 import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
@@ -42,14 +43,24 @@ export interface BuiltRequest {
 export { buildHeaders, chatCompletionsUrl }
 
 /**
- * Tools que o celular executa (fase 4a). Memória, subagentes, entre chats e read_history chegam na
- * 4b (registrar em `setExtraTools`). Tools locais nunca: o celular recusa hospedar esses chats.
+ * Tools que o celular executa (habilitáveis no chat): conversacionais, subagentes, entre chats e
+ * read_history. As de memória entram pela config de memória (não por enabledTools). Tools locais
+ * nunca: o celular recusa hospedar esses chats (§8.9).
  */
 export const MOBILE_TOOLS: readonly ToolName[] = [
   'web_search',
   'browse_url',
   'list_models',
-  'ask_user'
+  'ask_user',
+  'delegate_task',
+  'check_subagents',
+  'wait_subagents',
+  'cancel_subagent',
+  'message_subagent',
+  'get_chat_info',
+  'list_chats',
+  'send_to_chat',
+  'read_history'
 ]
 
 let extraTools: readonly ToolName[] = []
@@ -81,6 +92,11 @@ export function filterParams(
 
 export interface EnvInfo {
   os: string
+  /**
+   * Leitor dos anexos (base64, já no aparelho). Vai junto do env quando a request é montada por um
+   * módulo vendorado que só repassa `env` (compactação).
+   */
+  read?: AttachmentReader
 }
 
 let envSource: () => EnvInfo = () => ({ os: 'Android' })
@@ -89,6 +105,9 @@ export function setEnvSource(fn: () => EnvInfo): void {
   envSource = fn
 }
 
+/** Env atual do aparelho (o runner acrescenta o leitor de anexos na request da compactação). */
+export const currentEnv = (): EnvInfo => envSource()
+
 /** <environment> no celular: só valores estáveis e sem raiz/shell (não há tools locais). */
 export function environmentBlock(env: EnvInfo = envSource()): string {
   return `<environment>\nos: ${env.os}\nEste chat é executado num celular: não há shell nem acesso a arquivos locais.\n</environment>`
@@ -96,20 +115,94 @@ export function environmentBlock(env: EnvInfo = envSource()): string {
 
 type SessionRef = Pick<Session, 'depth'> & { id?: string; parentSessionId?: string | null }
 
+/** Tools que só fazem sentido com delegate_task disponível (subagentes da própria sessão). */
+const SUBAGENT_TOOLS: ToolName[] = [
+  'check_subagents',
+  'wait_subagents',
+  'cancel_subagent',
+  'message_subagent'
+]
+
+/** Tools de subagentes que também valem entre irmãos (mesmo agente pai). */
+const SIBLING_TOOLS: ToolName[] = ['check_subagents', 'message_subagent']
+
+/** A sessão já chamou delegate_task (tem ou teve subagentes)? */
+export function hasDelegated(history: StoredMessage[]): boolean {
+  return history.some(
+    (m) =>
+      m.message.role === 'assistant' &&
+      !!m.message.tool_calls?.some((t) => t.function.name === 'delegate_task')
+  )
+}
+
+type SiblingsSource = (session: { id: string; parentSessionId: string }) => boolean
+let siblingsSource: SiblingsSource = () => false
+/** O runner registra (sessões do cache); sem registro = nunca há irmãos. */
+export function setSiblingsSource(fn: SiblingsSource): void {
+  siblingsSource = fn
+}
+
+function hasSiblings(session: SessionRef): boolean {
+  return (
+    session.depth > 0 &&
+    !!session.id &&
+    !!session.parentSessionId &&
+    siblingsSource({ id: session.id, parentSessionId: session.parentSessionId })
+  )
+}
+
+// ---------------- memória (fontes registradas pelo app; sem registro = nada de memória) ----------------
+
+/** Blocos de memória do system prompt (índice congelado + help). null = nada vai. */
+export interface MemoryPromptBlocks {
+  index: string | null
+  help: string | null
+}
+type MemoryPromptSource = (
+  chat: Chat,
+  session: Pick<Session, 'depth'> & { id?: string }
+) => MemoryPromptBlocks | null
+type MemoryToolsSource = (chat: Chat, session: Pick<Session, 'depth'>) => ToolName[]
+let memoryPromptSource: MemoryPromptSource = () => null
+let memoryToolsSource: MemoryToolsSource = () => []
+export function setMemorySources(src: {
+  prompt: MemoryPromptSource
+  tools: MemoryToolsSource
+}): void {
+  memoryPromptSource = src.prompt
+  memoryToolsSource = src.tools
+}
+
 /**
- * Tools disponíveis para a sessão: habilitadas no chat ∩ portáveis, na ordem fixa de TOOL_NAMES;
- * ask_user só na principal. (Subagentes/memória/skills: 4b.)
+ * Tools disponíveis para a sessão (= desktop, só as portáveis): habilitadas no chat, na ordem fixa
+ * de TOOL_NAMES; delegate só se depth < 2; ask_user só na principal; check/wait/cancel/message só com
+ * delegate_task disponível — num subagente (com histórico), só depois de ter delegado; um subagente
+ * com irmãos recebe check_subagents + message_subagent. Memória pela config, sempre no fim.
  */
 export function availableTools(
-  chat: Pick<Chat, 'config'>,
+  chat: Chat,
   session: SessionRef,
-  _history?: StoredMessage[]
+  history?: StoredMessage[]
 ): ToolName[] {
   const enabled = new Set(chat.config.enabledTools ?? [])
   const portable = new Set(portableTools())
-  return TOOL_NAMES.filter(
-    (n) => enabled.has(n) && portable.has(n) && (n !== 'ask_user' || session.depth === 0)
+  const canDelegate =
+    enabled.has('delegate_task') &&
+    session.depth < 2 &&
+    (!history || session.depth === 0 || hasDelegated(history))
+  let siblings: boolean | undefined
+  const siblingOk = (n: ToolName): boolean =>
+    SIBLING_TOOLS.includes(n) && (siblings ??= hasSiblings(session))
+  const base = TOOL_NAMES.filter(
+    (n) =>
+      enabled.has(n) &&
+      portable.has(n) &&
+      (n !== 'delegate_task' || session.depth < 2) &&
+      (n !== 'ask_user' || session.depth === 0) &&
+      (!SUBAGENT_TOOLS.includes(n) || canDelegate || siblingOk(n))
   )
+  const memory = memoryToolsSource(chat, session).filter((n) => !base.includes(n))
+  return memory.length ? [...base, ...memory] : base
 }
 
 let providerNamesSource: () => string[] = () => []
@@ -124,7 +217,7 @@ export function toolDefinitions(
   return names.map((n) => toolDefinitionFor(n, providerNames))
 }
 
-/** System prompt → <environment> → (memória/skills: 4b) → texto das tools (modo texto). */
+/** System prompt → <environment> → memória (índice + help, só a principal) → texto das tools. */
 export function systemContent(
   chat: Chat,
   session: Pick<Session, 'depth'> & { id?: string },
@@ -138,6 +231,11 @@ export function systemContent(
     s = s ? `${s}\n\n${block}` : block
   }
   if (cfg.envInPrompt) add(environmentBlock(env))
+  const memory = memoryPromptSource(chat, session)
+  if (memory) {
+    add(memory.index ?? '')
+    add(memory.help ?? '')
+  }
   if (cfg.toolsInPrompt) {
     const defs = toolDefinitions(availableTools(chat, session, history))
     add(
@@ -272,12 +370,14 @@ export function buildRequest(
   session: Pick<Session, 'depth' | 'model'> & { id?: string },
   history: StoredMessage[],
   provider: Provider,
-  opts: BuildOptions = {}
+  options: BuildOptions | EnvInfo = {}
 ): BuiltRequest {
+  // a compactação (vendorada) repassa só `env` — o leitor dos anexos vem dentro dele
+  const opts: BuildOptions = 'os' in options ? { env: options, read: options.read } : options
   const cfg = chat.config
   const kind = providerKind(provider)
   const openRouter = kind === 'openrouter'
-  const read = opts.read ?? noAttachments
+  const read = opts.read ?? opts.env?.read ?? noAttachments
 
   const sys = systemContent(chat, session, opts.env ?? envSource(), history)
   const hist = sanitizeHistory(

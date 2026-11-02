@@ -5,6 +5,15 @@
 //   "/search <q>"  → web_search;  "/browse <url>" → browse_url;  "/ask" → ask_user;
 //   "/models" → list_models;  "/slow" → resposta longa e lenta (para Parar/⚡/segundo plano);
 //   "/fail" → HTTP 400 do provedor;  "/cut" → corta a conexão na 1ª tentativa (card de retry);
+//   fase 4b: "/remember <título>: <fato>" → memory_write (perfil);  "/recall <q>" → memory_search;
+//   "/whoami" → responde com os títulos do índice <memory> do system prompt;
+//   "/delegate <tarefa>" → delegate_task;  "/delegate-bg <tarefa>" → em segundo plano;
+//   "/wait" → wait_subagents;  "/subs" → check_subagents;  "/sleep <ms> <texto>" → espera e responde;
+//   "/tell <chat_id> <msg>" → send_to_chat;  "/ask-chat <chat_id> <msg>" → com wait_for_reply;
+//   "/chats" → list_chats;  "/info" → get_chat_info;  "/history <q>" → read_history (todos os chats);
+//   "/big" → resposta longa (enche o contexto para a compactação automática);
+//   requests laterais: compactação (prompt de resumo) → <conversation_summary>…; título (prompt do
+//   título) → "Título: <palavras>"; extração de memórias → memory_write com "meu nome é X" (ou "meu nome e X", sem acento: o adb não digita "é");
 //   resto → "ok: <texto>" (com raciocínio e usage com custo).
 // Depois de um resultado de tool → "Resultado recebido (<tool>): <início do resultado>".
 // Rotas extras: GET /models, GET /ddg (HTML no formato do DuckDuckGo), GET /page/<nome> (HTML).
@@ -109,6 +118,13 @@ export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<F
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
     const text = textOf(lastUser?.content).trim()
     const model = String(body.model ?? 'fake/agent')
+    const system =
+      textOf(msgs.find((m) => m.role === 'system')?.content) +
+      (typeof body.system === 'string'
+        ? body.system
+        : Array.isArray(body.system)
+          ? textOf(body.system)
+          : '')
 
     if (text.startsWith('/fail') && last?.role === 'user') {
       res.writeHead(400, { 'Content-Type': 'application/json' })
@@ -269,6 +285,47 @@ export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<F
       : last?.role === 'tool'
         ? textOf(last.content)
         : null
+    // ---------------- requests laterais (compactação, título, extração) ----------------
+    if (text.startsWith('A conversa acima está ficando longa demais')) {
+      const users = msgs
+        .filter((m) => m.role === 'user')
+        .map((m) => textOf(m.content).replace(/\s+/g, ' ').slice(0, 60))
+        .filter((t) => t && !t.startsWith('A conversa acima'))
+      await streamText(
+        `<conversation_summary>Resumo falso: ${users.length} mensagens do usuário (${users.slice(-3).join(' | ')}).</conversation_summary>`
+      )
+      return
+    }
+    if (system.startsWith('Você dá nome a conversas')) {
+      const msg = /<message>\n([\s\S]*?)\n<\/message>/.exec(text)?.[1] ?? text
+      const words = msg
+        .replace(/[^\p{L}\p{N} ]+/gu, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 2 && !w.startsWith('/'))
+        .slice(0, 3)
+      await streamText(
+        `Título: ${words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' ') || 'Conversa'} (auto)`
+      )
+      return
+    }
+    if (system.startsWith('Você mantém a memória de longo prazo')) {
+      if (last?.role === 'tool' || (anthropic && Array.isArray(last?.content))) {
+        await streamText('nada mais a registrar')
+        return
+      }
+      const m = /meu nome\s+(?:[ée]\s+)?([\p{L}]+)/iu.exec(text)
+      if (!m) {
+        await streamText('nada a registrar')
+        return
+      }
+      return toolCall('memory_write', {
+        category: 'profile',
+        title: 'Nome do usuário',
+        summary: `Chama-se ${m[1]}`,
+        ops: [{ op: 'add', fact: `O usuário se chama ${m[1]}` }]
+      })
+    }
+
     if (toolResult !== null) {
       const name = (() => {
         for (let i = msgs.length - 1; i >= 0; i--) {
@@ -288,6 +345,65 @@ export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<F
       )
       return
     }
+    if (text.startsWith('/remember')) {
+      const [title, fact] = text
+        .slice(9)
+        .split(':')
+        .map((x) => x.trim())
+      return toolCall(
+        'memory_write',
+        {
+          category: 'profile',
+          title: title || 'Fato',
+          summary: fact ?? '',
+          ops: [{ op: 'add', fact: fact || title || 'fato' }]
+        },
+        'Vou guardar. '
+      )
+    }
+    if (text.startsWith('/recall'))
+      return toolCall('memory_search', { query: text.slice(7).trim() || 'usuário' })
+    if (text.startsWith('/whoami')) {
+      const titles = [...system.matchAll(/^- (m[0-9a-z]+) · ([^\n—]+)/gm)].map((x) => x[2].trim())
+      await streamText(
+        titles.length ? `Pelo índice da memória: ${titles.join('; ')}` : 'Não vejo nada na memória.'
+      )
+      return
+    }
+    if (text.startsWith('/delegate-bg'))
+      return toolCall('delegate_task', {
+        task: text.slice(12).trim() || 'tarefa',
+        title: 'Ajudante em segundo plano',
+        background: true
+      })
+    if (text.startsWith('/delegate'))
+      return toolCall('delegate_task', {
+        task: text.slice(9).trim() || 'tarefa',
+        title: 'Ajudante'
+      })
+    if (text.startsWith('/wait')) return toolCall('wait_subagents', { timeout_s: 30 })
+    if (text.startsWith('/subs')) return toolCall('check_subagents', {})
+    if (text.startsWith('/sleep')) {
+      const [, ms, ...rest] = text.split(/\s+/)
+      await sleep(Number(ms) || 500)
+      await streamText(`ok: ${rest.join(' ') || 'acordei'}`)
+      return
+    }
+    if (text.startsWith('/tell') || text.startsWith('/ask-chat')) {
+      const wait = text.startsWith('/ask-chat')
+      const [, id, ...rest] = text.split(/\s+/)
+      return toolCall('send_to_chat', {
+        chat_id: id,
+        message: rest.join(' ') || 'olá',
+        ...(wait ? { wait_for_reply: true, timeout_s: 60 } : {})
+      })
+    }
+    if (text.startsWith('/chats')) return toolCall('list_chats', {})
+    if (text.startsWith('/info')) return toolCall('get_chat_info', {})
+    if (text.startsWith('/history'))
+      return toolCall('read_history', { query: text.slice(8).trim() || 'ok', scope: 'all' })
+    if (text.startsWith('/big'))
+      return streamText(`ok: ${'texto longo para encher o contexto '.repeat(400)}`)
     if (text.startsWith('/search'))
       return toolCall('web_search', { query: text.slice(7).trim() || 'clima' }, 'Vou pesquisar. ')
     if (text.startsWith('/browse')) return toolCall('browse_url', { url: text.slice(7).trim() })

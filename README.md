@@ -266,6 +266,80 @@ espelho) e `tests/integration/host.test.ts` (servidor real). Provedor falso: `te
 `node tests/fakes/fakeLlm.ts 8790` para o E2E). No app de desenvolvimento,
 `EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG=http://127.0.0.1:8790/ddg` aponta o web_search para o falso.
 
+## Host no celular (fase 4b)
+
+Tudo o que o desktop faz num chat sem ferramentas locais roda agora no celular, com a mesma semântica
+(o código puro do desktop é **vendorado**; o resto é porta fiel do `runner.ts` do desktop):
+
+- **Memória** (`src/memory/`): o `MemoryStore` do desktop (FTS5 com bm25, similares, slugs, validações)
+  roda sem alteração sobre um **índice SQLite em memória** (`memoryIndex.ts`: `memory_collections`/
+  `memories`/`memories_fts` montados dos registros `memory_collection`/`memory` do cache e mantidos
+  pelos avisos do `LocalStore`) através de um adaptador com a interface do better-sqlite3
+  (`sqlite.ts`). Uma mudança feita aqui (tool ou extração) vira revisão do registro com só os campos
+  mudados como "sujos" e sobe pela **outbox LWW** persistida (`src/data/lww.ts`, tabela
+  `lww_outbox`: um registro por lote, `rev_mismatch` → campos locais sobre a versão do servidor,
+  `gone` → a exclusão vence; offline → tenta de novo). Colisão de slug (§4.3.5) segue a regra
+  determinística e reenvia. Tools `memory_*` = `tools/memory.ts` vendorado; config por chat/persona
+  (`config.memory`); o índice vai **congelado por sessão** no campo `memory` do registro `session`
+  (§4.3.7 — o próximo host continua com o mesmo prefixo); renovado depois de compactar ou em
+  "Atualizar índice agora"; extração (`memory/extraction.ts` vendorado) depois da compactação e em
+  "Extrair memórias agora". Memória desligada → nada de memória vai à API. Tela: menu do chat →
+  "Memória…" (ligar, coleções ativas por categoria, **onde o agente grava**, extração automática,
+  subagentes).
+- **Subagentes**: `delegate_task` (bloqueante ou em segundo plano, modelo/provedor próprios via
+  `resolveSubagentTarget`), `check_subagents`/`wait_subagents`/`cancel_subagent`/`message_subagent`
+  (pai↔filhos, irmãos com o `SlidingWindowLimiter`, broadcast), `ReportRegistry` vendorado
+  (callbacks na ordem, reivindicação, silêncio na parada em cascata), pai acordado pelo callback,
+  subagente dormindo (`waiting`) enquanto há filhos pendentes. As subsessões são registros `session`
+  (o PC as vê depois do takeover; a tela mostra como abas). "Parar subagentes" no menu e na faixa.
+- **Entre chats**: `list_chats`/`get_chat_info` (`tools/chats.ts` vendorado) e `send_to_chat` com os
+  limites do desktop (saltos, ciclo de espera, timeout). Destino executado (ou executável) **neste
+  celular** → entrega local com a janela aberta antes; destino executado por **outro dispositivo
+  online** → comando `send` ao host dele (§8.6, como o controle remoto); com `wait_for_reply` a
+  resposta é lida dos registros sincronizados quando a janela do turno remoto fecha
+  (`src/host/interChat.ts`). Host do destino offline/em tolerância, divergente, ou chat com
+  ferramentas locais sem computador online → recusa com texto claro (não existe fila no servidor,
+  §8.7). O cabeçalho não sugere responder por `send_to_chat` (o celular não aceita comandos).
+- **read_history** (`tools/history.ts` vendorado) com o `HistoryStore` do celular
+  (`src/agent/historyStore.ts`): índice `history_fts` (corpo × tools, bm25 3:1, texto do
+  `searchableText` vendorado) mantido junto com as mensagens do cache (migração 4 reindexa o que já
+  havia).
+- **Compactação** (`agent/compaction.ts` vendorado): pedida (menu → "Compactar conversa…", com o medidor
+  de contexto e a compactação automática), automática no limite (`autoCompact` + `compactThreshold`;
+  subsessões sempre), "Compactar e tentar de novo" e contexto estourado → compacta e repete; fronteira
+  com `insertAt` antes das mensagens pendentes (mesmo lote).
+- **Título automático** (`agent/autoTitle.ts` vendorado, chamada lateral com `buildSideRequest`): pelo
+  setting sincronizado `autoTitle`, na 1ª mensagem digitada, compare-and-set contra o título provisório;
+  "Gerar título" no menu.
+
+**Conectividade, outbox e divergência (§8.4, §9).** Começar um turno exige o servidor (a janela);
+com o turno rodando, ele termina no celular mesmo sem conexão e as ações dele (fila, aprovação,
+parar) continuam; a outbox sobe quando a conexão volta (na mesma janela se reconectar em < 10 s,
+senão `host.begin` de novo ou replay). Se um PC assumiu e escreveu enquanto isso, o replay cria a
+**divergência**: o motor deixa de aplicar conteúdo remoto desse chat enquanto houver conteúdo local
+pendente ou a versão divergente for deste aparelho (§9.2, só marca "precisa rebaixar"), e a conversa
+mostra "Versão deste celular · Versão online" (navegáveis) com "Manter a deste celular" / "Manter a
+online" e a confirmação obrigatória (`src/host/divergence.ts`, `src/chat/local/DivergencePanel.tsx`).
+Manter a online apaga a versão local (sessões/mensagens fora do servidor + outbox do conteúdo) e baixa
+a online; manter a local envia no `divergence/resolve` o lote que transforma a online na local
+(tombstones das que só existiam online). Um descarte feito em outro dispositivo chega como
+`divergence_discarded` e apaga a versão local do mesmo jeito.
+
+**Fila no segundo plano (decisão).** O turno é interrompido (o SO suspende o app), mas os itens da fila
+ainda não injetados são **guardados no SQLite** (`parked_queue`) e voltam à fila ao voltar ao primeiro
+plano (ou ao reabrir o app), sem rodar sozinhos, com o aviso "o turno parou; N mensagens da fila
+ficaram guardadas — toque ⚡ para enviar". Callbacks de subagentes nunca vão para essa fila: entram como
+mensagem no pai já parado.
+
+Testes: `tests/phase4b.test.ts` (servidor falso + provedor falso: memória, LWW, slug, índice congelado,
+extração, subagentes, entre chats local/remoto, read_history, compactação, título, offline + replay,
+fila guardada, divergência nos dois sentidos) e `tests/integration/phase4b.test.ts` (servidor real:
+memória escrita no celular visível/editável no PC, subagente sincronizado, `send_to_chat` a um chat
+executado no PC, divergência criada pelo celular sem servidor enquanto o PC assumiu e escreveu —
+resolvida mantendo a local num chat e a online no outro). O provedor falso ganhou roteiros (`/remember`,
+`/whoami`, `/delegate[-bg]`, `/wait`, `/sleep`, `/tell`, `/ask-chat`, `/chats`, `/history`, `/big`) e
+respostas às chamadas laterais (resumo, título, extração).
+
 ## Servidor local para testes
 
 Nunca produção. O script sobe um Postgres descartável no Docker (`--tmpfs`, sem volume) e a API de
@@ -314,8 +388,12 @@ imports relativos e `@shared/...` são seguidos automaticamente para nada ficar 
 - `shared/` ← `../ClearChatDesktop/src/shared` (tipos e módulos puros + fecho transitivo);
 - `desktop/sync/` ← `../ClearChatDesktop/src/main/sync/{http,ws,stream}.ts`;
 - `desktop/agent/`, `desktop/tools/` ← agente e tools portáveis do desktop (`llm`, adaptadores,
-  `textTools`, `smartApprove`, `webSearch`, `pageExtract`, `models`); `request.ts`/`util.ts` são
-  **shims gerados** que reexportam as adaptações do celular (`SHIMS` no `vendor.mjs`);
+  `textTools`, `smartApprove`, `compaction`, `subagents`, `autoTitle`, `webSearch`, `pageExtract`,
+  `models`, `memory`, `chats`, `history`); `desktop/memory/` ← `config`, `render`, `store`, `schema`,
+  `extraction`; `desktop/searchIndex.ts` (partes puras da busca). `request.ts`/`util.ts`/
+  `memory/service.ts`/`historyStore.ts` são **shims gerados** que reexportam as adaptações do celular
+  (`SHIMS` no `vendor.mjs`); `crypto` (randomBytes) vai para `src/platform/nodeCrypto.ts` e
+  `better-sqlite3` é só tipo (`src/platform/betterSqlite.d.ts`).
 - `renderer/` ← lógica pura da UI do desktop (`src/renderer/src/lib`: `branchView`, `approvalOutcome`,
   `reasoning`, `dates`, `fences`, `math`, `memory`, `skills`) — sem React/DOM, só `@shared`.
 
@@ -355,7 +433,9 @@ src/chat/              conversa: modelo puro (viewModel), linhas das mensagens, 
 src/data/              sync de dados: SQLite (store), motor (pull/ao vivo/push/resync), anexos, ligação com a conta
 src/remote/            controle remoto: espelho do stream, comandos §8.6, anexos (upload), arquivos do host
 src/agent/             agente no celular: request, runner, tools portáveis (vendorados + adaptações)
-src/host/              chats executados no celular: outbox, janelas, troca de host, recusas, novo chat
+src/host/              chats executados no celular: outbox, janelas, troca de host, recusas, novo chat,
+                       divergência com versão local, send_to_chat entre dispositivos
+src/memory/            memória: índice local (SQLite em memória) + outbox LWW + MemoryService
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)
 src/platform/          polyfills e trocas para o Hermes
 src/selftest/          casos dos vetores + checagens da plataforma (Vitest e aparelho)

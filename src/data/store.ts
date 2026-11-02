@@ -3,6 +3,7 @@
 // host (§8.2). Sem rede e sem cripto: quem decifra e decide o que aplicar é o SyncEngine.
 import { activePath, buildTree, type TreeMessage } from '@shared/branches'
 import type { Session, StoredMessage } from '@shared/types'
+import { searchableText } from '@vendor/desktop/searchIndex'
 import {
   chatFromPlain,
   isPreviewable,
@@ -56,6 +57,17 @@ export interface OutboxRow {
   mark: number
 }
 
+export interface LwwRow {
+  type: string
+  id: string
+  scope: string | null
+  baseRev: number
+  deleted: boolean
+  plain: Plain | null
+  patch: Plain
+  mark: number
+}
+
 export interface LoadedChat {
   chat: ChatPlain & { id: string }
   sessions: Session[]
@@ -65,7 +77,7 @@ export interface LoadedChat {
   broken: number
 }
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -116,6 +128,26 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 CREATE INDEX IF NOT EXISTS outbox_chat ON outbox(chat_id);
 CREATE TABLE IF NOT EXISTS commands_seen (cmd_id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+`,
+  // fase 4b: índice do read_history (conversa e tools com pesos diferentes, como o searchIndex do
+  // desktop), outbox LWW dos registros de memória escritos aqui e a fila guardada no segundo plano
+  4: `
+CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(
+  body, tool, tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS messages_hist_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM history_fts WHERE rowid = old.rowid;
+END;
+CREATE TABLE IF NOT EXISTS lww_outbox (
+  type TEXT NOT NULL, id TEXT NOT NULL, scope TEXT, base_rev INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0, plain TEXT, patch TEXT, mark INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (type, id)
+);
+CREATE TABLE IF NOT EXISTS parked_queue (
+  id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, session_id TEXT NOT NULL, json TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO meta (key, value) VALUES ('history_backfill', '1');
 `
 }
 
@@ -147,9 +179,65 @@ export class LocalStore {
   /** Mensagens já interpretadas, por id (reaproveitadas enquanto a revisão não muda). */
   private parsed = new Map<string, { rev: number; msg: StoredMessage }>()
 
+  /** Registros de memória aplicados no cache (o índice da memória acompanha; null = apagado). */
+  private memoryListeners = new Set<(type: string, id: string, plain: Plain | null) => void>()
+  private wipeListeners = new Set<() => void>()
+  /** Gravações da própria memória (o índice já tem a mudança): não avisa os ouvintes. */
+  private quietMemory = 0
+
   constructor(sql: Sql) {
     this.sql = sql
     this.migrate()
+    if (this.getMeta('history_backfill')) this.backfillHistory()
+  }
+
+  onMemoryRecord(fn: (type: string, id: string, plain: Plain | null) => void): () => void {
+    this.memoryListeners.add(fn)
+    return () => this.memoryListeners.delete(fn)
+  }
+
+  onWipe(fn: () => void): () => void {
+    this.wipeListeners.add(fn)
+    return () => this.wipeListeners.delete(fn)
+  }
+
+  private memoryChanged(type: string, id: string, plain: Plain | null): void {
+    if (this.quietMemory || (type !== 'memory' && type !== 'memory_collection')) return
+    for (const fn of this.memoryListeners) {
+      try {
+        fn(type, id, plain)
+      } catch {
+        /* o índice da memória se reconstrói na próxima leitura */
+      }
+    }
+  }
+
+  /** Índice do read_history para as mensagens que já estavam no cache (migração 4). */
+  private backfillHistory(): void {
+    this.sql.tx(() => {
+      const rows = this.sql.all<{ id: string; scope: string | null; plain: string | null }>(
+        "SELECT id, scope, plain FROM records WHERE type = 'message' AND deleted = 0 AND state = 0"
+      )
+      for (const r of rows) {
+        const p = parse(r.plain)
+        if (p) this.indexHistory(messageFromPlain(r.id, p))
+      }
+      this.setMeta('history_backfill', null)
+    })
+  }
+
+  /** (Re)indexa uma mensagem no history_fts (rowid = rowid de `messages`). */
+  private indexHistory(m: StoredMessage): void {
+    const row = this.sql.get<{ rowid: number }>('SELECT rowid FROM messages WHERE id = ?', [m.id])
+    if (!row) return
+    this.sql.run('DELETE FROM history_fts WHERE rowid = ?', [row.rowid])
+    const { body, tool } = searchableText(m.message, m.meta)
+    if (body || tool)
+      this.sql.run('INSERT INTO history_fts (rowid, body, tool) VALUES (?, ?, ?)', [
+        row.rowid,
+        body,
+        tool
+      ])
   }
 
   private migrate(): void {
@@ -201,12 +289,16 @@ export class LocalStore {
         'chat_states',
         'meta',
         'outbox',
-        'commands_seen'
+        'commands_seen',
+        'lww_outbox',
+        'parked_queue',
+        'history_fts'
       ])
         this.sql.run(`DELETE FROM ${t}`)
       this.sql.run(`INSERT INTO messages_fts(messages_fts) VALUES ('delete-all')`)
     })
     this.parsed.clear()
+    for (const fn of this.wipeListeners) fn()
     try {
       this.sql.exec('VACUUM')
     } catch {
@@ -277,9 +369,11 @@ export class LocalStore {
     )
     if (state !== RecordState.Ok || !plain) {
       this.dropDerived(c.type, c.id, c.scope)
+      this.memoryChanged(c.type, c.id, null)
       return
     }
     this.indexRecord(c.type, c.id, c.scope, plain)
+    this.memoryChanged(c.type, c.id, plain)
   }
 
   /** Tombstone (§7.7) com a cascata local: chat → sessões/mensagens; coleção → memórias. */
@@ -295,6 +389,7 @@ export class LocalStore {
     if (c.type === 'chat') this.cascadeChat(c.id)
     if (c.type === 'memory_collection')
       this.sql.run("DELETE FROM records WHERE type = 'memory' AND scope = ?", [c.id])
+    this.memoryChanged(c.type, c.id, null)
   }
 
   /** Remove o registro do cache (resync: sumiu do servidor) com a mesma cascata. */
@@ -304,6 +399,7 @@ export class LocalStore {
     if (type === 'chat') this.cascadeChat(id)
     if (type === 'memory_collection')
       this.sql.run("DELETE FROM records WHERE type = 'memory' AND scope = ?", [id])
+    this.memoryChanged(type, id, null)
   }
 
   private cascadeChat(chatId: string): void {
@@ -388,6 +484,7 @@ export class LocalStore {
         text
       ]
     )
+    this.indexHistory(m)
     this.markDirty(scope)
   }
 
@@ -805,6 +902,252 @@ export class LocalStore {
   /** Descarta a outbox de um chat (apagado em outro lugar / divergência descartada). */
   dropOutbox(chatId: string): void {
     this.sql.run('DELETE FROM outbox WHERE chat_id = ?', [chatId])
+  }
+
+  // ---------------- escrita LWW local (memória escrita aqui, §7.5) ----------------
+
+  /**
+   * Grava localmente uma revisão LWW feita aqui (memória/coleção) e a põe na `lww_outbox`: mesmo
+   * esquema de `writeLocal` (rev = base + 1). `patch` acumula os campos mudados aqui — num conflito
+   * eles são reaplicados sobre a versão do servidor (LWW por campo). O índice da memória já tem a
+   * mudança (não avisa os ouvintes).
+   */
+  writeLww(w: {
+    type: string
+    id: string
+    scope: string | null
+    plain: Plain | null
+    patch: Plain
+  }) {
+    this.sql.tx(() => {
+      const row = this.sql.get<{ base_rev: number; patch: string | null }>(
+        'SELECT base_rev, patch FROM lww_outbox WHERE type = ? AND id = ?',
+        [w.type, w.id]
+      )
+      const meta = this.recordMeta(w.type, w.id)
+      const base = row ? row.base_rev : (meta?.rev ?? 0)
+      const change: Change = {
+        type: w.type,
+        id: w.id,
+        scope: w.scope,
+        rev: base + 1,
+        seq: meta?.seq ?? 0,
+        deleted: !w.plain,
+        size: 0,
+        blobs: [],
+        device_id: '',
+        updated_at: new Date().toISOString()
+      }
+      this.quietMemory++
+      try {
+        if (w.plain) this.putRecord(change, w.plain, RecordState.Ok)
+        else this.deleteRecord(change)
+      } finally {
+        this.quietMemory--
+      }
+      const patch = { ...(parse(row?.patch ?? null) ?? {}), ...w.patch }
+      this.sql.run(
+        `INSERT INTO lww_outbox (type, id, scope, base_rev, deleted, plain, patch, mark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+         ON CONFLICT(type, id) DO UPDATE SET scope = excluded.scope, deleted = excluded.deleted,
+           plain = excluded.plain, patch = excluded.patch, mark = lww_outbox.mark + 1`,
+        [
+          w.type,
+          w.id,
+          w.scope,
+          base,
+          w.plain ? 0 : 1,
+          w.plain ? JSON.stringify(w.plain) : null,
+          JSON.stringify(patch)
+        ]
+      )
+    })
+  }
+
+  lwwOutbox(): LwwRow[] {
+    return this.sql
+      .all<{
+        type: string
+        id: string
+        scope: string | null
+        base_rev: number
+        deleted: number
+        plain: string | null
+        patch: string | null
+        mark: number
+      }>('SELECT * FROM lww_outbox')
+      .map((r) => ({
+        type: r.type,
+        id: r.id,
+        scope: r.scope,
+        baseRev: r.base_rev,
+        deleted: !!r.deleted,
+        plain: parse(r.plain),
+        patch: parse(r.patch) ?? {},
+        mark: r.mark
+      }))
+  }
+
+  /** Campos mudados aqui ainda não aceitos (reaplicados sobre uma revisão recebida). */
+  lwwPatch(type: string, id: string): Plain | null {
+    const r = this.sql.get<{ patch: string | null; deleted: number }>(
+      'SELECT patch, deleted FROM lww_outbox WHERE type = ? AND id = ?',
+      [type, id]
+    )
+    if (!r) return null
+    return r.deleted ? { __deleted: true } : (parse(r.patch) ?? {})
+  }
+
+  /** Push aceito (mesma regra do `commitOutbox`: mudou de novo durante o envio → base avança). */
+  commitLww(rows: { type: string; id: string; mark: number; rev: number; seq: number }[]): void {
+    this.sql.tx(() => {
+      for (const r of rows) {
+        const cur = this.sql.get<{ mark: number }>(
+          'SELECT mark FROM lww_outbox WHERE type = ? AND id = ?',
+          [r.type, r.id]
+        )
+        if (!cur) continue
+        if (cur.mark === r.mark) {
+          this.sql.run('DELETE FROM lww_outbox WHERE type = ? AND id = ?', [r.type, r.id])
+          this.sql.run('UPDATE records SET seq = ?, rev = ? WHERE type = ? AND id = ?', [
+            r.seq,
+            r.rev,
+            r.type,
+            r.id
+          ])
+        } else {
+          this.sql.run('UPDATE lww_outbox SET base_rev = ? WHERE type = ? AND id = ?', [
+            r.rev,
+            r.type,
+            r.id
+          ])
+          this.sql.run('UPDATE records SET seq = ?, rev = ? WHERE type = ? AND id = ?', [
+            r.seq,
+            r.rev + 1,
+            r.type,
+            r.id
+          ])
+        }
+      }
+    })
+  }
+
+  /** Conflito LWW: base = revisão do servidor; `plain` = servidor + campos mudados aqui. */
+  rebaseLww(type: string, id: string, baseRev: number, plain: Plain): void {
+    this.sql.tx(() => {
+      this.sql.run('UPDATE lww_outbox SET base_rev = ?, plain = ? WHERE type = ? AND id = ?', [
+        baseRev,
+        JSON.stringify(plain),
+        type,
+        id
+      ])
+      this.sql.run('UPDATE records SET rev = ?, plain = ? WHERE type = ? AND id = ?', [
+        baseRev + 1,
+        JSON.stringify(plain),
+        type,
+        id
+      ])
+    })
+    this.memoryChanged(type, id, plain)
+  }
+
+  /** Registro com revisão local ainda não aceita (outbox de conteúdo ou LWW). */
+  isPending(type: string, id: string): boolean {
+    return (
+      !!this.sql.get('SELECT 1 FROM outbox WHERE type = ? AND id = ?', [type, id]) ||
+      !!this.sql.get('SELECT 1 FROM lww_outbox WHERE type = ? AND id = ?', [type, id])
+    )
+  }
+
+  /** Descarta só o conteúdo (sessões/mensagens) pendente de um chat — o `chat` LWW continua. */
+  dropContentOutbox(chatId: string): void {
+    this.sql.run("DELETE FROM outbox WHERE chat_id = ? AND type IN ('session', 'message')", [
+      chatId
+    ])
+  }
+
+  /** Põe uma revisão de conteúdo na outbox sobre uma base conhecida (resolução em partes, §9.3). */
+  queueContent(w: {
+    type: string
+    id: string
+    chatId: string
+    baseRev: number
+    plain: Plain | null
+  }): void {
+    this.sql.run(
+      `INSERT INTO outbox (type, id, scope, chat_id, base_rev, deleted, plain, patch, mark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1)
+       ON CONFLICT(type, id) DO UPDATE SET base_rev = excluded.base_rev, deleted = excluded.deleted,
+         plain = excluded.plain, mark = outbox.mark + 1`,
+      [
+        w.type,
+        w.id,
+        w.chatId,
+        w.chatId,
+        w.baseRev,
+        w.plain ? 0 : 1,
+        w.plain ? JSON.stringify(w.plain) : null
+      ]
+    )
+  }
+
+  /** Chats marcados "precisa rebaixar" (§9.2). */
+  refetchChats(): string[] {
+    return this.sql
+      .all<{ key: string }>("SELECT key FROM meta WHERE key LIKE 'refetch:%'")
+      .map((r) => r.key.slice('refetch:'.length))
+  }
+
+  dropLww(type: string, id: string): void {
+    this.sql.run('DELETE FROM lww_outbox WHERE type = ? AND id = ?', [type, id])
+  }
+
+  // ---------------- fila guardada no segundo plano ----------------
+
+  parkQueue(chatId: string, items: { id: string; sessionId: string; json: string }[]): void {
+    this.sql.tx(() => {
+      for (const it of items)
+        this.sql.run(
+          'INSERT OR REPLACE INTO parked_queue (id, chat_id, session_id, json, at) VALUES (?, ?, ?, ?, ?)',
+          [it.id, chatId, it.sessionId, it.json, Date.now()]
+        )
+    })
+  }
+
+  /** Tira (e devolve) os itens guardados — de um chat ou de todos. */
+  takeParked(chatId?: string): { chatId: string; sessionId: string; json: string }[] {
+    return this.sql.tx(() => {
+      const rows = this.sql.all<{ chat_id: string; session_id: string; json: string }>(
+        `SELECT chat_id, session_id, json FROM parked_queue${chatId ? ' WHERE chat_id = ?' : ''} ORDER BY at, rowid`,
+        chatId ? [chatId] : []
+      )
+      this.sql.run(
+        `DELETE FROM parked_queue${chatId ? ' WHERE chat_id = ?' : ''}`,
+        chatId ? [chatId] : []
+      )
+      return rows.map((r) => ({ chatId: r.chat_id, sessionId: r.session_id, json: r.json }))
+    })
+  }
+
+  // ---------------- conteúdo de um chat (divergência, §9) ----------------
+
+  /** Registros vivos de conteúdo (sessões e mensagens) de um chat, com o plaintext local. */
+  contentRecords(chatId: string): { type: string; id: string; rev: number; plain: Plain }[] {
+    return this.sql
+      .all<{ type: string; id: string; rev: number; plain: string | null }>(
+        "SELECT type, id, rev, plain FROM records WHERE scope = ? AND type IN ('session', 'message') AND deleted = 0 AND state = 0",
+        [chatId]
+      )
+      .flatMap((r) => {
+        const p = parse(r.plain)
+        return p ? [{ type: r.type, id: r.id, rev: r.rev, plain: p }] : []
+      })
+  }
+
+  /** Remove um registro de conteúdo do cache sem tombstone (versão local descartada / substituída). */
+  forgetContent(type: string, id: string, chatId: string): void {
+    this.sql.run('DELETE FROM records WHERE type = ? AND id = ?', [type, id])
+    this.dropDerived(type, id, chatId)
   }
 
   /** `seq` da última mudança de conteúdo (sessão/mensagem) deste chat que o aparelho tem (§8.4). */

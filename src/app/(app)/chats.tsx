@@ -16,6 +16,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { describeError } from '@/account/errors'
+import { account } from '@/account/native'
 import { chatTitle } from '@/data/decode'
 import { engine, useChatList, useNow, useSyncStatus } from '@/data/react'
 import type { ChatListItem } from '@/data/store'
@@ -96,7 +97,7 @@ const ChatRow = memo(function ChatRow({
         )}
         {state?.host ? (
           <View style={{ marginTop: 3 }}>
-            <HostBadge state={state} />
+            <HostBadge state={state} selfId={account.getState().device?.id} />
           </View>
         ) : null}
       </View>

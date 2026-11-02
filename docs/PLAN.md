@@ -57,7 +57,7 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 | 2. Dados ✅ | Pull/push + cache SQLite, realtime (`sync.changes`), lista de chats, leitura com versões, Markdown, anexos (blobs) | idem + testes do Repo |
 | 3. Controle remoto ✅ | Estado do host, stream ao vivo, todos os comandos §8.6, cards de aprovação/questionário/retry, fila, upload de anexos, arquivos do host | desktop (build local) hospedando + celular controlando |
 | 4a. Host no celular ✅ | Novo chat (persona, modelo, parâmetros, tools portáveis); loop do agente (web_search, browse_url, ask_user, list_models, aprovações/Smart-Approve); janelas `host.begin/end`, revisões com `chat_bases`/`host_epochs`; "Executar neste dispositivo"; o PC importa o chat (§8.8); recusa chats com tools locais e controle remoto; segundo plano interrompe | celular executando + desktop recusado/importando |
-| 4b. Host no celular (resto) | Memória (tools + extração), subagentes, entre chats, `read_history`, compactação, título automático e chamadas laterais; execução offline e divergência com versão local (§9) | idem |
+| 4b. Host no celular (resto) ✅ | Memória (tools + extração), subagentes, entre chats, `read_history`, compactação, título automático e chamadas laterais; execução offline e divergência com versão local (§9) | idem |
 | 5. Configurações | Provedores, personas, memórias, pesquisa na web, dispositivos, conta | e2e |
 | 6. Voz e iOS | Ditado/chamada; build iOS no Mac | — |
 
@@ -171,16 +171,48 @@ plano), prova do streaming no aparelho (`clearchat://dev/streamtest`: 1º delta 
 atualizações — sem buffering; parse5 roda no Hermes) e E2E no AVD com o desktop real. Screenshots em
 `scratchpad/mobile/phase4a/`.
 
-Pendências / TODO (4b e depois):
-- Memória (tools + índice no prompt + extração), subagentes, `send_to_chat`/`list_chats`/`get_chat_info`,
-  `read_history`, compactação (manual/automática/"compactar e tentar de novo"), título automático e a
-  coleta de contexto do Smart-Approve: pontos de extensão em `request.ts` (`setExtraTools`, blocos do
-  system prompt) e em `runner.ts` (marcados "fase 4b"). Personas com memória ligada criam o chat com a
-  config, mas sem as tools/índice no celular por enquanto.
-- Execução offline (sem servidor) e divergência com versão local: a outbox já é persistida e sobe como
-  replay quando a janela não existe; falta a UI de divergência com a versão deste aparelho.
-- Fila descartada ao ir para o segundo plano (o turno é interrompido; os itens ainda não injetados somem).
+Pendências / TODO (resolvidas na 4b, exceto as marcadas):
+- ~~Memória, subagentes, entre chats, `read_history`, compactação, título automático~~ (4b). A coleta
+  automática de contexto do Smart-Approve (resumidor) continua só no desktop.
+- ~~Execução offline e divergência com versão local~~ (4b).
+- ~~Fila descartada ao ir para o segundo plano~~ (4b: guardada e devolvida).
 - O teto do `beforeBackground` depende de timers, que o Android pausa no segundo plano: o gancho não usa
   timers (envio direto), mas um gancho travado deixaria o socket aberto até o SO matá-lo.
 - `browse_url` não executa JavaScript (fetch + extração): páginas montadas só no cliente vêm vazias.
 - A regra `usesLocalTools` vem vendorada do desktop (`@shared/sync`).
+
+## Fase 4b — estado (2026-11-02)
+
+Feito: memória no celular (`src/memory/`: `MemoryStore`/schema/config/índice/extração e as tools
+`memory_*` do desktop **vendorados** sobre um índice SQLite em memória montado dos registros; outbox LWW
+persistida para `memory`/`memory_collection` com merge por campo e "exclusão vence"; colisão de slug
+§4.3.5; índice congelado por sessão no campo `memory` do registro `session`; extração depois da
+compactação e "Extrair memórias agora"; folha "Memória…" com coleções ativas e onde o agente grava);
+subagentes com a semântica do desktop (`subagents.ts` vendorado: bloqueante/segundo plano, callbacks que
+acordam o pai, `waiting`, check/wait/cancel/message, irmãos com limite, "Parar subagentes", parada em
+cascata silenciosa, subagentes abandonados por versão nova param sem callback, subsessões apagadas com
+a mensagem); entre chats (`chats.ts` vendorado + `send_to_chat` local ou por comando `send` ao host
+remoto, `src/host/interChat.ts`); `read_history` (`history.ts` vendorado + `history_fts` no cache);
+compactação pedida/automática/"compactar e tentar de novo" (`compaction.ts` vendorado, `insertAt`);
+título automático e "Gerar título" (`autoTitle.ts` vendorado); turno que termina sem servidor e outbox em
+replay; divergência com versão local (§9.2 no motor + `src/host/divergence.ts` + painel com as duas
+versões e a confirmação obrigatória); fila guardada no segundo plano e devolvida no primeiro plano.
+Detalhes e decisões: README § "Host no celular (fase 4b)".
+Verificado: `npm test` (215; 17 novos em `tests/phase4b.test.ts`), `npm run test:integration` (com
+`tests/integration/phase4b.test.ts`: memória celular→PC e PC→celular, subagente sincronizado,
+`send_to_chat` ao chat executado no host falso do PC, divergência resolvida mantendo a local e a online)
+e E2E no AVD com o desktop real (memória gravada e lembrada em outra sessão, coleção visível nas
+Configurações do desktop, extração, subagente em segundo plano acordando o pai, `send_to_chat` ao chat do
+PC, compactação manual com extração automática, título automático, modo avião no meio do turno →
+replay, takeover do PC com o celular offline → divergência → "Manter a deste celular", e o PC pedindo o
+chat com o celular voltando a tempo → troca sem divergência). Screenshots em `scratchpad/mobile/phase4b/`.
+
+Pendências / TODO:
+- `send` remoto não leva `meta` (§8.6): no host remoto a mensagem de `send_to_chat` chega como texto do
+  usuário com o cabeçalho de origem (sem `kind: 'inter-chat'`, sem contagem de saltos do lado de lá).
+  Mudança de protocolo sugerida: `meta?: Pick<MessageMeta, 'kind'|'fromChatId'|'fromChatTitle'|'interChatHops'>` no `send`.
+- Desktop: o `send_to_chat` dele entrega localmente mesmo quando o chat de destino é executado em outro
+  dispositivo (inclusive no celular, que recusa comandos) — precisa passar pelo portão do sync.
+- Criar/editar coleções e memórias à mão no celular: fase 5 (Configurações).
+- Coleta automática de contexto do Smart-Approve (resumidor) segue só no desktop.
+- O ponto verde do status do composer não muda sem conexão (a faixa explica).

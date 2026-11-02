@@ -12,7 +12,9 @@ const MODULES = {
   // Argon2id: hash-wasm precisa de WebAssembly (o Hermes não tem) → módulo nativo
   'hash-wasm': path.join(PLATFORM, 'hashWasm.ts'),
   // src/main/sync/stream.ts (desktop) só usa randomUUID
-  'node:crypto': path.join(PLATFORM, 'nodeCrypto.ts')
+  'node:crypto': path.join(PLATFORM, 'nodeCrypto.ts'),
+  // src/main/memory/store.ts (desktop) usa randomUUID/randomBytes
+  crypto: path.join(PLATFORM, 'nodeCrypto.ts')
 }
 
 /**

@@ -10,7 +10,7 @@ import type { MirrorView } from '@/remote/mirror'
 import { remote } from '@/remote/native'
 import type { CommandResult, HostMode } from '@/remote/types'
 import { usesLocalTools } from './policy'
-import { host, onHostNotice } from './native'
+import { host, hostStack, onHostNotice } from './native'
 
 /** Ações do chat aberto (os métodos do RemoteController, por kind do §8.6). */
 export interface ChatDriver {
@@ -63,7 +63,8 @@ export const localDriver: ChatDriver = {
     host.local(c, 'branch.regenerate', { sessionId, ...(messageId ? { messageId } : {}) }),
   editMessage: (c, messageId, message) => host.local(c, 'message.edit', { messageId, message }),
   deleteMessage: (c, messageId) => host.local(c, 'message.delete', { messageId }),
-  compact: (c, sessionId) => host.local(c, 'compact', { sessionId }),
+  compact: (c, sessionId, opts) =>
+    host.local(c, 'compact', { sessionId, ...(opts?.retry ? { opts: { retry: true } } : {}) }),
   extractMemory: (c, sessionId) => host.local(c, 'memory.extract', { sessionId }),
   editBranch: (c, messageId, message) => host.local(c, 'branch.edit', { messageId, message }),
   selectBranch: (c, messageId) => host.local(c, 'branch.select', { messageId })
@@ -104,13 +105,13 @@ export function useChatRuntime(
       config ?? (store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined)
     )
     const mine = !!st?.host && st.host.device_id === host.deviceId
+    // sem servidor, um chat que este celular executa continua local: o turno em andamento termina
+    // aqui (a outbox sobe depois); começar outro turno espera a conexão
     const local =
       !localTools &&
-      (mode === 'local' ||
-        (mode === 'none' && !st?.host) ||
-        (mine && mode !== 'offline' && mode !== 'diverged'))
+      (mode === 'local' || (mode === 'none' && !st?.host) || (mine && mode !== 'diverged'))
     return {
-      mode: mine && mode !== 'offline' && mode !== 'diverged' ? 'local' : mode,
+      mode: mine && mode !== 'diverged' ? 'local' : mode,
       local,
       localTools,
       view: local ? host.view(chatId) : remote.view(chatId),
@@ -121,4 +122,4 @@ export function useChatRuntime(
   }, [chatId, state, config, rv, hv])
 }
 
-export { host, onHostNotice }
+export { host, hostStack, onHostNotice }

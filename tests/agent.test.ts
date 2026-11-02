@@ -197,7 +197,7 @@ describe('llm (vendorado): acumulação do stream', () => {
 describe('request no celular', () => {
   afterEach(() => setModelInfoSource(() => undefined))
 
-  it('só tools portáveis vão ao modelo; ask_user só na principal', () => {
+  it('só tools portáveis vão ao modelo; ask_user só na principal; delegate até depth 1', () => {
     const c = chat({
       enabledTools: [
         'shell',
@@ -213,12 +213,19 @@ describe('request no celular', () => {
       'web_search',
       'browse_url',
       'list_models',
+      'delegate_task',
       'ask_user'
     ])
-    expect(availableTools(c, { depth: 1 })).toEqual(['web_search', 'browse_url', 'list_models'])
+    expect(availableTools(c, { depth: 1 })).toEqual([
+      'web_search',
+      'browse_url',
+      'list_models',
+      'delegate_task'
+    ])
+    expect(availableTools(c, { depth: 2 })).toEqual(['web_search', 'browse_url', 'list_models'])
     const req = buildRequest(c, { depth: 0, model: 'm' }, [], provider())
     const names = (req.body.tools as { function: { name: string } }[]).map((t) => t.function.name)
-    expect(names).toEqual(['web_search', 'browse_url', 'list_models', 'ask_user'])
+    expect(names).toEqual(['web_search', 'browse_url', 'list_models', 'delegate_task', 'ask_user'])
   })
 
   it('parâmetros que o modelo não aceita saem da request (com nota); os aceitos vão', () => {

@@ -74,6 +74,11 @@ export interface Harness {
   stack: HostStack
   files: Map<string, Uint8Array>
   providerId: string
+  /** Avisos do host (pt-BR) na ordem. */
+  notices: string[]
+  /** send_to_chat ao host remoto (o teste troca). */
+  remoteSend:
+    ((chatId: string, sessionId: string, text: string) => Promise<{ queued?: boolean }>) | null
   close(): Promise<void>
 }
 
@@ -100,16 +105,20 @@ export async function makeHarness(opts: { kind?: 'openai' | 'anthropic' } = {}):
   await engine.sync()
   const ws = new FakeWs('dev-mobile')
   const files = new Map<string, Uint8Array>()
+  const notices: string[] = []
+  const box: { remoteSend: Harness['remoteSend'] } = { remoteSend: null }
   const stack = createHostStack({
     store,
     engine,
     http: {
+      get: (path) => server.get(path),
       post: (path, json) => server.post(path, json),
       putBlob: async (blobId, ct) => {
         server.blobs.set(blobId, ct)
       }
     },
     keys,
+    openMemorySql: () => openNodeSql(),
     ws,
     deviceId: () => 'dev-mobile',
     deviceName: () => 'Pixel de teste',
@@ -128,7 +137,11 @@ export async function makeHarness(opts: { kind?: 'openai' | 'anthropic' } = {}):
       bytes: async (f) => files.get(f) ?? null
     },
     timing: { idleTickMs: 30, idleCloseMs: 60, draftMs: 20 },
-    writerTiming: { debounceMs: 10, retryMs: 50 }
+    writerTiming: { debounceMs: 10, retryMs: 50 },
+    notice: (n) => notices.push(n.text),
+    remoteSend: (c, s, t) =>
+      box.remoteSend ? box.remoteSend(c, s, t) : Promise.reject(new Error('sem host remoto')),
+    interChatPollMs: 30
   })
   stack.host.onConnection(true)
   stack.host.start()
@@ -142,6 +155,13 @@ export async function makeHarness(opts: { kind?: 'openai' | 'anthropic' } = {}):
     stack,
     files,
     providerId,
+    notices,
+    get remoteSend() {
+      return box.remoteSend
+    },
+    set remoteSend(fn) {
+      box.remoteSend = fn
+    },
     close: async () => {
       stack.host.stop()
       engine.stop()

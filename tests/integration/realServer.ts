@@ -53,7 +53,6 @@ export class RestError extends Error {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function rest(
   method: string,
   path: string,

@@ -179,6 +179,37 @@ export class ChatRepo {
     return this.saveSession({ ...s, status })
   }
 
+  /** Campo `memory` do registro `session` (snapshot do índice + lastExtractedSeq, §4.3.7). */
+  sessionMemory(id: string): unknown {
+    return this.store.getPlain('session', id)?.memory ?? null
+  }
+
+  setSessionMemory(id: string, memory: unknown): void {
+    const prev = this.store.getPlain('session', id)
+    const s = prev ? sessionFromPlain(id, prev) : null
+    if (!s) return
+    const plain = sessionPlain(s, prev)
+    plain.memory = memory ?? null
+    this.writer.write(s.chatId, [{ type: 'session', id, plain }])
+  }
+
+  /** Subsessão nova (delegate_task): registro `session` com depth/modelo/provedor fixados. */
+  createSession(input: Omit<Session, 'id' | 'createdAt' | 'branchSel'>): Session {
+    const s: Session = { ...input, id: this.uuid(), createdAt: this.now(), branchSel: {} }
+    this.writer.write(s.chatId, [{ type: 'session', id: s.id, plain: sessionPlain(s) }])
+    return s
+  }
+
+  /** Apaga sessões (subsessões órfãs) com as mensagens delas. */
+  deleteSessions(chatId: string, ids: string[]): void {
+    const items: { type: 'session' | 'message'; id: string; plain: Plain | null }[] = []
+    for (const id of ids) {
+      for (const m of this.listAll(id)) items.push({ type: 'message', id: m.id, plain: null })
+      items.push({ type: 'session', id, plain: null })
+    }
+    if (items.length) this.writer.write(chatId, items)
+  }
+
   setBranchSel(id: string, sel: BranchSel): Session | null {
     const s = this.session(id)
     if (!s) return null
@@ -310,6 +341,55 @@ export class ChatRepo {
     const next = pruneSel(tree, selectionToReach(tree, sel, messageId))
     if (selEquals(sel, next)) return s
     return this.saveSession({ ...s, branchSel: next })
+  }
+
+  /**
+   * Insere em `seq` deslocando as seguintes (+1) — fronteira da compactação antes das mensagens
+   * pendentes (= insertAt do desktop): a nova fica com a mãe da 1ª pendente e passa a ser a mãe
+   * dela; a seleção que apontava para a pendente passa para a nova. Tudo no mesmo lote.
+   */
+  insertAt(
+    sessionId: string,
+    seq: number,
+    message: ApiMessage,
+    meta: MessageMeta = {}
+  ): { message: StoredMessage; shifted: StoredMessage[]; selChanged: boolean } {
+    const s = this.session(sessionId)
+    if (!s) throw new Error('Sessão não encontrada.')
+    const all = this.listAll(sessionId)
+    const tree = buildTree(all)
+    const sel = { ...(s.branchSel ?? {}) }
+    const pending0 = all.find((m) => m.seq === seq) ?? null
+    const parent = pending0
+      ? (tree.parentOf.get(pending0.id) ?? null)
+      : (activeLeaf(tree, sel)?.id ?? null)
+    const msg: StoredMessage = {
+      id: this.uuid(),
+      sessionId,
+      seq,
+      parentId: parent,
+      message,
+      meta,
+      createdAt: this.now()
+    }
+    const shifted = all
+      .filter((m) => m.seq >= seq)
+      .map((m) => ({
+        ...m,
+        seq: m.seq + 1,
+        // a mãe efetiva vira explícita (a derivada mudaria com o deslocamento)
+        parentId: pending0 && m.id === pending0.id ? msg.id : (tree.parentOf.get(m.id) ?? null)
+      }))
+    let selChanged = false
+    if (pending0) {
+      const k = selKey(parent)
+      if (sel[k] === pending0.id) {
+        sel[k] = msg.id
+        selChanged = true
+      }
+    }
+    this.saveMessages(s.chatId, [msg, ...shifted], selChanged ? { ...s, branchSel: sel } : null)
+    return { message: msg, shifted, selChanged }
   }
 
   update(id: string, message: ApiMessage, meta?: MessageMeta): StoredMessage {
