@@ -3,6 +3,8 @@
 // composer (anexos, skills do host, fila, ⚡, parar), aprovações/questionário/retry, ações das
 // mensagens (toque longo), trocar de versão no host, fixar host, arquivos do host, compactar,
 // extrair memórias e parar subagentes. Host offline / sem host / divergente: faixa explicando.
+// Fase 6: chamada de voz nos chats executados aqui (telefone no cabeçalho → dock no lugar do
+// composer; "Chamada de voz…" no menu edita a voz do chat) e ditado no composer.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { FlashList, type FlashListRef } from '@shopify/flash-list'
 import { useLocalSearchParams, useRouter } from 'expo-router'
@@ -16,6 +18,7 @@ import type { ApiMessage, ApprovalRequest, Session, StoredMessage, ToolName } fr
 import { regenerateTargets, trailingErrorId } from '@vendor/renderer/branchView'
 import { describeError } from '@/account/errors'
 import { HostBadge, RenameDialog } from '@/chat/ChatBits'
+import { CallDock, ChatVoiceSheet } from '@/chat/local/CallDock'
 import { CompactSheet } from '@/chat/local/CompactSheet'
 import { DivergencePanel } from '@/chat/local/DivergencePanel'
 import { MemorySheet } from '@/chat/local/MemorySheet'
@@ -43,6 +46,10 @@ import { divergedOf, handoverOf } from '@/remote/types'
 import { normalizeMemoryConfig } from '@shared/memory'
 import { autoTitleEnabled, normalizeAutoTitleSettings } from '@shared/autoTitle'
 import { ConfirmDialog } from '@/ui/Dialog'
+import { normalizeVoiceCallConfig } from '@shared/voice'
+import { callReadiness } from '@/voice/call'
+import { readVoiceSettings } from '@/voice/endpoints'
+import { useCallView, voice } from '@/voice/react'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
 import { colors, radius } from '@/ui/theme'
@@ -64,6 +71,11 @@ export default function ChatScreen() {
   const [divDetails, setDivDetails] = useState<DivergenceDetails | null>(null)
   const [memorySheet, setMemorySheet] = useState(false)
   const [compactSheet, setCompactSheet] = useState(false)
+  const [voiceSheet, setVoiceSheet] = useState(false)
+  const [callBlock, setCallBlock] = useState<string | null>(null)
+  const [calling, setCalling] = useState(false)
+  const callView = useCallView()
+  const callHere = callView.call.active && callView.call.chatId === id
   // divergência com versão local: a "Versão online" é só para ver (baixada inteira, §9.2)
   const loaded = useMemo(
     () =>
@@ -270,7 +282,8 @@ export default function ChatScreen() {
           input.text,
           input.attachments.map((a) => a.info),
           input.skills,
-          input.force && busy
+          input.force && busy,
+          input.voice
         )
         if (r.queued && !input.force) toast('Na fila — vai no próximo passo do agente.', 'info')
         if (local) stick.current = true
@@ -284,6 +297,42 @@ export default function ChatScreen() {
     },
     [id, sid, busy, toast, driver, local]
   )
+
+  /** Telefone do cabeçalho: pré-checagem (o que falta, em pt-BR) e liga a chamada. */
+  const startCall = async () => {
+    const chat = hostStack.repo.chat(id)
+    const mainId = chat?.mainSessionId
+    if (!chat || !mainId) return
+    if (callView.call.active) {
+      toast('Já existe uma chamada de voz em andamento.', 'info')
+      return
+    }
+    const presetId = chat.config.presetId
+    const pv = presetId ? store.getPlain('preset', presetId)?.config : null
+    const personaVoice =
+      pv && typeof pv === 'object' && (pv as Record<string, unknown>).voice
+        ? normalizeVoiceCallConfig((pv as Record<string, unknown>).voice)
+        : null
+    const ready = callReadiness(
+      chat,
+      readVoiceSettings((k) => store.setting(k)),
+      (pid) => hostStack.providers().find((p) => p.id === pid) ?? null,
+      personaVoice
+    )
+    if (ready) {
+      setCallBlock(ready.reason)
+      return
+    }
+    setCalling(true)
+    try {
+      if (sessionId && sessionId !== mainId) setSessionId(mainId)
+      await voice.call.start(mainId)
+    } catch (e) {
+      toast(describeError(e), 'danger')
+    } finally {
+      setCalling(false)
+    }
+  }
 
   const handlers = useMemo<MessageActionHandlers>(
     () => ({
@@ -407,6 +456,26 @@ export default function ChatScreen() {
           testID="chat-files"
         >
           <Ionicons name="folder-open-outline" size={20} color={colors.muted} />
+        </Pressable>
+      ) : null}
+      {local && !localTools && loaded ? (
+        <Pressable
+          onPress={() => (callHere ? voice.call.stop() : void startCall())}
+          disabled={calling}
+          hitSlop={10}
+          style={st.iconBtn}
+          accessibilityLabel={callHere ? 'Desligar a chamada de voz' : 'Chamada de voz'}
+          testID="chat-call"
+        >
+          {calling ? (
+            <ActivityIndicator size={16} color={colors.accentStrong} />
+          ) : (
+            <Ionicons
+              name={callHere ? 'call' : 'call-outline'}
+              size={20}
+              color={callHere ? colors.success : colors.muted}
+            />
+          )}
         </Pressable>
       ) : null}
       <Pressable
@@ -638,7 +707,8 @@ export default function ChatScreen() {
           ) : null}
           {/* o composer fica sempre na mesma posição (o rascunho e os anexos sobrevivem a uma
               queda da conexão — ex.: voltar do seletor de fotos — e ao questionário/retry) */}
-          {active || mode === 'offline' ? (
+          {callHere ? <CallDock /> : null}
+          {(active || mode === 'offline') && !callHere ? (
             <View style={active && (question || retry) ? st.hidden : undefined}>
               <RemoteComposer
                 busy={active && busy}
@@ -678,6 +748,17 @@ export default function ChatScreen() {
           ) : null}
         </View>
       </KeyboardAvoidingView>
+      <ConfirmDialog
+        visible={!!callBlock}
+        title="Chamada de voz indisponível"
+        message={callBlock ?? ''}
+        confirmLabel="Abrir Configurações → Voz"
+        onClose={() => setCallBlock(null)}
+        onConfirm={() => {
+          setCallBlock(null)
+          router.push('/settings/voice')
+        }}
+      />
       <MessageActionsSheet
         msg={actionMsg}
         depth={view?.session.depth ?? 0}
@@ -737,6 +818,16 @@ export default function ChatScreen() {
                 setCompactSheet(true)
               }}
               testID="chat-action-compact"
+            />
+            <SheetItem
+              icon="call-outline"
+              label="Chamada de voz…"
+              detail="Modelo, prompt, interjeições e tools da chamada neste chat."
+              onPress={() => {
+                setMenu(false)
+                setVoiceSheet(true)
+              }}
+              testID="chat-action-voice"
             />
             <SheetItem
               icon="bookmarks-outline"
@@ -905,6 +996,7 @@ export default function ChatScreen() {
       />
       {local && sid ? (
         <>
+          <ChatVoiceSheet chatId={id} visible={voiceSheet} onClose={() => setVoiceSheet(false)} />
           <MemorySheet
             chatId={id}
             sessionId={view?.session.depth === 0 ? sid : (loaded?.chat.mainSessionId ?? sid)}

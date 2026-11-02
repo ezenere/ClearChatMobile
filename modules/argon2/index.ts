@@ -1,6 +1,8 @@
 // Argon2id nativo (SYNC_PROTOCOL.md §3.4). Android: argon2kt 1.6.0 (implementação de referência
-// phc-winner-argon2 em C, via JNI, libs alinhadas a 16 KB). Bytes trafegam em base64url sem padding.
-// iOS: ainda não implementado (fase 6) — lança em vez de cair num Argon2 em JS (lento demais no Hermes).
+// phc-winner-argon2 em C, via JNI, libs alinhadas a 16 KB). iOS (fase 6, NÃO testado num aparelho
+// ainda): a mesma referência em C (ios/vendor/phc-winner-argon2, tag 20190702) chamada pelo Swift —
+// conferida contra os vetores compilando os mesmos .c no Linux; no iPhone, pelo self-test.
+// Bytes trafegam em base64url sem padding. Nunca cai num Argon2 em JS (lento demais no Hermes).
 import { requireNativeModule } from 'expo'
 import { b64u, fromB64u } from '@vendor/site/crypto/encoding'
 import type { Argon2Params } from '@/platform/argon2Types'

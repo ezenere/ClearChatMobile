@@ -1,12 +1,15 @@
 // Composer do controle remoto (SYNC_PROTOCOL.md §8.6, §14): texto, anexos (galeria/arquivo →
 // CCB1 → upload ANTES do envio), skills do host (lâmpada, lista vinda do snapshot), enviar /
 // adicionar à fila, ⚡ forçar, parar, fila com ⚡/✕ por item e a linha de status do agente.
+// Fase 6: ditado (microfone → STT pela API das Configurações → Voz; o texto entra no ponto do
+// cursor, com as funções puras do desktop; `meta.voice = { source: 'dictation' }` no envio quando
+// o chat roda aqui) e o ponto de status que mostra a conexão (verde/amarelo/vermelho).
 import Ionicons from '@expo/vector-icons/Ionicons'
 import * as DocumentPicker from 'expo-document-picker'
 import { File } from 'expo-file-system'
 import * as Haptics from 'expo-haptics'
 import * as ImagePicker from 'expo-image-picker'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Pressable,
@@ -20,8 +23,16 @@ import { formatSize } from '@shared/attachments'
 import { splitInterChatText } from '@shared/interChat'
 import { splitSiblingText } from '@shared/siblings'
 import type { QueuedMessage } from '@shared/types'
+import type { VoiceMessageMeta } from '@shared/voiceCallMarks'
+import {
+  dictationPreview,
+  insertDictationText,
+  rebaseDictationAnchor,
+  type DictationAnchor
+} from '@vendor/renderer/voice/dictation'
+import { useDictationView, voice } from '@/voice/react'
 import { describeError } from '@/account/errors'
-import { useAttachment } from '@/data/react'
+import { useAttachment, useSyncStatus } from '@/data/react'
 import type { HostSkill } from '@/remote/mirror'
 import { uploadDeps } from '@/remote/react'
 import {
@@ -53,6 +64,21 @@ export interface SendInput {
   attachments: PreparedAttachment[]
   skills: string[]
   force: boolean
+  /** Texto ditado (o campo recebeu uma transcrição): `meta.voice` do envio. */
+  voice?: VoiceMessageMeta
+}
+
+const clock = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** Ponto de status: conectado (verde), reconectando (amarelo), sem conexão (vermelho). */
+function useConnectionTone(): { color: string; label: string } {
+  const sync = useSyncStatus()
+  if (sync.live) return { color: colors.success, label: 'Conectado' }
+  if (sync.phase === 'offline') return { color: colors.danger, label: 'Sem conexão' }
+  return { color: colors.warning, label: 'Reconectando' }
 }
 
 /** Origem de um item da fila que não foi digitado pelo usuário (outro chat, pai, subagente). */
@@ -231,6 +257,32 @@ export function RemoteComposer({
   const [stopping, setStopping] = useState(false)
   const [sending, setSending] = useState(false)
   const seq = useRef(0)
+  const tone = useConnectionTone()
+  // ---- ditado ----
+  const dict = useDictationView()
+  const recording = dict.phase !== 'idle'
+  const [sel, setSel] = useState({ start: 0, end: 0 })
+  const [anchor, setAnchor] = useState<DictationAnchor | null>(null)
+  const [dictError, setDictError] = useState<{ text: string; partial: string } | null>(null)
+  const [now, setNow] = useState(0)
+  const textRef = useRef(text)
+  useEffect(() => {
+    textRef.current = text
+  }, [text])
+  const anchorRef = useRef<DictationAnchor | null>(null)
+  /** O campo tem texto ditado: o envio leva `meta.voice` (zera quando o campo esvazia). */
+  const dictatedRef = useRef(false)
+  const pttRef = useRef(false)
+  useEffect(() => {
+    if (!text.trim()) dictatedRef.current = false
+  }, [text])
+  useEffect(() => {
+    if (dict.phase !== 'recording') return
+    const t = setInterval(() => setNow(Date.now()), 500)
+    return () => clearInterval(t)
+  }, [dict.phase])
+  // sair do chat no meio do ditado: descarta
+  useEffect(() => () => voice.dictation.cancel(), [])
 
   const patch = (key: string, p: Partial<Pending>) =>
     setAtts((all) => all.map((a) => (a.key === key ? { ...a, ...p } : a)))
@@ -312,8 +364,10 @@ export function RemoteComposer({
     !sending &&
     (!!text.trim() || atts.some((a) => a.status !== 'error') || picked.length > 0)
 
-  const submit = async (force: boolean) => {
-    if (!canSend) return
+  const submit = async (force: boolean, override?: string) => {
+    if (override === undefined && !canSend) return
+    const value = override ?? text
+    if (!value.trim() && !atts.some((a) => a.status !== 'error') && !picked.length) return
     const limits = checkMessageLimits(atts.filter((a) => a.status !== 'error'))
     if (limits) {
       toast(limits, 'danger')
@@ -328,7 +382,9 @@ export function RemoteComposer({
         toast('Um anexo não pôde ser enviado — remova-o ou tente de novo.', 'danger')
         return
       }
-      const snapshot = { text, atts, picked }
+      const snapshot = { text: value, atts, picked }
+      const dictated = dictatedRef.current
+      dictatedRef.current = false
       setText('')
       setAtts([])
       setPicked([])
@@ -337,9 +393,11 @@ export function RemoteComposer({
         text: snapshot.text.trim(),
         attachments: ready,
         skills: snapshot.picked,
-        force
+        force,
+        ...(dictated ? { voice: { source: 'dictation' as const } } : {})
       })
       if (!ok) {
+        dictatedRef.current = dictated
         // §8.6: falhou → o texto volta ao composer
         setText((cur) => cur || snapshot.text)
         setAtts((cur) => (cur.length ? cur : snapshot.atts))
@@ -349,6 +407,65 @@ export function RemoteComposer({
       setSending(false)
     }
   }
+
+  // ---------------- ditado ----------------
+
+  const insertSpoken = (spoken: string): string => {
+    const cur = textRef.current
+    const at = rebaseDictationAnchor(anchorRef.current, cur)
+    const r = insertDictationText(cur, at.start, at.end, spoken)
+    if (r.insert) {
+      setText(r.value)
+      dictatedRef.current = true
+      setSel({ start: r.caret, end: r.caret })
+    }
+    return r.value
+  }
+
+  const finishDictation = async (andSend: boolean) => {
+    pttRef.current = false
+    voice.dictation.onAutoStop = null
+    const partial = voice.dictation.getView().partial
+    try {
+      const r = await voice.dictation.finish()
+      setAnchor(null)
+      if (!r) return
+      const value = r.text ? insertSpoken(r.text) : textRef.current
+      if (andSend) void submit(false, value)
+    } catch (e) {
+      setAnchor(null)
+      setDictError({ text: describeError(e), partial })
+    }
+  }
+
+  const startDictation = async () => {
+    if (recording || disabled) return
+    const blocked = voice.dictation.blocked()
+    if (blocked) {
+      toast(blocked, 'danger')
+      return
+    }
+    setDictError(null)
+    const a: DictationAnchor = { text, start: sel.start, end: sel.end }
+    anchorRef.current = a
+    setAnchor(a)
+    voice.dictation.onAutoStop = () => void finishDictation(false)
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
+    const err = await voice.dictation.start()
+    if (err) {
+      setAnchor(null)
+      toast(err, 'danger')
+    }
+  }
+
+  const cancelDictation = () => {
+    pttRef.current = false
+    voice.dictation.onAutoStop = null
+    voice.dictation.cancel()
+    setAnchor(null)
+  }
+
+  const preview = recording ? dictationPreview(text, anchor, dict.partial || '') : null
 
   return (
     <View testID="remote-composer">
@@ -399,104 +516,215 @@ export function RemoteComposer({
             ))}
           </ScrollView>
         ) : null}
+        {dictError ? (
+          <View style={c.dictErr} testID="voice-error">
+            <Text style={c.dictErrText}>{dictError.text}</Text>
+            <View style={{ flexDirection: 'row', gap: 14 }}>
+              {dictError.partial ? (
+                <Pressable
+                  onPress={() => {
+                    insertSpoken(dictError.partial)
+                    setDictError(null)
+                  }}
+                  testID="voice-insert-partial"
+                >
+                  <Text style={c.dictErrLink}>Inserir o texto parcial</Text>
+                </Pressable>
+              ) : null}
+              <Pressable onPress={() => setDictError(null)} testID="voice-error-close">
+                <Text style={c.dictErrLink}>Fechar</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+        {preview ? (
+          <Text style={[c.input, c.mirror]} testID="voice-draft">
+            {preview.before}
+            {preview.lead}
+            <Text style={c.partial} testID="voice-partial">
+              {preview.spoken || (dict.phase === 'transcribing' ? 'Transcrevendo…' : 'Ouvindo…')}
+            </Text>
+            {preview.trail}
+            {preview.after}
+          </Text>
+        ) : null}
         <TextInput
           testID="composer-input"
           value={text}
           onChangeText={setText}
+          onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
           editable={!disabled}
           placeholder={disabled ?? placeholder}
           placeholderTextColor={colors.faint}
           multiline
-          style={c.input}
+          style={[c.input, preview ? c.hidden : null]}
           textAlignVertical="top"
         />
-        <View style={c.bar}>
-          <Pressable
-            onPress={() => setAttachMenu(true)}
-            disabled={!!disabled}
-            hitSlop={6}
-            style={c.iconBtn}
-            accessibilityLabel="Anexar"
-            testID="composer-attach"
-          >
-            <Ionicons name="attach" size={21} color={colors.muted} />
-          </Pressable>
-          {skills.length ? (
+        {recording ? (
+          <View style={c.bar} testID="voice-recording">
             <Pressable
-              onPress={() => setSkillMenu(true)}
+              onPress={cancelDictation}
+              hitSlop={6}
+              style={c.iconBtn}
+              accessibilityLabel="Cancelar o ditado"
+              testID="voice-cancel-button"
+            >
+              <Ionicons name="close" size={21} color={colors.muted} />
+            </Pressable>
+            <View style={c.status}>
+              {dict.phase === 'transcribing' || dict.phase === 'starting' ? (
+                <ActivityIndicator size={10} color={colors.accentStrong} />
+              ) : (
+                <View style={c.recDotBox}>
+                  <View
+                    style={[c.recDot, { transform: [{ scale: 1 + Math.min(1, dict.level * 12) }] }]}
+                  />
+                </View>
+              )}
+              <Text style={c.statusText} numberOfLines={1} testID="voice-status">
+                {dict.phase === 'transcribing'
+                  ? 'Transcrevendo…'
+                  : dict.phase === 'starting'
+                    ? 'Abrindo o microfone…'
+                    : `Ouvindo… ${clock(dict.startedAt && now > dict.startedAt ? now - dict.startedAt : 0)}`}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => void finishDictation(false)}
+              disabled={dict.phase !== 'recording'}
+              style={[c.stop, dict.phase !== 'recording' && { opacity: 0.4 }]}
+              accessibilityLabel="Concluir o ditado"
+              testID="voice-finish-button"
+            >
+              <Ionicons name="checkmark" size={18} color={colors.fg} />
+            </Pressable>
+            <Pressable
+              onPress={() => void finishDictation(true)}
+              disabled={dict.phase !== 'recording'}
+              style={[c.send, dict.phase !== 'recording' && c.sendOff]}
+              accessibilityLabel="Concluir e enviar"
+              testID="voice-send-button"
+            >
+              <Ionicons name={busy ? 'add' : 'arrow-up'} size={19} color="#fff" />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={c.bar}>
+            <Pressable
+              onPress={() => setAttachMenu(true)}
               disabled={!!disabled}
               hitSlop={6}
               style={c.iconBtn}
-              accessibilityLabel="Skills do host"
-              testID="composer-skills"
+              accessibilityLabel="Anexar"
+              testID="composer-attach"
             >
-              <Ionicons
-                name={picked.length ? 'bulb' : 'bulb-outline'}
-                size={19}
-                color={picked.length ? colors.warning : colors.muted}
-              />
+              <Ionicons name="attach" size={21} color={colors.muted} />
             </Pressable>
-          ) : null}
-          <View style={c.status}>
-            {busy ? (
-              <ActivityIndicator size={10} color={colors.accentStrong} />
-            ) : (
-              <View style={c.dot} />
-            )}
-            <Text style={c.statusText} numberOfLines={1} testID="composer-status">
-              {statusText ??
-                (hostName === 'este celular' ? 'Executa neste celular' : `Executa em ${hostName}`)}
-            </Text>
-          </View>
-          {busy ? (
-            <Pressable
-              onPress={() => {
-                setStopping(true)
-                void onStop().finally(() => setStopping(false))
-              }}
-              disabled={stopping}
-              style={c.stop}
-              accessibilityLabel="Parar"
-              testID="composer-stop"
-            >
-              {stopping ? (
-                <ActivityIndicator size={12} color={colors.fg} />
+            {skills.length ? (
+              <Pressable
+                onPress={() => setSkillMenu(true)}
+                disabled={!!disabled}
+                hitSlop={6}
+                style={c.iconBtn}
+                accessibilityLabel="Skills do host"
+                testID="composer-skills"
+              >
+                <Ionicons
+                  name={picked.length ? 'bulb' : 'bulb-outline'}
+                  size={19}
+                  color={picked.length ? colors.warning : colors.muted}
+                />
+              </Pressable>
+            ) : null}
+            {!disabled ? (
+              <Pressable
+                onPress={() => void startDictation()}
+                onLongPress={() => {
+                  // segurar para falar (audioInput.pttEnabled): soltar conclui
+                  if (!voice.dictation.pttEnabled()) return
+                  pttRef.current = true
+                  void startDictation()
+                }}
+                onPressOut={() => {
+                  if (pttRef.current) void finishDictation(false)
+                }}
+                delayLongPress={300}
+                hitSlop={6}
+                style={c.iconBtn}
+                accessibilityLabel="Ditar"
+                accessibilityHint="Grava sua fala e transcreve no campo"
+                testID="composer-mic"
+              >
+                <Ionicons name="mic-outline" size={21} color={colors.muted} />
+              </Pressable>
+            ) : null}
+            <View style={c.status}>
+              {busy ? (
+                <ActivityIndicator size={10} color={colors.accentStrong} />
               ) : (
-                <Ionicons name="square" size={12} color={colors.fg} />
+                <View
+                  style={[c.dot, { backgroundColor: tone.color }]}
+                  accessibilityLabel={tone.label}
+                  testID="composer-dot"
+                />
+              )}
+              <Text style={c.statusText} numberOfLines={1} testID="composer-status">
+                {statusText ??
+                  (hostName === 'este celular'
+                    ? 'Executa neste celular'
+                    : `Executa em ${hostName}`)}
+              </Text>
+            </View>
+            {busy ? (
+              <Pressable
+                onPress={() => {
+                  setStopping(true)
+                  void onStop().finally(() => setStopping(false))
+                }}
+                disabled={stopping}
+                style={c.stop}
+                accessibilityLabel="Parar"
+                testID="composer-stop"
+              >
+                {stopping ? (
+                  <ActivityIndicator size={12} color={colors.fg} />
+                ) : (
+                  <Ionicons name="square" size={12} color={colors.fg} />
+                )}
+              </Pressable>
+            ) : null}
+            {busy ? (
+              <Pressable
+                onPress={() => void submit(true)}
+                disabled={!canSend}
+                style={[c.force, !canSend && { opacity: 0.35 }]}
+                accessibilityLabel="Enviar agora (interrompe o agente)"
+                testID="composer-force"
+              >
+                <Ionicons name="flash" size={17} color={colors.warning} />
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => void submit(false)}
+              onLongPress={() => void submit(true)}
+              disabled={!canSend}
+              style={[c.send, !canSend && c.sendOff]}
+              accessibilityLabel={busy ? 'Adicionar à fila' : 'Enviar'}
+              accessibilityHint="Toque longo envia agora, interrompendo o agente"
+              testID="composer-send"
+            >
+              {sending || (uploading && sending) ? (
+                <ActivityIndicator size={14} color="#fff" />
+              ) : (
+                <Ionicons
+                  name={busy ? 'add' : 'arrow-up'}
+                  size={19}
+                  color={canSend ? '#fff' : colors.faint}
+                />
               )}
             </Pressable>
-          ) : null}
-          {busy ? (
-            <Pressable
-              onPress={() => void submit(true)}
-              disabled={!canSend}
-              style={[c.force, !canSend && { opacity: 0.35 }]}
-              accessibilityLabel="Enviar agora (interrompe o agente)"
-              testID="composer-force"
-            >
-              <Ionicons name="flash" size={17} color={colors.warning} />
-            </Pressable>
-          ) : null}
-          <Pressable
-            onPress={() => void submit(false)}
-            onLongPress={() => void submit(true)}
-            disabled={!canSend}
-            style={[c.send, !canSend && c.sendOff]}
-            accessibilityLabel={busy ? 'Adicionar à fila' : 'Enviar'}
-            accessibilityHint="Toque longo envia agora, interrompendo o agente"
-            testID="composer-send"
-          >
-            {sending || (uploading && sending) ? (
-              <ActivityIndicator size={14} color="#fff" />
-            ) : (
-              <Ionicons
-                name={busy ? 'add' : 'arrow-up'}
-                size={19}
-                color={canSend ? '#fff' : colors.faint}
-              />
-            )}
-          </Pressable>
-        </View>
+          </View>
+        )}
       </View>
       <Sheet visible={attachMenu} onClose={() => setAttachMenu(false)} title="Anexar">
         <SheetItem
@@ -624,6 +852,24 @@ const c = StyleSheet.create({
   },
   status: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success },
+  recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.danger },
+  recDotBox: { width: 18, alignItems: 'center', justifyContent: 'center' },
+  mirror: { color: colors.fg },
+  partial: { color: colors.fg, opacity: 0.5, fontStyle: 'italic' },
+  hidden: { position: 'absolute', opacity: 0, height: 0, minHeight: 0 },
+  dictErr: {
+    marginHorizontal: 10,
+    marginTop: 4,
+    marginBottom: 2,
+    borderRadius: 10,
+    backgroundColor: 'rgba(248,113,113,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.35)',
+    padding: 8,
+    gap: 6
+  },
+  dictErrText: { color: colors.fg, fontSize: 12.5, lineHeight: 17 },
+  dictErrLink: { color: colors.accentStrong, fontSize: 12.5, fontWeight: '600' },
   statusText: { flex: 1, color: colors.subtle, fontSize: 12 },
   stop: {
     width: 36,

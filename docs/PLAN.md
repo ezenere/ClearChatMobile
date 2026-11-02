@@ -59,7 +59,7 @@ Trocas de plataforma (sem WebAssembly no Hermes, sem `crypto.subtle`, sem `Compr
 | 4a. Host no celular ✅ | Novo chat (persona, modelo, parâmetros, tools portáveis); loop do agente (web_search, browse_url, ask_user, list_models, aprovações/Smart-Approve); janelas `host.begin/end`, revisões com `chat_bases`/`host_epochs`; "Executar neste dispositivo"; o PC importa o chat (§8.8); recusa chats com tools locais e controle remoto; segundo plano interrompe | celular executando + desktop recusado/importando |
 | 4b. Host no celular (resto) ✅ | Memória (tools + extração), subagentes, entre chats, `read_history`, compactação, título automático e chamadas laterais; execução offline e divergência com versão local (§9) | idem |
 | 5. Configurações ✅ | Provedores, personas, memórias, pesquisa na web, novos chats, aprovações, dispositivos, conta (trocar senha, chave de recuperação, lembrar/biometria); FLAG_SECURE nas telas sensíveis | unitários + integração + e2e com o desktop real |
-| 6. Voz e iOS | Ditado/chamada; build iOS no Mac | — |
+| 6. Voz e iOS ✅ (Android) / iOS preparado, **não testado** | Ditado no composer; chamada de voz nos chats do celular; Configurações → Voz e aba Voz da persona; coleta de contexto do Smart-Approve; ponto de status com a conexão; módulos iOS (Argon2 em C, capa de tela) e "Build iOS no Mac" | unitários + integração + e2e no AVD (microfone de teste) com o desktop real; iOS: só o prebuild no Linux e os vetores do Argon2 compilando os mesmos `.c` |
 
 ## Testes
 
@@ -213,8 +213,8 @@ Pendências / TODO:
 - Desktop: o `send_to_chat` dele entrega localmente mesmo quando o chat de destino é executado em outro
   dispositivo (inclusive no celular, que recusa comandos) — precisa passar pelo portão do sync.
 - ~~Criar/editar coleções e memórias à mão no celular~~ (fase 5).
-- Coleta automática de contexto do Smart-Approve (resumidor) segue só no desktop.
-- O ponto verde do status do composer não muda sem conexão (a faixa explica).
+- ~~Coleta automática de contexto do Smart-Approve (resumidor) segue só no desktop.~~ (fase 6)
+- ~~O ponto verde do status do composer não muda sem conexão (a faixa explica).~~ (fase 6)
 
 ## Fase 5 — estado (2026-11-02)
 
@@ -297,9 +297,79 @@ Pendências / TODO:
   dois lotes com o servidor reiniciado entre eles (account/data/e2eTool/host · phase4b/remote/settings).
 - Biometria: o interruptor "Exigir biometria" só aparece com biometria cadastrada — não exercitado no AVD
   (sem digital); coberto pelo teste unitário do `setRemember`.
-- Áudio (STT/TTS/chamada) e Skills ficam para a fase 6 / só desktop; o editor de persona do celular não
-  mostra voz, assinatura, raiz, contexto avançado (preservados como estão).
+- ~~Áudio (STT/TTS/chamada)~~ (fase 6); Skills só desktop.
 - O desktop mostra o nome dele em cache depois de ser renomeado pelo celular (só no próprio desktop; o
   servidor e os outros dispositivos veem o novo nome).
 - No E2E, digitar com `adb input text` dentro de um `Modal` (diálogo) com dois "r" seguidos recarrega o
   app de desenvolvimento (atalho RR do RN): artefato do teste, não do app.
+
+## Fase 6 — estado (2026-11-02)
+
+Feito (Android): **ditado** no composer (chats deste celular e controle remoto: microfone → STT pela
+API das settings sincronizadas → texto no ponto do cursor com as funções puras do desktop;
+`meta.voice = { source: 'dictation' }` no envio dos chats daqui; parada por silêncio e "segurar para
+falar"); **chamada de voz** nos chats executados aqui (`VoiceCallManager` do desktop vendorado inteiro
++ o "sensor" do renderer portado: fim de turno adaptativo com especulação, interjeições, preâmbulos
+com clipes gerados no aparelho, frases de demora, TTS por frase, turno continuado, barge-in pelo botão
+Interromper, `end_call`, marcadores §4.3.8 com custos, histórico só com o ouvido); **Configurações →
+Voz** (`audioInput`/`sttSettings`/`ttsSettings`/`voiceCallDefaults`, gravados sem as partes do
+dispositivo; Local/GPU "só no computador"; catálogo de modelos/vozes do provedor; parâmetros pelos
+specs do desktop; "Testar voz"; "Gerar clipes"; barge-in e microfone de teste como opções deste
+aparelho); aba **Voz** da persona (`src/settings/VoiceConfigEditor.tsx`) e "Chamada de voz…" no
+menu do chat; **coleta automática de contexto do Smart-Approve** no celular (`contextCapture.ts`
+vendorado); **ponto de status** do composer com a conexão; **iOS preparado**: `modules/argon2/ios`
+(Swift + phc-winner-argon2 20190702 em C, saída conferida contra `kdf.json` compilando os mesmos `.c`
+no Linux, com e sem threads), `modules/secure-screen/ios` (capa na prévia do seletor de apps e na
+gravação/espelhamento — o iOS não bloqueia screenshot), `app.json` (bundle id, microfone e Face ID em
+pt-BR, `NSAllowsLocalNetworking`, sem `UIBackgroundModes`; o `expo-image-picker` deixava de bloquear
+o `RECORD_AUDIO`) e "Build iOS no Mac" no README. Detalhes e trade-offs: README § "Voz (fase 6)".
+
+Decisões:
+- **expo-audio 58** para tudo: `AudioStream` (PCM em tempo real) no microfone e `AudioPlayer` por
+  frase. Sem biblioteca extra nem módulo nativo próprio. Custos: sem cancelamento de eco (a fonte é a
+  MIC) → meia-duplex por padrão (microfone surdo enquanto o assistente fala; Interromper pelo botão;
+  barge-in por voz só com fone, opção do aparelho); sem PCM progressivo → cada frase toca quando a
+  síntese termina; sem o WebSocket da ElevenLabs.
+- **Transcrição só pela API**; "Local" nunca vaza o áudio para a API sem o usuário escolher (explica);
+  "Híbrido" = API no celular.
+- O `transcribeAudio` vendorado monta `FormData` com `Blob` de bytes, que o RN não aceita: o celular
+  tem uma cópia que monta o multipart em bytes (testada contra a vendorada no Node: mesmos campos).
+- Clipes: mesmas frases e mesmo payload de hash do desktop (pós-processamento próprio); bytes em
+  `Documents/voice-clips/`.
+- Microfone de teste por polling (`/mic/next`), não por deep link: entregar um intent pausa a
+  Activity, e o app trata como segundo plano (encerra a chamada) — o mesmo vale para o diálogo de
+  permissão do microfone, que agora é ignorado nessa regra.
+
+Verificado: `npm test` (14 novos em `tests/voice.test.ts` e `tests/capture.test.ts`),
+`npm run test:integration` (com `tests/integration/voice.test.ts`) e E2E no AVD (`hw.audioInput=no`
+conferido em `hardware-qemu.ini`, `-no-audio`, microfone de teste + fixtures do `espeak-ng`, LLM/STT/
+TTS falsos) com o **desktop real**: settings de áudio do desktop no celular e `silenceStopMs` do
+celular no desktop; gerar clipes; "Testar voz" (ExoPlayer toca e termina); ditado com parciais →
+parada por silêncio → texto inserido → enviado com o selo de ditado; chamada completa (marcador de
+início, fala → Transcrevendo/Pensando/preâmbulo/Falando com "mic em pausa" → resposta falada →
+despedida → `end_call` → marcador de fim "pelo agente · US$ 0,0008") e o desktop mostrando a mesma
+chamada; ditado no composer do controle remoto (texto chega ao PC, sem `meta.voice`); ponto
+amarelo sem conexão e verde de volta; persona com voz → desktop; permissão negada (aviso em pt-BR) e
+concedida (o `AudioStream` nativo abre a 16 kHz mono — no emulador sem entrada de áudio do host ele
+recebe um sinal sintético do próprio emulador, nunca o microfone real). Screenshots em
+`scratchpad/mobile/phase6/`.
+
+**Não testado:**
+- **iOS inteiro** (nem compilado): módulos Swift (Argon2, capa de tela), áudio (sessão
+  `playAndRecord`, `AudioStream`), Face ID, ATS. Roteiro no README § "Build iOS no Mac".
+- **Microfone real** e alto-falante de verdade (regra dos testes): eco, nível/limiar do
+  `AdaptiveTurnGate` (0,01 RMS) com um microfone de celular, latência real dos provedores.
+- Provedores reais de STT/TTS (só os falsos; nada pago).
+- Barge-in por voz com fone ("Interromper falando") só nos unitários.
+
+Pendências / TODO:
+- Protocolo: o `send` remoto (§8.6) não leva `meta.voice` — ditado no controle remoto chega como texto
+  digitado. Sugestão: `meta?: { voice: { source: 'dictation' } }` no `send`/`force`.
+- Desktop: mover a parte pura de `src/main/voice/clips.ts` (frases, `clipVoiceId`, payload do hash)
+  para um módulo sem `node:fs`/`hash-wasm`, e permitir injetar o corpo multipart em
+  `transcribeAudio` (ou montá-lo em bytes) — o celular passaria a vendorar em vez de copiar.
+- O STT falso escolhe o texto pela duração de voz: a parcial do ditado pode mostrar o começo de outro
+  fixture (artefato do falso, não do app).
+- O nível do microfone re-renderiza o dock a ~30 Hz: o `uiautomator dump` fica lento durante a
+  chamada (para o E2E, screenshots + log do Metro).
+- Clipes não são aparados (o desktop apara o silêncio das pontas).

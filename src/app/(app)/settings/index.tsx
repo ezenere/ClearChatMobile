@@ -1,5 +1,5 @@
 // Configurações (aberta pela lista de chats): a conta no topo e os mesmos grupos do desktop —
-// Geral (Novos chats, Personas), Agente (Aprovações, Memórias, Pesquisa na web) e Conexões
+// Geral (Novos chats, Personas, Voz), Agente (Aprovações, Memórias, Pesquisa na web) e Conexões
 // (Provedores, Dispositivos, Conta). Tudo sincroniza com os outros dispositivos, menos o que é do
 // aparelho (§4.4).
 import { useRouter, type Href } from 'expo-router'
@@ -7,6 +7,7 @@ import { StyleSheet, Text, View } from 'react-native'
 import { MEMORY_CATEGORIES } from '@shared/memory'
 import { providerKind } from '@shared/providerKinds'
 import { ENGINE_META } from '@shared/webSearchSettings'
+import { readVoiceSettings } from '@/voice/endpoints'
 import { KIND_SHORT } from '@/settings/records'
 import { useSession } from '@/account/react'
 import type { Connection } from '@/account/session'
@@ -57,7 +58,20 @@ function summary() {
     web: engines.length
       ? engines.map((e) => ENGINE_META[e.id].label).join(' → ')
       : 'Nenhum buscador habilitado',
-    defaults: def?.model ? `Modelo padrão: ${def.model}` : 'Modelo padrão não definido'
+    defaults: def?.model ? `Modelo padrão: ${def.model}` : 'Modelo padrão não definido',
+    voice: (() => {
+      const v = readVoiceSettings((id) => settings.setting(id))
+      const name = (id: string | null) => providers.find((p) => p.id === id)?.name
+      const stt =
+        v.stt.mode === 'local'
+          ? 'local (computador)'
+          : (name(v.stt.api.providerId) ?? 'sem provedor')
+      const tts =
+        v.tts.backend !== 'api'
+          ? 'local (computador)'
+          : (name(v.tts.api.providerId) ?? 'sem provedor')
+      return `Ditado e chamada · transcrição: ${stt} · fala: ${tts}`
+    })()
   }
 }
 
@@ -117,14 +131,8 @@ export default function SettingsHome() {
           sum.defaults,
           'settings-defaults'
         )}
-        {item(
-          '/settings/personas',
-          'people-outline',
-          'Personas',
-          sum.presets,
-          'settings-personas',
-          true
-        )}
+        {item('/settings/personas', 'people-outline', 'Personas', sum.presets, 'settings-personas')}
+        {item('/settings/voice', 'mic-outline', 'Voz', sum.voice, 'settings-voice', true)}
       </Card>
 
       <SectionLabel>Agente</SectionLabel>

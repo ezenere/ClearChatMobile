@@ -9,6 +9,7 @@
 import { WsRequestError } from '@vendor/desktop/sync/ws'
 import { diffDraft, toStreamDraft, type DraftState } from '@vendor/desktop/sync/stream'
 import type { ApprovalItemDecision } from '@shared/approvalPolicy'
+import { sanitizeDictationMeta, type VoiceMessageMeta } from '@shared/voiceCallMarks'
 import type {
   AgentEvent,
   ApiMessage,
@@ -104,6 +105,21 @@ interface ToolRun {
   running: boolean
   output?: string
   judging?: boolean
+}
+
+/** `meta.voice` de uma ação local (ditado pelo `sanitizeDictationMeta` do desktop; fala da chamada). */
+function localVoiceMeta(v: unknown): VoiceMessageMeta | null {
+  const d = sanitizeDictationMeta(v)
+  if (d) return d
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (o.source !== 'call') return null
+  const out: VoiceMessageMeta = { source: 'call' }
+  if (typeof o.callId === 'string' && o.callId) out.callId = o.callId
+  if (typeof o.durationMs === 'number' && Number.isFinite(o.durationMs) && o.durationMs >= 0)
+    out.durationMs = Math.round(o.durationMs)
+  if (typeof o.sttModel === 'string' && o.sttModel) out.sttModel = o.sttModel
+  return out
 }
 
 export class HostService {
@@ -232,7 +248,25 @@ export class HostService {
   }
 
   private busy(chatId: string): boolean {
-    return this.d.runner.busyChats().has(chatId)
+    return this.d.runner.busyChats().has(chatId) || (this.holds.get(chatId) ?? 0) > 0
+  }
+
+  private holds = new Map<string, number>()
+  /**
+   * Mantém a janela de escrita aberta enquanto algo de fora do turno vai gravar no chat (a chamada
+   * de voz: marcadores de início/fim e os turnos seguidos) — conta como "ocupado" para o
+   * fechamento por ociosidade. Devolve o "soltar" (idempotente).
+   */
+  holdWindow(chatId: string): () => void {
+    this.holds.set(chatId, (this.holds.get(chatId) ?? 0) + 1)
+    let done = false
+    return () => {
+      if (done) return
+      done = true
+      const n = (this.holds.get(chatId) ?? 1) - 1
+      if (n > 0) this.holds.set(chatId, n)
+      else this.holds.delete(chatId)
+    }
   }
 
   /** Por que o celular não pode executar este chat (null = pode). */
@@ -725,7 +759,10 @@ export class HostService {
       case 'force': {
         const sid = this.sessionInChat(p.sessionId, chatId)
         const atts = (Array.isArray(p.attachments) ? p.attachments : []) as AttachmentInfo[]
-        const r = await runner.send(sid, String(p.text ?? ''), atts)
+        // voz (só ações da tela deste aparelho — `local` nunca recebe comandos remotos): o texto
+        // ditado no composer ou a fala da chamada vão com `meta.voice` (§4.3.8)
+        const voice = localVoiceMeta(p.voice)
+        const r = await runner.send(sid, String(p.text ?? ''), atts, voice ? { voice } : {})
         if (k === 'force' && r.queued) {
           const q = runner.getQueue(sid)
           const last = q[q.length - 1]

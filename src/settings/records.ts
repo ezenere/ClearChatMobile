@@ -1,15 +1,13 @@
 // Configurações sincronizadas (SYNC_PROTOCOL.md §4.3.1–4.3.3): plaintexts de `provider`, `preset` e
-// `setting` montados com a mesma semântica do desktop (repo.ts/webSearchConfig.ts do main e
-// lib/provider.ts do renderer — o formulário do provedor é uma porta: o módulo do desktop importa
-// React e o IPC, não dá para vendorar), o patch LWW por campo (para `config` da persona, chave a
+// `setting` montados com a mesma semântica do desktop (repo.ts/webSearchConfig.ts do main; o
+// formulário do provedor vem vendorado de @shared/providerDraft), o patch LWW por campo (para `config` da persona, chave a
 // chave, com as chaves removidas) e a lista de buscadores do web_search. Puro (sem React Native).
+import { PROVIDER_KIND_DEFAULT_URL, providerKind, type ProviderKind } from '@shared/providerKinds'
 import {
-  inferProviderKind,
-  PROVIDER_KIND_DEFAULT_URL,
-  PROVIDER_KINDS,
-  providerKind,
-  type ProviderKind
-} from '@shared/providerKinds'
+  PROVIDER_KIND_NAME,
+  type ProviderDraft,
+  type ProviderDraftInput
+} from '@shared/providerDraft'
 import { DEFAULT_CHAT_CONFIG, supportsCacheControl } from '@shared/defaults'
 import { defaultModelRef, resolvePresetModel } from '@shared/models'
 import { applyPreset, sanitizePresetConfig, withoutCwd, type PresetConfig } from '@shared/presets'
@@ -32,30 +30,15 @@ const isObj = (v: unknown): v is Plain => !!v && typeof v === 'object' && !Array
 
 // ---------------- provedor (§4.3.1) ----------------
 
-export interface ProviderDraft {
-  name: string
-  kind: ProviderKind
-  /** O tipo foi escolhido à mão (ou o provedor já existe): não inferir pela URL. */
-  kindTouched?: boolean
-  baseUrl: string
-  apiKey: string
-  headersText: string
-}
-
-export interface ProviderInput {
-  name: string
-  kind: ProviderKind
-  baseUrl: string
-  apiKey: string
-  headers: Record<string, string>
-}
-
-const KIND_NAME: Record<ProviderKind, string> = {
-  openai: 'OpenAI',
-  openrouter: 'OpenRouter',
-  anthropic: 'Anthropic',
-  elevenlabs: 'ElevenLabs'
-}
+export {
+  draftToInput,
+  draftWithBaseUrl,
+  draftWithKind,
+  parseHeaders,
+  type ProviderDraft
+} from '@shared/providerDraft'
+/** Entrada validada do formulário (= `ProviderInput` do desktop). */
+export type ProviderInput = ProviderDraftInput
 
 /** Rótulos curtos para o celular (o desktop diz "OpenAI-compatible (genérico)" etc.). */
 export const KIND_SHORT: Record<ProviderKind, string> = {
@@ -83,60 +66,11 @@ export function providerDraft(p?: Provider | null): ProviderDraft {
       headersText: Object.keys(p.headers ?? {}).length ? JSON.stringify(p.headers, null, 2) : ''
     }
   return {
-    name: KIND_NAME.openrouter,
+    name: PROVIDER_KIND_NAME.openrouter,
     kind: 'openrouter',
     baseUrl: PROVIDER_KIND_DEFAULT_URL.openrouter,
     apiKey: '',
     headersText: ''
-  }
-}
-
-const isDefaultUrl = (url: string): boolean => {
-  const u = url.trim().replace(/\/+$/, '')
-  return PROVIDER_KINDS.some((k) => PROVIDER_KIND_DEFAULT_URL[k] === u)
-}
-
-/** Troca de tipo: URL/nome padrão se o atual estiver vazio ou for o padrão de outro tipo. */
-export function draftWithKind(d: ProviderDraft, kind: ProviderKind): ProviderDraft {
-  const baseUrl =
-    !d.baseUrl.trim() || isDefaultUrl(d.baseUrl) ? PROVIDER_KIND_DEFAULT_URL[kind] : d.baseUrl
-  const name =
-    !d.name.trim() || Object.values(KIND_NAME).includes(d.name.trim()) ? KIND_NAME[kind] : d.name
-  return { ...d, kind, kindTouched: true, baseUrl, name }
-}
-
-/** Edição da URL: sem tipo escolhido à mão, sugere o tipo pela URL. */
-export function draftWithBaseUrl(d: ProviderDraft, baseUrl: string): ProviderDraft {
-  return { ...d, baseUrl, kind: d.kindTouched ? d.kind : inferProviderKind(baseUrl) }
-}
-
-export function parseHeaders(text: string): Record<string, string> | string {
-  if (!text.trim()) return {}
-  try {
-    const v = JSON.parse(text) as unknown
-    if (!isObj(v)) return 'Deve ser um objeto JSON'
-    for (const [k, val] of Object.entries(v))
-      if (typeof val !== 'string') return `O valor de "${k}" deve ser string`
-    return v as Record<string, string>
-  } catch (e) {
-    return (e as Error).message
-  }
-}
-
-/** Rascunho → entrada válida, ou o texto do erro. */
-export function draftToInput(d: ProviderDraft): ProviderInput | string {
-  const headers = parseHeaders(d.headersText)
-  if (typeof headers === 'string') return `Headers inválidos: ${headers}`
-  if (!d.name.trim()) return 'Informe um nome'
-  if (!/^https?:\/\//.test(d.baseUrl.trim()))
-    return 'A base URL deve começar com http:// ou https://'
-  if (/\s/.test(d.apiKey.trim())) return 'A API key não pode conter espaços.'
-  return {
-    name: d.name.trim(),
-    kind: d.kind,
-    baseUrl: d.baseUrl.trim().replace(/\/+$/, ''),
-    apiKey: d.apiKey.trim(),
-    headers
   }
 }
 

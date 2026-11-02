@@ -1,7 +1,8 @@
 // FLAG_SECURE nas telas sensíveis (senha, desbloqueio, chave de recuperação, chaves de API): sem
 // screenshot, sem gravação de tela e sem prévia na tela de recentes. Contagem de telas abertas: o
-// flag só sai quando a última tela sensível fecha. Sem o módulo nativo (iOS ainda, testes) não faz
-// nada — no iOS a proteção equivalente fica para a fase 6.
+// flag só sai quando a última tela sensível fecha. iOS (fase 6, não testado num aparelho): o sistema
+// não deixa bloquear screenshots — uma capa opaca cobre a janela na prévia do seletor de apps e
+// enquanto a tela é gravada/espelhada. Sem o módulo nativo (testes) não faz nada.
 import { requireOptionalNativeModule } from 'expo'
 
 interface NativeSecureScreen {

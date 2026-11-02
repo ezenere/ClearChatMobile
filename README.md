@@ -1,6 +1,6 @@
 # ClearChat Mobile
 
-Cliente Android (iOS depois) do protocolo de sync do ClearChat, em **Expo SDK 58 / React Native 0.88**
+Cliente Android (iOS preparado — ver "Build iOS no Mac") do protocolo de sync do ClearChat, em **Expo SDK 58 / React Native 0.88**
 (Hermes, New Architecture), TypeScript estrito e expo-router. Plano e fases: [`docs/PLAN.md`](docs/PLAN.md).
 Regras do repositório: [`CLAUDE.md`](CLAUDE.md).
 
@@ -28,6 +28,7 @@ Node ≥ 22 e `npm install`.
 | `npm run test-server -- up\|down\|status` | servidor de sync local para testes (Docker + backend do site)         |
 | `npm run vendor` / `npm run vendor:check` | copia / confere as cópias de `src/vendor/` (falha em qualquer desvio) |
 | `npm run prebuild`                        | gera `android/` (`expo prebuild --platform android`)                  |
+| `npm run prebuild:ios`                    | gera `ios/` (`expo prebuild --platform ios`) — no Mac, ver abaixo     |
 | `npm start`                               | Metro (bundler)                                                       |
 | `npm run android`                         | `expo run:android`: compila, instala no aparelho/emulador e abre      |
 
@@ -375,6 +376,155 @@ Testes: `tests/settings.test.ts`, os novos casos de `tests/account.test.ts` e
 dispositivos, troca de senha). A integração inteira passa do limite de 20 códigos/h por IP: rodar em
 dois lotes com `test-server down`/`up` entre eles.
 
+## Voz (fase 6)
+
+Ditado no composer (chats deste celular e controle remoto) e **chamada de voz** nos chats executados
+neste celular — com a semântica do desktop, cujo código é **vendorado**:
+
+- **Vendorado** (`npm run vendor`): `desktop/voice/call.ts` (o `VoiceCallManager` inteiro: turno,
+  fila/turno continuado, preâmbulo, frases de demora, interjeições, TTS por frase, barge-in,
+  histórico só com o ouvido, `end_call`, marcadores e custos), `turnMachine`, `sentences`,
+  `callErrors`, `stt.ts` (erros/nome do arquivo/idioma/custo), `tts.ts` + `elevenlabs.ts` (REST
+  `/audio/speech` e ElevenLabs, PCM progressivo juntado), `wav.ts`, `voiceCatalog.ts` (modelos e
+  vozes do provedor), `shared/voiceTurn` (`AdaptiveTurnGate`, `classifyUtteranceEnd`) e
+  `shared/voicePolicy` (`InterjectionWatcher`, `PlaybackHold`, `VoicedSpan`), e do renderer
+  `voice/dictation.ts` (ponto de inserção, prévia, desfecho, erros de captura) e
+  `audio/{silence,pcm}.ts`. **Shims**: `voice/clips.ts` → `src/voice/clips.ts` (mesmas frases e o
+  mesmo hash da definição; bytes num cache próprio), `voice/evalLog.ts` e
+  `voice/elevenlabsStream.ts` → só os tipos (`src/voice/evalLog.ts`, `src/voice/ttsFeed.ts`).
+- **Escrito para o celular** (`src/voice/`, sem React Native exceto `native*.ts`/`react.ts`):
+  `endpoints.ts` (settings normalizadas, provedor resolvido pelo id — chave só em memória —, forma
+  gravada sem as partes do dispositivo, "só no computador" para Local/GPU), `stt.ts`
+  (`transcribeAudio` do desktop com o multipart montado em bytes — o `Blob` do RN não aceita bytes),
+  `session.ts` (o subconjunto API da sessão do desktop: parciais melhor-esforço, especulação na
+  pausa, final reaproveitada, uma nova tentativa na falha transitória), `mic.ts` (quadros PCM16 de
+  32 ms a 16 kHz; `FakeMicSource`), `player.ts` (fila de reprodução: ordem, sem sobreposição,
+  drop/cancel com fade, ganho, PCM → WAV), `call.ts` (o "sensor" do `useVoiceCall` do desktop +
+  o `VoiceCallManager` + a pré-checagem), `dictation.ts`, `stack.ts`, `nativeAudio.ts` (expo-audio)
+  e `native.ts` (instância, microfone de teste, segundo plano).
+- **Runner** (`src/agent/runner.ts`/`request.ts`): overrides da chamada no turno
+  (`applyVoiceCallChat` — modelo/params/raciocínio, tools, prompt), `end_call` (sem aprovação,
+  encerra o turno), `meta.voice` nas respostas, `appendDisplayMessage` (marcadores — no registro com
+  a codificação do §4.3.8, já feita pelo `repo.ts`) e `amendVoiceTurn`. `host.local('send')` aceita
+  `voice` (ditado/fala). `HostService.holdWindow` mantém a janela aberta durante a chamada.
+
+**Áudio (expo-audio 58).** O `AudioStream` dá o PCM do microfone em tempo real (float32, 16 kHz
+pedidos — o emulador e os aparelhos testados entregam 16 kHz; outra taxa é reamostrada) e o
+`AudioPlayer` toca cada frase (arquivo temporário WAV/MP3). Trade-offs, documentados:
+
+- **Sem cancelamento de eco**: o `AudioStream` abre a fonte MIC do Android (não a de chamada).
+  Por padrão o microfone fica **surdo enquanto o assistente fala** (+ 350 ms de rabo de eco) e o
+  botão **Interromper** faz o barge-in; "Interromper falando (use fone de ouvido)" (opção deste
+  aparelho, §4.4) liga o barge-in por voz do desktop.
+- **TTS por frase, bytes completos**: o expo-audio não toca PCM progressivo; cada frase toca quando a
+  síntese termina (a 1ª frase corta na vírgula, como no desktop sem feed). O WebSocket multi-contexto
+  da ElevenLabs é só do desktop (depende de `Buffer` e de headers no construtor do WebSocket).
+- **Transcrição só pela API** (OpenAI-compatível/OpenRouter; a ElevenLabs direta não transcreve).
+  "Local" mostra "só no computador" e o celular **não** manda o áudio para a API sozinho; "Híbrido"
+  usa a API. Fala "Local (Kokoro)"/GPU idem.
+- Parciais/especulação pela API custam requests (seguem `livePartials`/`turn.speculativeApi`, como
+  no desktop).
+- **Foreground only**: o app em segundo plano encerra a chamada (marcador de fim "o app foi para o
+  segundo plano") e cancela o ditado; outro dispositivo assumir o chat derruba a chamada. O diálogo
+  de permissão do microfone pausa a Activity — ignorado (não é segundo plano).
+- Permissão `RECORD_AUDIO` (o texto do sistema é o do Android; no iOS, `NSMicrophoneUsageDescription`
+  em pt-BR). Negada → aviso em pt-BR.
+
+**Telas.** Composer: microfone (toque = grava; com "Segurar para falar", segurar grava e soltar
+conclui), espelho do campo com o ditado translúcido no ponto do cursor, ✕/✓/enviar, parada por
+silêncio, erro com "Inserir o texto parcial"; no controle remoto o texto entra igual, mas o `send`
+do §8.6 não leva `meta.voice` (sugestão de protocolo no PLAN). O ponto de status do composer agora
+segue a conexão (verde/amarelo "Reconectando"/vermelho "Sem conexão"). Conversa: telefone no
+cabeçalho (chats executados aqui) → pré-checagem com o motivo e "Abrir Configurações → Voz" →
+**dock** no lugar do composer (fase, relógio, nível, texto da fala, mudo, Interromper, desligar,
+"Gerar clipes"); menu → "Chamada de voz…" (config de voz do chat). Configurações → **Voz**: ditado,
+transcrição, fala (provedor/modelo/voz pela listagem do provedor, parâmetros do modelo pelos specs do
+desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, prompt-base, modelo, preâmbulos,
+frases de demora, interjeições, fim de turno) e "Neste aparelho" (barge-in, microfone de teste em
+dev, "Gerar clipes"). Persona → aba **Voz** (`src/settings/VoiceConfigEditor.tsx`).
+
+**Microfone de teste (só desenvolvimento — testes nunca abrem o microfone real).**
+`clearchat://dev/fakemic?on=1` (ou `EXPO_PUBLIC_CLEARCHAT_FAKE_MIC=1`) troca o microfone por silêncio
+
+- WAVs injetados; `?poll=http://127.0.0.1:8790` faz o app buscar WAVs em `<base>/mic/next` — o E2E
+  enfileira com `curl -X POST <base>/mic/queue?name=q1.wav` (um deep link pausaria a Activity, o que
+  encerra a chamada). O provedor falso (`tests/fakes/fakeVoice.ts`, dentro do `fakeLlm.ts`) serve
+  `/audio/transcriptions` (texto determinístico pelo fixture com a duração de voz mais próxima;
+  `FAKE_STT_FIXTURES=<pasta com .wav + .txt>`), `/audio/speech` (tom de ~45 ms por caractere), o
+  formato da ElevenLabs e `/mic/*`. Fixtures do E2E: `espeak-ng -v pt-br -w q1.wav "…"`. No AVD,
+  `hw.audioInput=no` (conferido em `hardware-qemu.ini`) + `-no-audio`.
+
+**Smart-Approve → coleta automática de contexto** (pendência da 4b): `agent/contextCapture.ts` do
+desktop vendorado; o runner do celular o liga como o desktop (mensagem digitada → resumo em segundo
+plano com debounce → `config.capturedContext` do chat, que sincroniza; o juiz espera o resumo, teto
+de 20 s; Parar cancela; subagente herda a descrição do pai + a tarefa), seguindo
+`smartApproveDefaults.capture` (Configurações → Aprovações).
+
+Testes: `tests/voice.test.ts` (paridade do multipart com o `transcribeAudio` vendorado, erros,
+sessão, TTS OpenAI/ElevenLabs, settings, clipes, fila, ditado com o microfone de teste e a chamada
+inteira — turno, `meta.voice`, `end_call`, marcadores codificados, custos —, meia-duplex +
+Interromper), `tests/capture.test.ts` e `tests/integration/voice.test.ts` (servidor real: settings do
+"desktop" → ditado e chamada no celular → o desktop decifra marcadores/falas/`end_call`/persona).
+
+## Build iOS no Mac
+
+O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem
+do `app.json` e dos módulos locais (`modules/argon2/ios`, `modules/secure-screen/ios`).
+
+Pré-requisitos: macOS com Xcode ≥ 16 (e as Command Line Tools), CocoaPods (`brew install cocoapods`),
+Node ≥ 22, uma conta Apple (a gratuita serve para rodar no seu iPhone; a paga para TestFlight).
+
+```sh
+git clone … && cd ClearChatMobile && npm install
+npm run prebuild:ios            # gera ios/ (não versionado — CNG) e roda o pod install
+# se o pod install não rodar sozinho:  cd ios && pod install && cd ..
+```
+
+Rodar no simulador (debug, JS pelo Metro):
+
+```sh
+npx expo run:ios                                  # escolhe um simulador; ou --device para o iPhone
+# ou à mão:
+open ios/ClearChat.xcworkspace                    # Xcode → esquema ClearChat → ▶
+npx expo start                                    # Metro (o app de debug carrega o JS daqui)
+```
+
+No iPhone: Xcode → alvo ClearChat → Signing & Capabilities → escolha o seu Team (o bundle id é
+`com.ezenere.clearchat`; se já existir na sua conta, troque por um seu só localmente). Build local de
+release sem EAS na nuvem: `npx expo run:ios --configuration Release --device`, ou com o EAS CLI
+`npx eas-cli build --platform ios --profile development --local` (precisa de um `eas.json`; o build
+roda no Mac).
+
+Servidor de testes: o iOS só deixa `http://` para a rede local (`NSAllowsLocalNetworking`) — use o
+nome `.local` do Mac (`http://SeuMac.local:8100`) ou um servidor com `https://`. Produção já é https.
+
+**Primeira coisa a conferir — o self-test da cripto** (todos os vetores do protocolo + o Argon2id
+nativo, que no iOS é a implementação de referência em C compilada no módulo):
+
+```sh
+xcrun simctl openurl booted 'clearchat://dev/selftest'      # simulador
+# iPhone: abra o link clearchat://dev/selftest (Notas/Safari) com o app de debug instalado
+```
+
+A tela mostra PASS/FAIL e os tempos; a linha `CLEARCHAT_SELFTEST …` sai no console do Metro/Xcode.
+Tem que dar **PASS em tudo** (o Argon2id precisa ser byte a byte o dos vetores — no Linux os mesmos
+`.c` foram compilados e conferidos contra `kdf.json`).
+
+Depois: login no servidor de testes, desbloqueio, abrir um chat, Configurações (a tela de senha deve
+ficar coberta na prévia do seletor de apps — o iOS não bloqueia screenshot), Face ID ("Lembrar" +
+"Exigir biometria"), ditado e chamada de voz (o primeiro toque no microfone pede a permissão com o
+texto em pt-BR). Problemas prováveis e onde mexer:
+
+- erro de compilação do Argon2 no Swift (`cannot find 'argon2id_hash_raw' in scope`): o podspec
+  expõe `argon2.h` como header público com `DEFINES_MODULE` (o Swift do pod enxerga o próprio module
+  map). Se o Xcode não o importar, crie `modules/argon2/ios/ClearChatArgon2.h` com
+  `#import "vendor/phc-winner-argon2/include/argon2.h"`, inclua-o em `source_files` e em
+  `public_header_files` do podspec, e rode `pod install` de novo;
+- áudio: a sessão é `playAndRecord` com alto-falante (`ensureAudioMode` em
+  `src/voice/nativeAudio.ts`), sem o modo de voz do iOS — ou seja, sem cancelamento de eco, como no
+  Android: mantenha "Interromper falando" desligado sem fone;
+- `UIBackgroundModes` fica vazio de propósito (chamada e host só em primeiro plano).
+
 ## Servidor local para testes
 
 Nunca produção. O script sobe um Postgres descartável no Docker (`--tmpfs`, sem volume) e a API de
@@ -430,7 +580,11 @@ imports relativos e `@shared/...` são seguidos automaticamente para nada ficar 
   (`SHIMS` no `vendor.mjs`); `crypto` (randomBytes) vai para `src/platform/nodeCrypto.ts` e
   `better-sqlite3` é só tipo (`src/platform/betterSqlite.d.ts`).
 - `renderer/` ← lógica pura da UI do desktop (`src/renderer/src/lib`: `branchView`, `approvalOutcome`,
-  `reasoning`, `dates`, `fences`, `math`, `memory`, `skills`) — sem React/DOM, só `@shared`.
+  `reasoning`, `dates`, `fences`, `math`, `memory`, `skills`, `voice/dictation`, `audio/silence`,
+  `audio/pcm`) — sem React/DOM, só `@shared`.
+- `desktop/voice/` ← voz (`call`, `stt`, `tts`, `elevenlabs`, `wav`, `voiceCatalog`, …) com shims para
+  `clips`, `evalLog` e `elevenlabsStream`; `desktop/agent/contextCapture.ts` (resumidor do
+  Smart-Approve). `node:crypto` ganhou `createHash('sha256')` (chave do cache do catálogo).
 
 Cada `.ts` ganha uma linha de cabeçalho `// VENDORED from …`; nunca edite à mão — corrija na origem e rode
 `npm run vendor`. O `vendor:check` (ignorando o cabeçalho) falha em qualquer divergência, arquivo ausente
@@ -460,8 +614,8 @@ Argon2 nativo é validado no aparelho pelo self-test (mesma saída do hash-wasm,
 
 ```
 index.ts               entrada: camada de plataforma → expo-router
-modules/argon2/        módulo Expo local (Kotlin + argon2kt)
-modules/secure-screen/ módulo Expo local (FLAG_SECURE)
+modules/argon2/        módulo Expo local (Kotlin + argon2kt; Swift + referência em C no iOS)
+modules/secure-screen/ módulo Expo local (FLAG_SECURE; capa na prévia/gravação no iOS)
 scripts/               vendor.mjs, platformAliases.cjs (redirecionamentos Metro/Vitest), test-server.sh
 src/account/           conta: máquina de estados, AccountService, captcha, Keystore/kv do aparelho
 src/app/               telas (expo-router): (auth), (app) [chats, chat/[id], new, settings/*], dev/selftest.tsx
@@ -473,6 +627,8 @@ src/host/              chats executados no celular: outbox, janelas, troca de ho
                        divergência com versão local, send_to_chat entre dispositivos
 src/memory/            memória: índice local (SQLite em memória) + outbox LWW + MemoryService
 src/settings/          Configurações: registros/serviço (outbox LWW) + componentes das telas
+src/voice/             voz: STT/TTS pela API, sessão, microfone (expo-audio/teste), fila de
+                       reprodução, chamada (VoiceCallManager vendorado + sensor), ditado
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)
 src/platform/          polyfills e trocas para o Hermes
 src/selftest/          casos dos vetores + checagens da plataforma (Vitest e aparelho)

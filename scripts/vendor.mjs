@@ -62,6 +62,7 @@ const GROUPS = {
       'sync.ts',
       'modelParams.ts',
       'providerKinds.ts',
+      'providerDraft.ts',
       'askUser.ts',
       'approvalPolicy.ts',
       'presets.ts',
@@ -80,7 +81,10 @@ const GROUPS = {
       'voiceCallMarks.ts',
       'remoteFs.ts',
       'smartApprove.ts',
-      'contextCapture.ts'
+      'contextCapture.ts',
+      // fase 6: voz (turno adaptativo, política de interjeições/preâmbulos/frases de demora)
+      'voiceTurn.ts',
+      'voicePolicy.ts'
     ]
   },
   desktop: {
@@ -111,7 +115,16 @@ const GROUPS = {
       'agent/autoTitle.ts',
       'tools/chats.ts',
       'tools/history.ts',
-      'searchIndex.ts'
+      'searchIndex.ts',
+      // fase 6: Smart-Approve → coleta automática de contexto (resumidor)
+      'agent/contextCapture.ts',
+      // fase 6: voz — clientes de STT (/audio/transcriptions) e TTS (/audio/speech, REST da
+      // ElevenLabs), WAV/PCM, o dono do turno da chamada (VoiceCallManager), cortador de frases,
+      // máquina do turno, classificação de falhas e o catálogo de modelos/vozes
+      'voice/stt.ts',
+      'voice/tts.ts',
+      'voice/call.ts',
+      'voice/voiceCatalog.ts'
     ]
   },
   // lógica pura da UI do desktop (sem React/DOM): ramos na tela, aprovação, raciocínio, datas,
@@ -126,7 +139,11 @@ const GROUPS = {
       'fences.ts',
       'math.ts',
       'memory.ts',
-      'skills.ts'
+      'skills.ts',
+      // fase 6: ditado (ponto de inserção, desfecho, erros de captura) e DSP puro da captura
+      'voice/dictation.ts',
+      'audio/silence.ts',
+      'audio/pcm.ts'
     ]
   }
 }
@@ -158,7 +175,15 @@ const SHIMS = {
   // MemoryService: o snapshot do índice e lastExtractedSeq ficam no registro `session` (§4.3.7)
   'desktop:memory/service.ts': 'src/memory/service.ts',
   // read_history em outros chats: consultas sobre o cache local (FTS própria)
-  'desktop:historyStore.ts': 'src/agent/historyStore.ts'
+  'desktop:historyStore.ts': 'src/agent/historyStore.ts',
+  // fase 6 (voz): clipes de interjeição/preâmbulo — o desktop guarda em disco com node:fs e
+  // hash-wasm; o celular tem o mesmo conjunto de frases e um cache próprio (expo-file-system)
+  'desktop:voice/clips.ts': 'src/voice/clips.ts',
+  // log de avaliação do modo sombra (JSONL em disco no desktop): no celular só o tipo
+  'desktop:voice/evalLog.ts': 'src/voice/evalLog.ts',
+  // WebSocket multi-contexto da ElevenLabs (Buffer + headers no construtor do WebSocket do Node):
+  // no celular a fala vai por HTTP por frase; a chamada só importa o tipo do gancho
+  'desktop:voice/elevenlabsStream.ts': 'src/voice/ttsFeed.ts'
 }
 
 const shimSource = (group, file) => {

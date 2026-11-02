@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { ApprovalItemDecision } from '@shared/approvalPolicy'
 import type { ApiMessage, AttachmentInfo, QuestionAnswer } from '@shared/types'
+import type { VoiceMessageMeta } from '@shared/voiceCallMarks'
 import type { ChatState } from '@/data/types'
 import { store } from '@/data/native'
 import type { MirrorView } from '@/remote/mirror'
@@ -20,7 +21,9 @@ export interface ChatDriver {
     text: string,
     attachments: AttachmentInfo[],
     skills: string[],
-    force?: boolean
+    force?: boolean,
+    /** `meta.voice` do ditado — só nos chats executados aqui (o `send` remoto do §8.6 não leva). */
+    voice?: VoiceMessageMeta
   ): Promise<CommandResult>
   queueForce(chatId: string, sessionId: string, queuedId: string): Promise<CommandResult>
   queueRemove(chatId: string, sessionId: string, queuedId: string): Promise<CommandResult>
@@ -47,8 +50,13 @@ export interface ChatDriver {
 
 /** Ações num chat executado neste celular (mesmo caminho das ações remotas, sem servidor). */
 export const localDriver: ChatDriver = {
-  send: (c, sessionId, text, attachments, _skills, force) =>
-    host.local(c, force ? 'force' : 'send', { sessionId, text, attachments }),
+  send: (c, sessionId, text, attachments, _skills, force, voice) =>
+    host.local(c, force ? 'force' : 'send', {
+      sessionId,
+      text,
+      attachments,
+      ...(voice ? { voice } : {})
+    }),
   queueForce: (c, sessionId, queuedId) => host.local(c, 'queue.force', { sessionId, queuedId }),
   queueRemove: (c, sessionId, queuedId) => host.local(c, 'queue.remove', { sessionId, queuedId }),
   stop: (c, sessionId) => host.local(c, 'stop', { sessionId }),

@@ -1,7 +1,8 @@
 // Configurações → Personas → editar/criar (= editor do desktop, enxuto): ícone, nome, descrição e
 // as abas Modelo (par provedor + modelo ou "usar o padrão", parâmetros), Chat (system prompt,
-// compactação automática), Ferramentas (as que rodam também no celular e as só do computador) e
-// Memória (coleções ativas e onde grava — é a persona que define a memória dos chats novos).
+// janela/compactação, assinatura do app, opções do computador), Ferramentas (as que rodam também no celular e as só do computador) e
+// Memória (coleções ativas e onde grava — é a persona que define a memória dos chats novos) e
+// Voz (a chamada de voz da persona — `VoiceConfigEditor`).
 // Campos não alterados seguem "Novos chats"; os que o celular não edita ficam como estão.
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useState } from 'react'
@@ -15,6 +16,8 @@ import { describeError } from '@/account/errors'
 import { MOBILE_TOOLS } from '@/agent/request'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
+import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
+import { ComputerOptions, ContextEditor, SignatureEditor } from '@/settings/PersonaAdvanced'
 import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { resolvePresetConfig } from '@/settings/records'
@@ -26,7 +29,7 @@ import { TextField } from '@/ui/TextField'
 import { useToast } from '@/ui/Toast'
 import { colors, radius, spacing } from '@/ui/theme'
 
-type Tab = 'model' | 'chat' | 'tools' | 'memory'
+type Tab = 'model' | 'chat' | 'tools' | 'memory' | 'voice'
 
 const TOOL_HELP: Partial<Record<ToolName, string>> = {
   web_search: 'Pesquisa na web pelos buscadores configurados.',
@@ -171,6 +174,8 @@ export default function PersonaEditor() {
         label="Descrição"
         value={description}
         onChangeText={setDescription}
+        multiline
+        submitBehavior="blurAndSubmit"
         placeholder="Opcional — para que serve esta persona"
       />
       {error ? <Banner tone="danger">{error}</Banner> : null}
@@ -180,7 +185,8 @@ export default function PersonaEditor() {
           { value: 'model', label: 'Modelo' },
           { value: 'chat', label: 'Chat' },
           { value: 'tools', label: 'Tools' },
-          { value: 'memory', label: 'Memória' }
+          { value: 'memory', label: 'Memória' },
+          { value: 'voice', label: 'Voz' }
         ]}
         value={tab}
         onChange={setTab}
@@ -257,15 +263,9 @@ export default function PersonaEditor() {
               ? 'Definido nesta persona.'
               : 'Segue o system prompt padrão de “Novos chats”.'}
           </Note>
-          <Card>
-            <ToggleRow
-              title="Compactar automaticamente"
-              subtitle={`Resume a conversa ao chegar a ${Math.round((cfg.compactThreshold ?? 0.9) * 100)}% da janela de contexto.`}
-              value={!!cfg.autoCompact}
-              onChange={(autoCompact) => patch({ autoCompact })}
-              testID="persona-autocompact"
-            />
-          </Card>
+          <ContextEditor cfg={cfg} patch={patch} />
+          <SignatureEditor cfg={cfg} patch={patch} />
+          <ComputerOptions cfg={cfg} patch={patch} />
         </>
       ) : null}
 
@@ -315,6 +315,14 @@ export default function PersonaEditor() {
             onChange={(memory) => patch({ memory })}
           />
         </View>
+      ) : null}
+
+      {tab === 'voice' ? (
+        <VoiceConfigEditor
+          value={cfg.voice}
+          onChange={(voice) => patch({ voice })}
+          providers={providers}
+        />
       ) : null}
     </SettingsScreen>
   )

@@ -10,7 +10,15 @@
     "backgroundColor": "#0b0b0f",
     "ios": {
       "bundleIdentifier": "com.ezenere.clearchat",
-      "supportsTablet": true
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "O ClearChat usa o microfone só quando você toca no microfone (ditado) ou liga uma chamada de voz.",
+        "NSFaceIDUsageDescription": "O ClearChat usa o Face ID para abrir seus dados neste aparelho.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "package": "com.ezenere.clearchat",
@@ -54,10 +62,19 @@
         {
           "photosPermission": "O ClearChat acessa suas fotos para anexar imagens às mensagens.",
           "cameraPermission": false,
-          "microphonePermission": false
+          "microphonePermission": "O ClearChat usa o microfone só quando você toca no microfone (ditado) ou liga uma chamada de voz."
         }
       ],
-      "expo-document-picker"
+      "expo-document-picker",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "O ClearChat usa o microfone só quando você toca no microfone (ditado) ou liga uma chamada de voz.",
+          "recordAudioAndroid": true,
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

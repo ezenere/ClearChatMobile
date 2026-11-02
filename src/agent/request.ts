@@ -5,7 +5,8 @@
 // - <environment> sem raiz/shell (o celular não executa tools locais): só o SO;
 // - anexos: o leitor (base64) vem pronto do runner, que baixou os blobs antes (§14);
 // - memória: fontes registráveis (índice congelado + help, tools pela config — como o desktop);
-//   skills e voz: nunca no celular.
+//   skills: nunca no celular; voz (fase 6): `end_call` nos turnos da chamada (fonte registrável,
+//   como no desktop — `setVoiceCallSource`).
 // É o módulo que o shim `src/vendor/desktop/agent/request.ts` reexporta (BuiltRequest, maskRequest,
 // modelInfoFor para llm.ts / smartApprove.ts vendorados).
 import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
@@ -13,7 +14,8 @@ import { activeHistory, isDisplayOnly } from '@shared/context'
 import { defaultToolsPrompt } from '@shared/defaults'
 import { paramSupport, type ParamSupport } from '@shared/modelParams'
 import { providerKind, type ProviderKind } from '@shared/providerKinds'
-import { TOOL_NAMES, toolDefinitionFor, type ToolDefinition } from '@shared/tools'
+import { END_CALL_TOOL, TOOL_NAMES, toolDefinitionFor, type ToolDefinition } from '@shared/tools'
+import type { ResolvedVoiceCall } from '@shared/voice'
 import type {
   ApiMessage,
   Chat,
@@ -202,7 +204,35 @@ export function availableTools(
       (!SUBAGENT_TOOLS.includes(n) || canDelegate || siblingOk(n))
   )
   const memory = memoryToolsSource(chat, session).filter((n) => !base.includes(n))
-  return memory.length ? [...base, ...memory] : base
+  // chamada de voz: `end_call` só nos turnos da chamada (sessão principal), salvo desligada em
+  // "O agente pode encerrar a chamada" — independe de enabledTools/voice.tools (= desktop)
+  const call =
+    session.depth === 0 && session.id
+      ? voiceCallContextFor(chat, { id: session.id, depth: session.depth })
+      : null
+  const voice: ToolName[] = call && call.endCall !== false ? [END_CALL_TOOL] : []
+  return memory.length || voice.length ? [...base, ...memory, ...voice] : base
+}
+
+// ---------------- chamada de voz (= desktop: `setVoiceCallSource`) ----------------
+
+/**
+ * Overrides do modo voz no turno em andamento; null = turno de texto. O `VoiceCallManager`
+ * vendorado registra a fonte (`src/voice/call.ts`); sem registro (testes) = nunca há chamada.
+ */
+export type VoiceCallContextSource = (
+  chat: Pick<Chat, 'id' | 'config'>,
+  session: Pick<Session, 'id' | 'depth'>
+) => ResolvedVoiceCall | null
+let voiceCallContextSource: VoiceCallContextSource = () => null
+export function setVoiceCallSource(fn: VoiceCallContextSource): void {
+  voiceCallContextSource = fn
+}
+export function voiceCallContextFor(
+  chat: Pick<Chat, 'id' | 'config'>,
+  session: Pick<Session, 'id' | 'depth'>
+): ResolvedVoiceCall | null {
+  return voiceCallContextSource(chat, session)
 }
 
 let providerNamesSource: () => string[] = () => []

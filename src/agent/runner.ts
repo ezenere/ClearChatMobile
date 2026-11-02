@@ -7,7 +7,9 @@
 // entre pai/filhos/irmãos com limite); memória (índice congelado por sessão, tools, extração);
 // entre chats (list_chats, get_chat_info, send_to_chat — local ou por comando ao host do destino);
 // read_history; compactação (pedida, automática pelo contexto e "compactar e tentar de novo") e
-// título automático. Sem React Native.
+// título automático; chamada de voz (overrides do turno, `end_call`, `meta.voice`, marcadores e o
+// histórico só com o que foi ouvido — `amendVoiceTurn`) e a coleta automática de contexto do
+// Smart-Approve (resumidor vendorado). Sem React Native.
 import {
   approvalRoute,
   blockedText,
@@ -67,6 +69,11 @@ import type { MemoryExtractionResult } from '@shared/memory'
 import { sessionProviderId } from '@shared/models'
 import { connectionErrorText, isConnectionFailure } from '@shared/network'
 import { capturedTextFor, effectiveEnvironment } from '@shared/contextCapture'
+import { applyVoiceCallChat } from '@shared/voice'
+import { spokenPrefix } from '@shared/voiceTurn'
+import { END_CALL_RESULT, type VoiceMessageMeta } from '@shared/voiceCallMarks'
+import { providerKind } from '@shared/providerKinds'
+import { ContextCaptureService } from '@vendor/desktop/agent/contextCapture'
 import {
   isSiblingKind,
   siblingBroadcastText,
@@ -79,7 +86,7 @@ import {
   overrideMessageText,
   smartRejectText
 } from '@shared/smartApprove'
-import { buildJudgeExtras } from '@shared/smartApproveContext'
+import { buildJudgeExtras, isTypedUserMessage } from '@shared/smartApproveContext'
 import { MEMORY_TOOL_NAMES } from '@shared/tools'
 import type {
   AgentEvent,
@@ -168,7 +175,14 @@ import {
   RetryRegistry,
   type RetryOutcome
 } from './registries'
-import { availableTools, buildRequest, currentEnv, type BuiltRequest } from './request'
+import {
+  availableTools,
+  buildRequest,
+  currentEnv,
+  modelInfoFor,
+  voiceCallContextFor,
+  type BuiltRequest
+} from './request'
 import { resolveAskUserQuestions } from './tools/askUser'
 import {
   abortError,
@@ -270,6 +284,18 @@ export interface RunnerDeps {
   /** Entrega de send_to_chat em outro chat (local ou ao host remoto). */
   interChat?: InterChatRouter
   now?: () => number
+  /** Coleta de contexto do Smart-Approve: chamada ao modelo (testes) e espera (padrão do desktop). */
+  capture?: {
+    call?: ConstructorParameters<typeof ContextCaptureService>[0]['call']
+    debounceMs?: number
+  }
+}
+
+/** Entrada de `amendVoiceTurn` (= desktop `VoiceTurnAmend`). */
+export interface VoiceTurnAmend {
+  userMessageId: string
+  dropUser: boolean
+  spoken: Record<string, string[]> | (() => Record<string, string[]>)
 }
 
 interface CompactRequest {
@@ -383,6 +409,8 @@ export class Runner {
   private titleInflight = new Map<string, Promise<string>>()
   /** Compactação ativa por sessão (para o snapshot do espelho local). */
   private compactionState = new Map<string, { state: 'scheduled' | 'running'; text?: string }>()
+  /** Smart-Approve → coleta automática de contexto (resumidor; `contextCapture.ts` vendorado). */
+  readonly capture: ContextCaptureService
 
   constructor(deps: RunnerDeps) {
     this.d = deps
@@ -393,6 +421,48 @@ export class Runner {
     this.approvals = new ApprovalRegistry(emit)
     this.questions = new QuestionRegistry(emit)
     this.retries = new RetryRegistry(emit)
+    this.capture = new ContextCaptureService({
+      getChat: (id) => this.repo.chat(id),
+      getSession: (id) => this.repo.session(id),
+      history: (id) => this.repo.path(id),
+      getProvider: (id) => this.d.provider(id),
+      globalModes: () => this.approvalSettings().modes,
+      defaults: () => this.approvalSettings().smart,
+      save: (chatId, fn) => this.saveCaptured(chatId, fn),
+      ...(deps.capture?.call ? { call: deps.capture.call } : {}),
+      ...(deps.capture?.debounceMs !== undefined ? { debounceMs: deps.capture.debounceMs } : {}),
+      log: (...a) => this.log(a.map((x) => (typeof x === 'string' ? x : String(x))).join(' '))
+    })
+  }
+
+  /** Grava a descrição capturada na config do chat (sincroniza como o resto da config). */
+  private saveCaptured(
+    chatId: string,
+    fn: (st: Chat['config']['capturedContext']) => NonNullable<Chat['config']['capturedContext']>
+  ): void {
+    const chat = this.repo.chat(chatId)
+    if (!chat) return
+    this.repo.updateChat(chatId, { config: { capturedContext: fn(chat.config.capturedContext) } })
+    const updated = this.repo.chat(chatId)
+    if (updated) this.emit({ type: 'chat-updated', chat: updated })
+  }
+
+  /** Edição sua da descrição capturada (sessionId null = a do chat) — = desktop. */
+  setCapturedContext(chatId: string, sessionId: string | null, text: string): void {
+    this.capture.setText(chatId, sessionId, text)
+  }
+
+  /** Cadeia de subagentes pais (sem a principal) — para a descrição herdada (= desktop). */
+  private parentChain(session: Session): string[] {
+    const out: string[] = []
+    let cur: Session | null = session
+    for (let i = 0; cur?.parentSessionId && i < 4; i++) {
+      const p = this.repo.session(cur.parentSessionId)
+      if (!p || p.depth === 0) break
+      out.push(p.id)
+      cur = p
+    }
+    return out
   }
 
   private emit(e: AgentEvent): void {
@@ -449,6 +519,12 @@ export class Runner {
     const s = this.repo.session(sessionId)
     if (s) {
       this.repo.touch(s.chatId)
+      // coleta automática de contexto: mensagem digitada (ou do agente pai, no subagente)
+      if (
+        message.role === 'user' &&
+        (isTypedUserMessage(m) || (s.depth > 0 && meta.kind === 'parent-message'))
+      )
+        this.capture.onUserMessage(sessionId)
       if (hasPendingBranch(before) && !hasPendingBranch(s.branchSel))
         this.emit({ type: 'session-updated', session: s })
     }
@@ -466,6 +542,40 @@ export class Runner {
     } catch (e) {
       this.log(`appendError: ${errMsg(e)}`)
     }
+  }
+
+  /**
+   * Mensagem só de exibição (marcador da chamada de voz — `meta.kind 'voice-call'`): persistida e
+   * emitida como as demais, NUNCA enviada à API (`isDisplayOnly`; no registro vai com a codificação
+   * do §4.3.8 — `repo.ts`). Null = não gravada.
+   */
+  appendDisplayMessage(
+    sessionId: string,
+    content: string,
+    meta: MessageMeta
+  ): StoredMessage | null {
+    if (!this.repo.session(sessionId)) return null
+    try {
+      return this.append(sessionId, { role: 'assistant', content }, { ...meta, synthetic: true })
+    } catch (e) {
+      this.log(`appendDisplayMessage: ${errMsg(e)}`)
+      return null
+    }
+  }
+
+  /** `meta.voice` da resposta do assistente num turno da chamada de voz (= desktop). */
+  private voiceReplyMeta(
+    chat: Chat,
+    session: Session,
+    content: string | null,
+    partial = false
+  ): Pick<MessageMeta, 'voice'> {
+    const call = voiceCallContextFor(chat, session)
+    if (!call?.callId) return {}
+    const voice: VoiceMessageMeta = { source: 'call', callId: call.callId }
+    if (content?.trim()) voice.spoken = partial ? 'partial' : true
+    if (call.ttsModel) voice.ttsModel = call.ttsModel
+    return { voice }
   }
 
   private clearPendingBranch(sessionId: string): void {
@@ -782,17 +892,35 @@ export class Runner {
     if (!session) return { kind: 'error', error: 'Sessão não encontrada (chat apagado?).' }
     const chat = this.repo.chat(session.chatId)
     if (!chat) return { kind: 'error', error: 'Chat não encontrado.' }
-    const provider = this.providerFor(chat, session)
+    // chamada de voz ativa: os overrides do turno (modelo/params, tools, voicePrompt) valem só nas
+    // requests/tools deste turno — o chat salvo e o histórico não mudam (= desktop)
+    const call = voiceCallContextFor(chat, session)
+    let provider: Provider | null
+    if (call?.model) {
+      provider = this.d.provider(call.model.providerId)
+      if (!provider)
+        return {
+          kind: 'error',
+          error: `Provider "${call.model.providerId}" da chamada de voz não está configurado.`
+        }
+    } else provider = this.providerFor(chat, session)
     if (!provider) return { kind: 'error', error: 'Nenhum provider configurado para este chat.' }
-    const reqSession =
+    const baseSession =
       session.depth === 0 ? { ...session, model: chat.config.model || session.model } : session
+    const reqSession = call?.model ? { ...baseSession, model: call.model.model } : baseSession
     if (!reqSession.model)
       return { kind: 'error', error: 'Nenhum modelo selecionado para este chat.' }
+    const reqChat = call
+      ? applyVoiceCallChat(chat, call, {
+          kind: providerKind(provider),
+          info: modelInfoFor(provider.id, reqSession.model)
+        })
+      : chat
     // memória: o índice vai congelado por sessão (snapshot no 1º request; registro `session`)
     if (session.depth === 0) this.ensureSnapshot(chat, session)
     let req: BuiltRequest
     try {
-      req = await this.buildFor(chat, reqSession, provider)
+      req = await this.buildFor(reqChat, reqSession, provider)
     } catch (e) {
       return { kind: 'error', error: errMsg(e) }
     }
@@ -808,7 +936,12 @@ export class Runner {
       signal,
       attempt: async () => {
         if (!first) {
-          req = await this.buildFor(this.repo.chat(chat.id) ?? chat, reqSession, provider)
+          const fresh = this.repo.chat(chat.id) ?? chat
+          req = await this.buildFor(
+            call ? applyVoiceCallChat(fresh, call, { kind: providerKind(provider) }) : fresh,
+            reqSession,
+            provider
+          )
           acc = newAccumulator()
           t0 = Date.now()
         }
@@ -848,7 +981,8 @@ export class Runner {
               interrupted: true,
               model: acc.model ?? reqSession.model,
               durationMs: Date.now() - t0,
-              ...withReasoningMs()
+              ...withReasoningMs(),
+              ...this.voiceReplyMeta(chat, session, acc.content, true)
             }
           )
         }
@@ -876,9 +1010,12 @@ export class Runner {
       ...withReasoningMs()
     }
     if (acc.usage) meta.usage = acc.usage
+    Object.assign(meta, this.voiceReplyMeta(chat, session, acc.content))
     this.append(session.id, assistant, meta)
 
     if (calls.length) {
+      /** `end_call` rodou: o turno termina aqui (sem nova chamada ao modelo — a chamada vai cair). */
+      let hungUp = false
       for (const call of calls) {
         if (signal.aborted) break
         const o = await this.executeTool(
@@ -906,16 +1043,18 @@ export class Runner {
           { role: 'tool', tool_call_id: call.id, content: o.parts?.length ? o.parts : o.content },
           tmeta
         )
+        if (call.function.name === 'end_call' && o.status === 'ok') hungUp = true
         if (o.status === 'cancelled' && signal.aborted) break
       }
       if (signal.aborted) return { kind: 'aborted', partial: '' }
+      if (hungUp) return { kind: 'final', text: acc.content }
       return { kind: 'continue' }
     }
 
     // modo texto (sem tools nativas)
     const history = this.repo.path(session.id)
-    const avail = availableTools(chat, session, history)
-    if (!chat.config.nativeTools && avail.length && acc.content) {
+    const avail = availableTools(reqChat, session, history)
+    if (!reqChat.config.nativeTools && avail.length && acc.content) {
       const parsed = parseTextToolCalls(acc.content, avail)
       if (parsed.length) {
         const parts: string[] = []
@@ -982,8 +1121,10 @@ export class Runner {
     )
   }
 
-  private toolOutputLimit(chat: Chat): number {
-    return clampToolOutput(chat.config.maxToolOutputChars)
+  /** Teto do resultado de uma tool: override da chamada de voz (sessão da chamada) ou o do chat. */
+  private toolOutputLimit(chat: Chat, session?: Pick<Session, 'id' | 'depth'>): number {
+    const call = session ? voiceCallContextFor(chat, session) : null
+    return clampToolOutput(call?.tools?.maxToolOutputChars ?? chat.config.maxToolOutputChars)
   }
 
   private async listsGate(
@@ -1089,7 +1230,10 @@ export class Runner {
     const chat = this.repo.chat(session.chatId)
     if (!chat) return done({ content: 'Erro: chat não encontrado.', status: 'error' })
     const name = (TOOL_ALIASES[rawName] ?? rawName) as ToolName
-    if (!availableTools(chat, session).includes(name))
+    // chamada de voz: as tools do turno (`voice.tools.enabledTools`) valem também na execução
+    const voiceCall = voiceCallContextFor(chat, session)
+    const gateChat = voiceCall ? applyVoiceCallChat(chat, voiceCall) : chat
+    if (!availableTools(gateChat, session).includes(name))
       return done({
         content: `Erro: a ferramenta "${rawName}" não está disponível nesta sessão.`,
         status: 'error'
@@ -1100,6 +1244,9 @@ export class Runner {
     } catch (e) {
       return done({ content: `Erro: ${errMsg(e)}`, status: 'error' })
     }
+    // chamada de voz: `end_call` não pede aprovação (só encerra a chamada — o VoiceCallManager vê o
+    // resultado ok e desliga quando a despedida terminar de tocar)
+    if (name === 'end_call') return done({ content: END_CALL_RESULT, status: 'ok' })
     const settings = this.approvalSettings()
     let route =
       name === 'ask_user'
@@ -1145,6 +1292,10 @@ export class Runner {
           judging: true
         })
         try {
+          // o juiz espera o resumo da sessão (descrição atualizada); teto de 20 s → julga assim mesmo
+          await this.capture.waitIdle(session.id)
+          if (signal.aborted) return done({ content: CANCELLED_TEXT, status: 'cancelled' })
+          const fresh = this.repo.chat(chat.id) ?? chat
           const history = this.repo.path(session.id)
           smart = await runJudge({
             sa,
@@ -1167,8 +1318,12 @@ export class Runner {
                 lists: settings.lists
               }),
               environment: {
-                user: effectiveEnvironment(chat.config.smartApprove, settings.smart),
-                captured: capturedTextFor(chat.config.capturedContext, null, [])
+                user: effectiveEnvironment(fresh.config.smartApprove, settings.smart),
+                captured: capturedTextFor(
+                  fresh.config.capturedContext,
+                  session.depth > 0 ? session.id : null,
+                  this.parentChain(session)
+                )
               }
             },
             signal
@@ -1275,7 +1430,7 @@ export class Runner {
       const provider = this.providerFor(chat, session)
       const ctx: ToolContext = {
         signal,
-        maxOutput: this.toolOutputLimit(chat),
+        maxOutput: this.toolOutputLimit(chat, session),
         cacheKey: session.id,
         chatId: chat.id,
         sessionId: session.id,
@@ -1525,6 +1680,8 @@ export class Runner {
   }
 
   async stop(sessionId: string): Promise<void> {
+    // Parar também cancela o resumo da coleta de contexto (nada roda até a próxima mensagem sua)
+    this.capture.cancel(sessionId)
     const session = this.repo.session(sessionId)
     // subagente: para ele e todos os descendentes (inclusive os em segundo plano)
     if (session && session.depth > 0) return this.stopSubtree(session)
@@ -1542,6 +1699,7 @@ export class Runner {
    * no pai já parado (sem novo turno). `clearQueues` descarta o que sobrou nas filas.
    */
   async stopChat(chatId: string, clearQueues = false, status?: SessionStatus): Promise<void> {
+    this.capture.cancelChat(chatId)
     const ids = new Set(this.repo.sessions(chatId).map((s) => s.id))
     for (const r of this.reports.all()) if (ids.has(r.sessionId) && !r.outcome) r.silent = true
     const sts = [...this.runs.values()].filter((s) => s.chatId === chatId)
@@ -1757,6 +1915,64 @@ export class Runner {
     const m = this.repo.update(id, message)
     this.emit({ type: 'message-updated', message: m })
     return m
+  }
+
+  /**
+   * Chamada de voz: para o turno em andamento (se rodando) e ajusta o histórico ao que o usuário
+   * OUVIU (= desktop `amendVoiceTurn`): `dropUser` (turno continuado, sem tools) apaga a mensagem do
+   * usuário e tudo depois dela; senão cada assistente depois dela fica só com o prefixo falado
+   * (`interrupted: true`), sem nada falado e sem tool_calls sai. Idempotente.
+   */
+  async amendVoiceTurn(
+    sessionId: string,
+    input: VoiceTurnAmend
+  ): Promise<{ removed: number; truncated: number }> {
+    if (this.runs.has(sessionId)) await this.stop(sessionId)
+    const spokenBy = typeof input.spoken === 'function' ? input.spoken() : input.spoken
+    const path = this.repo.path(sessionId)
+    const idx = path.findIndex((m) => m.id === input.userMessageId)
+    if (idx < 0 || path[idx].message.role !== 'user') return { removed: 0, truncated: 0 }
+    const after = path.slice(idx + 1)
+    const usedTools = after.some(
+      (m) =>
+        m.message.role === 'tool' ||
+        (m.message.role === 'assistant' && (m.message.tool_calls?.length ?? 0) > 0)
+    )
+    let removed = 0
+    let truncated = 0
+    if (input.dropUser && !usedTools) {
+      for (const m of [...after].reverse()) {
+        await this.deleteMessage(m.id)
+        removed++
+      }
+      await this.deleteMessage(input.userMessageId)
+      return { removed: removed + 1, truncated }
+    }
+    for (const m of after) {
+      if (m.message.role !== 'assistant' || isDisplayOnly(m.meta)) continue
+      const content = typeof m.message.content === 'string' ? m.message.content : ''
+      const spoken = spokenPrefix(content, spokenBy[m.id] ?? [])
+      const hasCalls = (m.message.tool_calls?.length ?? 0) > 0
+      if (!spoken.trim() && !hasCalls) {
+        await this.deleteMessage(m.id)
+        removed++
+        continue
+      }
+      if (spoken === content) continue
+      const voice = m.meta.voice
+        ? { voice: { ...m.meta.voice, ...(spoken.trim() ? { spoken: 'partial' as const } : {}) } }
+        : {}
+      if (voice.voice && !spoken.trim()) delete voice.voice.spoken
+      const updated = this.repo.update(
+        m.id,
+        { ...m.message, content: hasCalls && !spoken ? null : spoken },
+        { ...m.meta, interrupted: true, ...voice }
+      )
+      this.emit({ type: 'message-updated', message: updated })
+      truncated++
+    }
+    this.repairTail(sessionId)
+    return { removed, truncated }
   }
 
   /** Apaga uma mensagem + as subsessões que ela originou (delegate_task). */
@@ -2224,7 +2440,9 @@ export class Runner {
       status: 'running'
     })
     this.emit({ type: 'session-created', session: child })
-    this.append(child.id, { role: 'user', content: task }, { synthetic: true })
+    const taskMsg = this.append(child.id, { role: 'user', content: task }, { synthetic: true })
+    // coleta de contexto: a descrição do subagente = a do pai + a tarefa (o juiz dele usa esta)
+    this.capture.deriveForSubagent(session, child, task, taskMsg)
 
     if (background) {
       // sem o signal do pai: Parar/⚡ na sessão pai não derrubam subagentes em segundo plano
@@ -2340,6 +2558,7 @@ export class Runner {
   /** Para uma subsessão e todos os descendentes; os callbacks dos descendentes não acordam ninguém. */
   private async stopSubtree(session: Session): Promise<void> {
     const ids = subtreeIds(this.repo.sessions(session.chatId), [session.id])
+    for (const id of ids) this.capture.cancel(id)
     const set = new Set(ids)
     for (const r of this.reports.all())
       if (set.has(r.sessionId) && r.sessionId !== session.id && !r.outcome) r.silent = true

@@ -17,7 +17,11 @@
 //   resto → "ok: <texto>" (com raciocínio e usage com custo).
 // Depois de um resultado de tool → "Resultado recebido (<tool>): <início do resultado>".
 // Rotas extras: GET /models, GET /ddg (HTML no formato do DuckDuckGo), GET /page/<nome> (HTML).
+// Fase 6 (voz): `/audio/transcriptions`, `/audio/speech` e o formato da ElevenLabs (`fakeVoice.ts`);
+// na chamada de voz, "tchau"/"desligar" com a tool `end_call` disponível → despedida + end_call.
+//   FAKE_STT_FIXTURES=<pasta com .wav + .txt> → transcrições determinísticas por fixture.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { handleVoice, loadFixtures, type FakeVoiceState, type VoiceFixture } from './fakeVoice.ts'
 
 type Msg = { role: string; content?: unknown; tool_calls?: unknown[]; tool_call_id?: string }
 
@@ -25,6 +29,7 @@ export interface FakeLlm {
   url: string
   port: number
   requests: { path: string; body: Record<string, unknown> }[]
+  voice: FakeVoiceState
   close(): Promise<void>
 }
 
@@ -57,16 +62,23 @@ export const PAGE_HTML = (
 <p>Este é o conteúdo principal da página falsa <b>${name}</b>, com texto suficiente para a extração.</p>
 <p>Segundo parágrafo com <a href="/outra">um link</a>.</p></article></main><footer>rodapé</footer></body></html>`
 
-export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<FakeLlm> {
+export function startFakeLlm(
+  port = 0,
+  opts: { delay?: number; voiceFixtures?: VoiceFixture[] } = {}
+): Promise<FakeLlm> {
   const requests: FakeLlm['requests'] = []
+  const voice: FakeVoiceState = { fixtures: opts.voiceFixtures ?? [], log: [] }
   const cutOnce = new Set<string>()
   const delay = opts.delay ?? 25
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    let raw = ''
-    for await (const c of req) raw += c
+    const bufs: Buffer[] = []
+    for await (const c of req) bufs.push(c as Buffer)
+    const buf = Buffer.concat(bufs)
+    const raw = buf.toString()
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname
+    if (handleVoice(req, res, buf, url, voice)) return
     if (req.method === 'GET' && path.endsWith('/models')) {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(
@@ -296,6 +308,18 @@ export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<F
       )
       return
     }
+    // Smart-Approve → coleta automática de contexto: APPEND com a fala nova do usuário
+    if (system.startsWith('You maintain a short "captured context"')) {
+      const user =
+        /New message\(s\) typed by the user[^\n]*\n"""\n([\s\S]*?)\n"""/.exec(text)?.[1] ?? ''
+      const line =
+        user
+          .split('\n')
+          .filter((l) => l.trim())
+          .pop() ?? ''
+      await streamText(line ? `APPEND\n- Usuário disse: ${line.trim()}` : 'KEEP')
+      return
+    }
     if (system.startsWith('Você dá nome a conversas')) {
       const msg = /<message>\n([\s\S]*?)\n<\/message>/.exec(text)?.[1] ?? text
       const words = msg
@@ -398,6 +422,11 @@ export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<F
         ...(wait ? { wait_for_reply: true, timeout_s: 60 } : {})
       })
     }
+    // chamada de voz: despedida + end_call (só com a tool oferecida — turnos da chamada)
+    const tools = (body.tools ?? []) as { function?: { name?: string }; name?: string }[]
+    const hasEndCall = tools.some((t) => (t.function?.name ?? t.name) === 'end_call')
+    if (hasEndCall && /tchau|desligar/i.test(text) && !toolResult)
+      return toolCall('end_call', { reason: 'o usuário se despediu' }, 'Até mais, tchau! ')
     if (text.startsWith('/chats')) return toolCall('list_chats', {})
     if (text.startsWith('/info')) return toolCall('get_chat_info', {})
     if (text.startsWith('/history'))
@@ -447,6 +476,7 @@ export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<F
         url: `http://127.0.0.1:${p}`,
         port: p,
         requests,
+        voice,
         close: () =>
           new Promise((r) => {
             server.closeAllConnections?.()
@@ -460,7 +490,13 @@ export function startFakeLlm(port = 0, opts: { delay?: number } = {}): Promise<F
 // execução direta (E2E): node tests/fakes/fakeLlm.ts 8790
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.argv[2] ?? 8790)
-  void startFakeLlm(port, { delay: Number(process.env.FAKE_LLM_DELAY ?? 60) }).then((s) =>
+  const dir = process.env.FAKE_STT_FIXTURES
+  void startFakeLlm(port, {
+    delay: Number(process.env.FAKE_LLM_DELAY ?? 60),
+    ...(dir ? { voiceFixtures: loadFixtures(dir) } : {})
+  }).then((s) => {
+    if (dir) s.voice.micDir = dir
     console.log(`LLM falso em ${s.url}`)
-  )
+    if (dir) console.log(`fixtures de voz: ${JSON.stringify(s.voice.fixtures)}`)
+  })
 }
