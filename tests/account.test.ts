@@ -479,6 +479,10 @@ describe('Configurações → Conta e Dispositivos (fase 5)', () => {
     await a.renameDevice('PC do escritório', them.id)
     expect(server.devices.get(them.id)!.name).toBe('PC do escritório')
     expect(a.getState().device!.name).toBe('Meu celular')
+    // renomeado em outro aparelho (o PC): a próxima leitura da lista adota o nome do servidor
+    server.devices.get(me.id)!.name = 'Celular renomeado no PC'
+    await a.devices()
+    expect(a.getState().device!.name).toBe('Celular renomeado no PC')
     await a.revokeDevice(them.id)
     expect(server.devices.get(them.id)!.revoked).toBe(true)
     expect((await a.devices()).map((d) => d.id)).toEqual([me.id])

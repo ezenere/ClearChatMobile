@@ -12,6 +12,7 @@
 #                            (padrão: ../ClearChatWebsite/backend/.venv/bin/python — `make -C ../ClearChatWebsite/backend venv`)
 #   CLEARCHAT_TEST_DIR       pasta de trabalho (log, pid, blobs) — padrão: ${TMPDIR:-/tmp}/clearchat-mobile-test
 #   PORT (8100), DB_PORT (55433), DB_CONTAINER (clearchat-mobile-test-db)
+#   RATE_LIMIT_MULTIPLIER    multiplica os limites de taxa do servidor (padrão 100; produção usa 1)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -27,6 +28,8 @@ server_env() {
   export DATABASE_URL="postgresql+asyncpg://postgres@127.0.0.1:$DB_PORT/clearchat"
   export MAIL_BACKEND=console TURNSTILE_SITE_KEY= TURNSTILE_SECRET_KEY= ADMIN_TOKEN=
   export INSTANCE_NAME="ClearChat (teste local)" INITIAL_SIGNUP_OPEN=true
+  # limites de taxa ×100 (só aqui): a suíte de integração inteira faz bem mais que 20 logins/h do mesmo IP
+  export RATE_LIMIT_MULTIPLIER="${RATE_LIMIT_MULTIPLIER:-100}"
   export BLOB_STORAGE_DIR="$DIR/blobs"
   export PYTHONPATH="$BACKEND" PYTHONPYCACHEPREFIX="$DIR/pycache" PYTHONUNBUFFERED=1
   if [[ ! -s "$DIR/secret" ]]; then head -c 48 /dev/urandom | base64 | tr -d '\n' > "$DIR/secret"; fi

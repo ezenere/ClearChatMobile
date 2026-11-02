@@ -761,7 +761,16 @@ export class AccountService {
   /** Dispositivos da conta (o atual marcado com `current`). */
   async devices(): Promise<DeviceRow[]> {
     const list = await this.http.get<DeviceRow[]>('/api/v1/devices')
-    return Array.isArray(list) ? list : []
+    const out = Array.isArray(list) ? list : []
+    // renomeado em outro aparelho: o servidor é a fonte do nome deste aparelho
+    const dev = this.state.device
+    const me = dev ? out.find((d) => d.current || d.id === dev.id) : undefined
+    if (dev && me && typeof me.name === 'string' && me.name && me.name !== dev.name) {
+      const n = me.name.slice(0, 64)
+      this.deps.kv.set(KV.deviceName, n)
+      this.dispatch({ type: 'device-renamed', name: n })
+    }
+    return out
   }
 
   /** Renomeia este aparelho (sem `id`) ou outro dispositivo da conta. */
@@ -896,6 +905,8 @@ export class AccountService {
     if (rev !== null && rev !== known) void this.refreshKeys(true)
     else if (rev === null && this.state.phase !== 'needs-setup') void this.refreshKeys(true)
     for (const l of this.rtListeners) l.onWelcome?.(w)
+    // nome deste aparelho pode ter mudado em outro dispositivo enquanto o socket estava fora
+    void this.devices().catch(() => undefined)
   }
 
   private onEvent(f: Record<string, unknown>): void {
