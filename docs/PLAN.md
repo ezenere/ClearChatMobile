@@ -183,4 +183,4 @@ Pendências / TODO (4b e depois):
 - O teto do `beforeBackground` depende de timers, que o Android pausa no segundo plano: o gancho não usa
   timers (envio direto), mas um gancho travado deixaria o socket aberto até o SO matá-lo.
 - `browse_url` não executa JavaScript (fetch + extração): páginas montadas só no cliente vêm vazias.
-- A regra `usesLocalTools` é uma cópia (o original do desktop está em `sync/records.ts`, não vendorável).
+- A regra `usesLocalTools` vem vendorada do desktop (`@shared/sync`).
