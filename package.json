@@ -9,6 +9,7 @@
     "android": "expo run:android",
     "prebuild": "expo prebuild --platform android",
     "prebuild:ios": "expo prebuild --platform ios",
+    "build:apk": "scripts/build-apk.sh",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tests",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",

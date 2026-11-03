@@ -31,6 +31,7 @@ Node ≥ 22 e `npm install`.
 | `npm run prebuild:ios`                    | gera `ios/` (`expo prebuild --platform ios`) — no Mac, ver abaixo     |
 | `npm start`                               | Metro (bundler)                                                       |
 | `npm run android`                         | `expo run:android`: compila, instala no aparelho/emulador e abre      |
+| `npm run build:apk`                       | APK release assinado em `dist/` (local, sem conta Expo) — ver abaixo  |
 
 ### Build e emulador
 
@@ -49,6 +50,29 @@ e continuam com o código velho): se o app não refletir uma mudança, reinicie 
 `android/` **não** é versionado (CNG — Continuous Native Generation): tudo o que é nativo vem do
 `app.json`, de plugins e do módulo local `modules/argon2`; `npx expo prebuild --clean` regenera. Se um
 ajuste nativo não couber num config plugin, reavaliar.
+
+### APK para instalar (release, sem conta Expo)
+
+O build é 100% local (Gradle) — não precisa de conta Expo/EAS nem de Play Store. O APK release traz o
+JS embutido (não usa Metro) e não tem as rotas `clearchat://dev/*`.
+
+```sh
+npm run build:apk -- --init      # UMA VEZ: cria ~/.android/clearchat-release.jks + .properties (pede senha)
+npm run build:apk                # → dist/ClearChat-<versão>.apk (arm64-v8a, celulares atuais)
+npm run build:apk -- --install   # idem + adb install -r no aparelho conectado por USB
+ABIS=arm64-v8a,armeabi-v7a npm run build:apk   # celulares 32-bit antigos também
+```
+
+- A assinatura entra pelo plugin `plugins/withReleaseSigning.js`, que lê o `.properties` fora do repo
+  (`CLEARCHAT_SIGNING_PROPS` troca o caminho). Chave e senha **nunca** vão para o repositório.
+- **Faça backup da chave e da senha.** O Android só aceita atualizar um app com a mesma assinatura:
+  sem a chave, a única saída é desinstalar (apaga os dados locais do app; os chats voltam do servidor
+  depois do login, mas o que só existia no aparelho se perde).
+- Pelo mesmo motivo, um app de debug (assinado com a chave de debug) não é atualizado por um release:
+  desinstale o de debug antes de instalar o primeiro release.
+- Para atualizar: suba `version` no `app.json` (o `versionCode` vem do prebuild) e gere de novo; o
+  `adb install -r` ou abrir o APK no celular mantém os dados.
+- Sem cabo: copie o APK para o celular e abra (permita "instalar apps desconhecidos" para o app usado).
 
 ### Self-test da cripto no aparelho
 
