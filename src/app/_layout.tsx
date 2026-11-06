@@ -1,5 +1,6 @@
 // Layout raiz: restaura a sessão (splash até lá) e separa as rotas por fase da conta —
-// (auth) = login/chaves/desbloqueio, (app) = dentro da conta. O self-test de dev fica sempre acessível.
+// (auth) = login/chaves/desbloqueio, (app) = dentro da conta ou sem conta ("Usar sem conta", dados
+// só neste aparelho). O self-test de dev fica sempre acessível.
 import { DarkTheme, Stack, ThemeProvider } from 'expo-router'
 import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
@@ -33,6 +34,7 @@ const theme = {
 
 export default function RootLayout() {
   const { phase } = useSession()
+  const inApp = phase === 'unlocked' || phase === 'local'
 
   useEffect(() => {
     startData()
@@ -64,10 +66,10 @@ export default function RootLayout() {
               }}
             >
               <Stack.Screen name="index" />
-              <Stack.Protected guard={phase === 'unlocked'}>
+              <Stack.Protected guard={inApp}>
                 <Stack.Screen name="(app)" />
               </Stack.Protected>
-              <Stack.Protected guard={phase !== 'unlocked'}>
+              <Stack.Protected guard={!inApp}>
                 <Stack.Screen name="(auth)" />
               </Stack.Protected>
               <Stack.Screen

@@ -3,7 +3,7 @@
 import { Directory, File, Paths } from 'expo-file-system'
 import { AppState, Platform } from 'react-native'
 import { account } from '@/account/native'
-import { attachments, engine, store } from '@/data/native'
+import { attachments, engine, isLocalMode, onAfterMerge, store, syncKeys } from '@/data/native'
 import { hex, sha256 } from '@/crypto'
 import { setEnvSource } from '@/agent/request'
 import { setSearchBases } from '@/agent/tools/web'
@@ -16,11 +16,7 @@ const log = (msg: string): void => {
   if (__DEV__) console.log(`[clearchat:host] ${msg}`)
 }
 
-const keys = () => {
-  const sk = account.subkeys
-  const userId = account.accountUserId
-  return sk && userId ? { userId, sk } : null
-}
+const keys = syncKeys
 
 const dir = new Directory(Paths.document, 'attachments')
 const fileOf = (name: string): File => new File(dir, name)
@@ -84,7 +80,8 @@ export const hostStack = createHostStack({
   notice: (n) => {
     for (const fn of listeners) fn(n)
   },
-  log
+  log,
+  localOnly: isLocalMode
 })
 
 export const host = hostStack.host
@@ -96,6 +93,8 @@ export function startHost(): void {
   if (started) return
   started = true
   bindHost(account, host, hostStack.runner)
+  // dados sem conta unidos à conta (§12): o conteúdo gravado aqui sobe
+  onAfterMerge(() => hostStack.writer.resume())
   AppState.addEventListener('change', (s) => {
     if (s === 'active') host.onForeground()
   })

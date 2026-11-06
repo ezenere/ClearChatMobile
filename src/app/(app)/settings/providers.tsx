@@ -6,6 +6,7 @@ import { View } from 'react-native'
 import { providerKind } from '@shared/providerKinds'
 import { KIND_SHORT, maskApiKey } from '@/settings/records'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
+import { useSession } from '@/account/react'
 import { Note, Row, SettingsScreen } from '@/settings/ui'
 import { Button } from '@/ui/Button'
 import { Card, Divider } from '@/ui/Card'
@@ -14,6 +15,7 @@ import { colors } from '@/ui/theme'
 export default function Providers() {
   const router = useRouter()
   const version = useSettingsVersion()
+  const local = useSession().phase === 'local'
   const { list, def } = readAt(version, () => ({
     list: settings.providers(),
     def: settings.setting<{ providerId?: string | null }>('defaultModel')?.providerId ?? null
@@ -35,8 +37,10 @@ export default function Providers() {
     >
       <Note>
         Endpoints compatíveis com a API da OpenAI (chat/completions), OpenRouter ou a API nativa da
-        Anthropic — e provedores só de voz (ElevenLabs). A chave fica cifrada no sync e só é
-        decifrada nos seus aparelhos.
+        Anthropic — e provedores só de voz (ElevenLabs).{' '}
+        {local
+          ? 'Sem conta, a chave fica só neste celular e vai apenas ao próprio provedor.'
+          : 'A chave fica cifrada no sync e só é decifrada nos seus aparelhos.'}
       </Note>
       {list.length ? (
         <Card padded={false}>

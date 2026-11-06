@@ -32,7 +32,12 @@ export const KV = {
   keys: 'account.keys',
   keysRev: 'account.keys_rev',
   remember: 'account.remember',
-  biometric: 'account.biometric'
+  biometric: 'account.biometric',
+  /**
+   * "Usar sem conta" escolhido (abre direto nos dados locais). Sai quando os dados locais são unidos
+   * a uma conta (§12) — não sai no logout de uma conta ainda não unida.
+   */
+  localMode: 'account.local_mode'
 } as const
 
 /** Sai no logout/revogação (o servidor escolhido fica). */

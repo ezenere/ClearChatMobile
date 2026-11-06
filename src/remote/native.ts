@@ -1,6 +1,6 @@
 // Instância do controle remoto no aparelho (WebSocket da conta, cache de dados, store de anexos).
 import { account } from '@/account/native'
-import { attachments, engine, store } from '@/data/native'
+import { attachments, engine, isLocalMode, store, syncKeys } from '@/data/native'
 import { bindRemote } from './binding'
 import { RemoteController } from './controller'
 import type { UploadDeps } from './upload'
@@ -10,11 +10,7 @@ const log = (msg: string): void => {
   if (__DEV__) console.log(`[clearchat:remote] ${msg}`)
 }
 
-const keys = () => {
-  const sk = account.subkeys
-  const userId = account.accountUserId
-  return sk && userId ? { userId, sk } : null
-}
+const keys = syncKeys
 
 export const remote = new RemoteController({
   ws: { request: (t, f, ms) => account.wsRequest(t, f, ms) },
@@ -29,6 +25,7 @@ export const remote = new RemoteController({
 
 export const uploadDeps: UploadDeps = {
   keys,
+  localOnly: isLocalMode,
   put: (file, data) => void attachments.put(file, data),
   post: (path, json) => account.http.post(path, json),
   putBlob: async (blobId, ct, sha) => {

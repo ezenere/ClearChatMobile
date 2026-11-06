@@ -56,6 +56,11 @@ export interface HostDeps {
   timing?: Partial<typeof HOST_TIMING>
   /** Divergência com versão local (§9); o stack liga depois de criar. */
   divergence?: () => DivergenceService | null
+  /**
+   * Sem conta ("Usar sem conta"): o celular executa todos os chats dele sem servidor — sem janelas
+   * de escrita, sem push (a outbox só sobe depois do merge do primeiro login, §12).
+   */
+  localOnly?: () => boolean
 }
 
 export const HOST_TIMING = {
@@ -163,6 +168,11 @@ export class HostService {
     return this.me
   }
 
+  /** Sem conta: tudo roda aqui, sem servidor. */
+  get localOnly(): boolean {
+    return !!this.d.localOnly?.()
+  }
+
   private log(msg: string): void {
     this.d.log?.(msg)
   }
@@ -221,6 +231,7 @@ export class HostService {
   }
 
   isHostHere(chatId: string): boolean {
+    if (this.localOnly) return true
     return this.state(chatId)?.host?.device_id === this.me || this.windows.has(chatId)
   }
 
@@ -385,6 +396,11 @@ export class HostService {
   async ensureWindow(chatId: string, purpose: 'run' | 'edit' | 'replay' = 'run'): Promise<void> {
     const refused = this.refusal(chatId)
     if (refused) throw new HostError('local_tools', refused)
+    if (this.localOnly) {
+      // sem conta não há janela: o turno só depende do app em primeiro plano
+      if (!this.foreground) throw new HostError('background', 'O app está em segundo plano.')
+      return
+    }
     if (this.windows.has(chatId) && this.busy(chatId) && this.foreground) return
     if (!this.connected)
       throw new HostError(
@@ -446,6 +462,7 @@ export class HostService {
 
   /** Modo do próximo lote de conteúdo do chat (ContentWriter). */
   async pushMode(chatId: string): Promise<{ epoch: number | null } | null> {
+    if (this.localOnly) return null
     const st = this.state(chatId)
     if (st?.diverged) return null
     const w = this.windows.get(chatId)
@@ -553,6 +570,8 @@ export class HostService {
   ): Promise<'granted' | 'pending'> {
     const refused = this.refusal(chatId)
     if (refused) throw new HostError('local_tools', refused)
+    if (this.localOnly)
+      throw new HostError('no_account', 'Entre numa conta para trocar chats entre dispositivos.')
     if (!this.connected) throw new HostError('offline', 'Sem conexão com o servidor.')
     let ack: Record<string, unknown>
     try {

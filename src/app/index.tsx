@@ -5,7 +5,8 @@ import { useSession } from '@/account/react'
 
 export default function Index() {
   const { phase } = useSession()
-  if (phase === 'unlocked') return <Redirect href="/chats" />
+  // sem conta ("Usar sem conta"): direto nos dados deste aparelho
+  if (phase === 'unlocked' || phase === 'local') return <Redirect href="/chats" />
   if (phase === 'locked') return <Redirect href="/unlock" />
   if (phase === 'needs-setup') return <Redirect href="/setup" />
   return <Redirect href="/login" />

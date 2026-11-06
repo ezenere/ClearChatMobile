@@ -13,8 +13,22 @@ import { NewPasswordFields, useNewPassword } from '@/ui/NewPasswordFields'
 import { useSecureScreen } from '@/ui/secure'
 import { TextField } from '@/ui/TextField'
 import { useToast } from '@/ui/Toast'
+import { AccountRequired } from '@/settings/AccountRequired'
 
-export default function ChangePassword() {
+/** Sem conta: explica e leva ao login (§ "Usar sem conta"). */
+export default function ChangePasswordGate() {
+  const { phase } = useSession()
+  if (phase === 'local')
+    return (
+      <AccountRequired
+        title="Trocar senha"
+        what="A senha de criptografia protege os dados da conta no servidor. Sem conta não há nada no servidor para proteger."
+      />
+    )
+  return <ChangePassword />
+}
+
+function ChangePassword() {
   useSecureScreen()
   const s = useSession()
   const router = useRouter()

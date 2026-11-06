@@ -77,7 +77,7 @@ describe.skipIf(!enabled)('dados contra o servidor real', () => {
     const engine = new SyncEngine({ store, http: account.http, keys })
     const fs = new MemoryFs()
     const attachments = new AttachmentStore({ fs, keys, fetchBlob: (id) => engine.fetchBlob(id) })
-    const unbind = bindAccount(account, engine, attachments)
+    const { unbind } = bindAccount(account, engine, attachments)
     await account.unlock(PASSWORD, { remember: true })
     await waitFor(
       () => engine.getStatus().phase === 'idle' && !engine.getStatus().initial,

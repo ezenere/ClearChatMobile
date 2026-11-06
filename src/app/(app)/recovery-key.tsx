@@ -10,8 +10,22 @@ import { RecoveryKeyPanel } from '@/ui/RecoveryKeyPanel'
 import { Hero, Screen, ScreenHeader } from '@/ui/Screen'
 import { useToast } from '@/ui/Toast'
 import { useSecureScreen } from '@/ui/secure'
+import { AccountRequired } from '@/settings/AccountRequired'
 
-export default function NewRecoveryKey() {
+/** Sem conta: explica e leva ao login (§ "Usar sem conta"). */
+export default function NewRecoveryKeyGate() {
+  const { phase } = useSession()
+  if (phase === 'local')
+    return (
+      <AccountRequired
+        title="Chave de recuperação"
+        what="A chave de recuperação abre os dados da conta se você esquecer a senha. Sem conta, não existe chave."
+      />
+    )
+  return <NewRecoveryKey />
+}
+
+function NewRecoveryKey() {
   useSecureScreen()
   const s = useSession()
   const router = useRouter()

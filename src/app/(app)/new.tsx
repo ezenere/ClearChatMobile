@@ -12,6 +12,8 @@ import { TOOL_LABELS } from '@shared/tools'
 import { ENGINE_META } from '@shared/webSearchSettings'
 import type { ChatParams, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
+import { useSession } from '@/account/react'
+import { settings as settingsService } from '@/settings/react'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { store } from '@/data/native'
 import { MOBILE_TOOLS } from '@/agent/request'
@@ -71,6 +73,10 @@ export default function NewChatScreen() {
   const [tools, setTools] = useState<ToolName[]>(base.enabledTools)
   const [picker, setPicker] = useState(false)
   const [creating, setCreating] = useState(false)
+  const local = useSession().phase === 'local'
+  /** Sem modelo padrão (começo do uso): o modelo escolhido aqui vira o padrão dos próximos. */
+  const noDefault = !settings.defaultModel?.model
+  const [saveDefault, setSaveDefault] = useState(true)
 
   /** Trocar de persona: o resto volta ao que ela define. */
   const pickPreset = (id: string) => {
@@ -101,6 +107,8 @@ export default function NewChatScreen() {
         { providerId, model: model.trim(), params, tools, presetId },
         providers
       )
+      if (noDefault && saveDefault)
+        settingsService.setSetting('defaultModel', { providerId, model: model.trim() })
       const { chat } = hostStack.repo.createChat({ config, title: '' })
       router.replace({ pathname: '/chat/[id]', params: { id: chat.id } })
     } catch (e) {
@@ -131,9 +139,27 @@ export default function NewChatScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {!providers.length ? (
-          <Banner tone="warning" title="Nenhum provedor">
-            Cadastre um provedor (OpenRouter, Anthropic ou OpenAI-compatible) em Configurações →
-            Provedores — aqui ou no computador; ele sincroniza com a chave cifrada.
+          <Banner
+            tone="warning"
+            title="Nenhum provedor"
+            testID="new-no-provider"
+            action={
+              <View style={{ marginTop: 8 }}>
+                <Button
+                  title="Adicionar provedor"
+                  icon="add"
+                  variant="secondary"
+                  onPress={() =>
+                    router.replace({ pathname: '/settings/provider/[id]', params: { id: 'new' } })
+                  }
+                  testID="new-add-provider"
+                />
+              </View>
+            }
+          >
+            {local
+              ? 'Cadastre um provedor (OpenRouter, Anthropic ou OpenAI-compatible) com a sua chave de API — ela fica só neste celular.'
+              : 'Cadastre um provedor (OpenRouter, Anthropic ou OpenAI-compatible) em Configurações → Provedores — aqui ou no computador; ele sincroniza com a chave cifrada.'}
           </Banner>
         ) : null}
 
@@ -188,6 +214,16 @@ export default function NewChatScreen() {
           </View>
           <Ionicons name="chevron-forward" size={18} color={colors.subtle} />
         </Pressable>
+
+        {provider && noDefault ? (
+          <ToggleRow
+            title="Usar como modelo padrão"
+            subtitle="Os próximos chats já abrem com este modelo (Configurações → Novos chats)."
+            value={saveDefault}
+            onChange={setSaveDefault}
+            testID="new-save-default"
+          />
+        ) : null}
 
         {provider ? (
           <>

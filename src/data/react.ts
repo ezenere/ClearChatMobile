@@ -1,7 +1,8 @@
 // Ligações React do sync de dados: status, lista de chats (com busca), conteúdo de um chat e anexos.
 // Tudo recarrega sozinho com os eventos do motor (pull, `sync.changes` ao vivo, escrita local).
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { attachments, engine, store } from './native'
+import { attachments, engine, firstLoginMerge, store } from './native'
+import type { MergeState } from './merge'
 import type { DataEvent, SyncStatus } from './engine'
 import type { ChatListItem, LoadedChat } from './store'
 import type { ChatState } from './types'
@@ -124,3 +125,12 @@ export function useAttachment(file: string | null, auto: boolean): AttachmentSta
 }
 
 export { attachments, engine, store }
+
+const IDLE_MERGE: MergeState = { phase: 'idle' }
+const noop = () => () => undefined
+
+/** Merge do primeiro login (§12): a pergunta "Priorizar online/local" e o progresso. */
+export function useFirstLoginMerge(): MergeState {
+  const m = firstLoginMerge()
+  return useSyncExternalStore(m ? m.subscribe : noop, m ? m.getState : () => IDLE_MERGE)
+}

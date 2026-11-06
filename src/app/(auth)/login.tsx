@@ -1,4 +1,6 @@
 // Entrar (§5.2): servidor escolhido + e-mail → código por e-mail (captcha antes, se a instância usar).
+// Ou "Usar sem conta": tudo fica só neste celular (provedores, personas, chats, memórias); entrar
+// depois une esses dados aos da conta (§12).
 import { Link, useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { Linking, StyleSheet, Text, View } from 'react-native'
@@ -17,6 +19,8 @@ export default function Login() {
   const [email, setEmail] = useState(s.login?.email ?? account.lastEmail)
   const [info, setInfo] = useState<SyncServerInfo | null>(account.serverInfo)
   const { busy, error, run } = useAction()
+  // dados criados sem conta ainda não unidos: entrar une; "Continuar sem conta" volta para eles
+  const [hasLocal] = useState(() => account.localModeChosen)
 
   // nome da instância e "Criar conta" (só com cadastro aberto) vêm do /api/info
   useEffect(() => {
@@ -51,6 +55,13 @@ export default function Login() {
           subtitle="Use o e-mail da sua conta. Vamos enviar um código de 6 dígitos — sem senha para lembrar no login."
         />
       </View>
+
+      {hasLocal ? (
+        <Banner tone="info" testID="login-local-note" title="Dados deste celular">
+          Ao entrar, os provedores, personas, chats e memórias que você criou sem conta são unidos
+          aos da conta e passam a sincronizar.
+        </Banner>
+      ) : null}
 
       {s.notice ? (
         <Banner
@@ -114,6 +125,27 @@ export default function Login() {
         />
       </View>
 
+      <View style={styles.orRow}>
+        <View style={styles.orLine} />
+        <Text style={styles.orText}>ou</Text>
+        <View style={styles.orLine} />
+      </View>
+      <View style={styles.local}>
+        <Button
+          testID="login-local"
+          title={hasLocal ? 'Continuar sem conta' : 'Usar sem conta'}
+          icon="phone-portrait-outline"
+          variant="secondary"
+          disabled={busy}
+          onPress={() => account.useWithoutAccount()}
+        />
+        <Text style={styles.localText}>
+          {hasLocal
+            ? 'Volta aos dados guardados só neste celular.'
+            : 'Os dados ficam só neste celular. Dá para entrar numa conta depois para sincronizar.'}
+        </Text>
+      </View>
+
       <View style={styles.bottom}>
         {signupUrl ? (
           <View style={styles.signup}>
@@ -141,6 +173,11 @@ const styles = StyleSheet.create({
   form: { gap: spacing.lg },
   change: { color: colors.accentStrong, fontSize: 14.5, fontWeight: '600' },
   fixed: { color: colors.subtle, fontSize: 13 },
+  orRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  orLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+  orText: { color: colors.subtle, fontSize: 13 },
+  local: { gap: spacing.sm },
+  localText: { color: colors.muted, fontSize: 13.5, lineHeight: 19, textAlign: 'center' },
   bottom: { flexGrow: 1, justifyContent: 'flex-end', gap: spacing.sm, paddingTop: spacing.lg },
   signup: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   muted: { color: colors.muted, fontSize: 14.5 },

@@ -20,6 +20,7 @@ import { ConfirmDialog } from '@/ui/Dialog'
 import { ScreenHeader } from '@/ui/Screen'
 import { useToast } from '@/ui/Toast'
 import { colors, spacing } from '@/ui/theme'
+import { AccountRequired } from '@/settings/AccountRequired'
 
 const CLIENT: Record<string, string> = { desktop: 'computador', mobile: 'celular', web: 'site' }
 
@@ -43,7 +44,20 @@ function seen(d: DeviceRow): string {
       : `visto em ${rel}`
 }
 
-export default function Devices() {
+/** Sem conta: explica e leva ao login (§ "Usar sem conta"). */
+export default function DevicesGate() {
+  const { phase } = useSession()
+  if (phase === 'local')
+    return (
+      <AccountRequired
+        title="Dispositivos"
+        what="A lista de dispositivos é da conta: computadores, site e celulares conectados a ela. Sem conta, este celular não fala com nenhum servidor."
+      />
+    )
+  return <Devices />
+}
+
+function Devices() {
   const s = useSession()
   const router = useRouter()
   const toast = useToast()

@@ -105,3 +105,40 @@ it.runIf(enabled && action === 'revoke' && !!state)(
     expect(list.length).toBeGreaterThan(0)
   }
 )
+
+// "Usar sem conta" (E2E): o que o "desktop" (segundo cliente, com a DEK) vê na conta depois do merge
+// do celular — títulos dos chats, provedores e personas (nunca as chaves).
+it.runIf(enabled && action === 'list' && !!state)('e2e: o desktop lista a conta', async () => {
+  const s = JSON.parse(readFileSync(state, 'utf8')) as E2EState
+  const d = await desktopOf(s)
+  const { openRecord } = await import('../../src/crypto')
+  const out: Record<string, string[]> = {}
+  let after = 0
+  for (;;) {
+    const r = await rest(
+      'GET',
+      `/api/v1/records?after=${after}&limit=500&payload=1`,
+      undefined,
+      d.token
+    )
+    for (const c of r.records ?? []) {
+      if (c.deleted || !c.env || !['chat', 'provider', 'preset', 'message'].includes(c.type))
+        continue
+      const p = await openRecord(d.sk.record, d.userId, c, c.env)
+      if (c.type === 'message') {
+        // por chat: só a contagem e o texto das mensagens de texto curtas
+        const t = (p.message as { content?: unknown })?.content
+        ;(out[`messages:${c.scope?.slice(0, 8)}`] ??= []).push(
+          typeof t === 'string' ? t.slice(0, 40) : '[partes]'
+        )
+        continue
+      }
+      const label = String(p.title ?? p.name ?? '')
+      ;(out[c.type] ??= []).push(`${c.id.slice(0, 8)} ${label}`)
+    }
+    if (!r.has_more || !r.records?.length) break
+    after = r.next ?? r.records[r.records.length - 1].seq
+  }
+  console.log(`E2E_LIST ${JSON.stringify(out)}`)
+  expect(out.chat?.length ?? 0).toBeGreaterThan(0)
+})

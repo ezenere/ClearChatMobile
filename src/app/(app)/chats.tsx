@@ -1,6 +1,7 @@
 // Lista de chats (registros do sync, cache local): mais recentes primeiro, prévia da última mensagem
 // do caminho ativo, persona, selo do host; busca por título e conteúdo (FTS5); puxar para atualizar;
-// estados de carregando/vazio/offline; toque longo → renomear/apagar.
+// estados de carregando/vazio/offline; toque longo → renomear/apagar. Sem conta: selo "Neste celular"
+// no lugar do sync e o vazio leva a cadastrar um provedor (e depois ao Novo chat).
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { FlashList } from '@shopify/flash-list'
 import { useRouter } from 'expo-router'
@@ -17,6 +18,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { describeError } from '@/account/errors'
 import { account } from '@/account/native'
+import { useSession } from '@/account/react'
+import { chatActions, hostStack } from '@/host/react'
+import { readAt, useSettingsVersion } from '@/settings/react'
+import { Button } from '@/ui/Button'
 import { chatTitle } from '@/data/decode'
 import { engine, useChatList, useNow, useSyncStatus } from '@/data/react'
 import type { ChatListItem } from '@/data/store'
@@ -110,6 +115,9 @@ export default function Chats() {
   const insets = useSafeAreaInsets()
   const toast = useToast()
   const status = useSyncStatus()
+  const local = useSession().phase === 'local'
+  const settingsVersion = useSettingsVersion()
+  const hasProvider = readAt(settingsVersion, () => hostStack.providers().length > 0)
   const [query, setQuery] = useState('')
   const { items, states, presets } = useChatList(query)
   const [refreshing, setRefreshing] = useState(false)
@@ -133,14 +141,30 @@ export default function Chats() {
     }
   }
 
-  const loadingFirst = !items.length && !query && status.initial && status.phase !== 'offline'
+  const loadingFirst =
+    !local && !items.length && !query && status.initial && status.phase !== 'offline'
+  /** Sem conta e sem provedor: o vazio é o começo do onboarding. */
+  const needsProvider = local && !hasProvider
   const empty = !items.length && !loadingFirst
 
   return (
     <View style={[st.root, { paddingTop: insets.top }]} testID="screen-chats">
       <View style={st.header}>
         <Text style={st.h1}>Chats</Text>
-        <SyncIndicator status={status} onPress={() => void engine.sync()} />
+        {local ? (
+          <Pressable
+            onPress={() => router.push('/settings')}
+            hitSlop={6}
+            style={st.localPill}
+            testID="local-indicator"
+            accessibilityLabel="Sem conta: os dados ficam só neste celular"
+          >
+            <Ionicons name="phone-portrait-outline" size={13} color={colors.muted} />
+            <Text style={st.localPillText}>Neste celular</Text>
+          </Pressable>
+        ) : (
+          <SyncIndicator status={status} onPress={() => void engine.sync()} />
+        )}
         <Pressable
           onPress={() => router.push('/settings')}
           hitSlop={8}
@@ -169,12 +193,12 @@ export default function Chats() {
           </Pressable>
         ) : null}
       </View>
-      {status.phase === 'offline' && items.length ? (
+      {!local && status.phase === 'offline' && items.length ? (
         <View style={st.banner}>
           <Banner tone="warning">Sem conexão — mostrando o que está salvo neste aparelho.</Banner>
         </View>
       ) : null}
-      {status.phase === 'error' && status.error ? (
+      {!local && status.phase === 'error' && status.error ? (
         <View style={st.banner}>
           <Banner tone="danger">{status.error}</Banner>
         </View>
@@ -188,6 +212,43 @@ export default function Chats() {
               ? `${Math.round(status.progress * 100)}% — decifrando neste aparelho`
               : 'Os dados são decifrados aqui, no aparelho.'}
           </Text>
+        </View>
+      ) : empty && local && !query ? (
+        <View style={st.center} testID={needsProvider ? 'chats-onboarding' : 'chats-empty'}>
+          <View style={st.emptyIcon}>
+            <Ionicons
+              name={needsProvider ? 'key-outline' : 'chatbubbles-outline'}
+              size={26}
+              color={colors.accentStrong}
+            />
+          </View>
+          <Text style={st.centerTitle}>
+            {needsProvider ? 'Comece por um provedor' : 'Nenhuma conversa ainda'}
+          </Text>
+          <Text style={st.centerText}>
+            {needsProvider
+              ? 'Cadastre um provedor de IA (OpenRouter, Anthropic ou compatível com a OpenAI) com a sua chave de API. A chave fica só neste celular.'
+              : 'Comece uma conversa: ela roda neste celular, direto com o seu provedor.'}
+          </Text>
+          <View style={st.emptyAction}>
+            {needsProvider ? (
+              <Button
+                title="Adicionar provedor"
+                icon="add"
+                onPress={() =>
+                  router.push({ pathname: '/settings/provider/[id]', params: { id: 'new' } })
+                }
+                testID="onboarding-add-provider"
+              />
+            ) : (
+              <Button
+                title="Novo chat"
+                icon="chatbubble-ellipses-outline"
+                onPress={() => router.push('/new')}
+                testID="onboarding-new-chat"
+              />
+            )}
+          </View>
         </View>
       ) : empty ? (
         <View style={st.center} testID="chats-empty">
@@ -227,13 +288,15 @@ export default function Chats() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => void refresh()}
-              tintColor={colors.accentStrong}
-              colors={[colors.accent]}
-              progressBackgroundColor={colors.elevated}
-            />
+            local ? undefined : (
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => void refresh()}
+                tintColor={colors.accentStrong}
+                colors={[colors.accent]}
+                progressBackgroundColor={colors.elevated}
+              />
+            )
           }
           renderItem={({ item }) => (
             <ChatRow
@@ -247,16 +310,18 @@ export default function Chats() {
           )}
         />
       )}
-      <Pressable
-        onPress={() => router.push('/new')}
-        style={[st.fab, { bottom: insets.bottom + 20 }]}
-        accessibilityLabel="Novo chat"
-        accessibilityRole="button"
-        testID="fab-new-chat"
-      >
-        <Ionicons name="add" size={22} color={colors.onAccent} />
-        <Text style={st.fabText}>Novo chat</Text>
-      </Pressable>
+      {needsProvider ? null : (
+        <Pressable
+          onPress={() => router.push('/new')}
+          style={[st.fab, { bottom: insets.bottom + 20 }]}
+          accessibilityLabel="Novo chat"
+          accessibilityRole="button"
+          testID="fab-new-chat"
+        >
+          <Ionicons name="add" size={22} color={colors.onAccent} />
+          <Text style={st.fabText}>Novo chat</Text>
+        </Pressable>
+      )}
       {menu ? (
         <ChatActionsSheet
           title={chatTitle(menu.title)}
@@ -275,13 +340,17 @@ export default function Chats() {
         <RenameDialog
           initial={renaming.title}
           onClose={() => setRenaming(null)}
-          onSave={(t) => engine.renameChat(renaming.id, t)}
+          onSave={(t) => chatActions.rename(renaming.id, t)}
         />
       ) : null}
       <ConfirmDialog
         visible={!!deleting}
         title="Apagar chat?"
-        message={`“${chatTitle(deleting?.title)}” será apagado em todos os seus dispositivos, com todas as mensagens. Não dá para desfazer.`}
+        message={
+          local
+            ? `“${chatTitle(deleting?.title)}” será apagado deste celular, com todas as mensagens. Não dá para desfazer.`
+            : `“${chatTitle(deleting?.title)}” será apagado em todos os seus dispositivos, com todas as mensagens. Não dá para desfazer.`
+        }
         confirmLabel="Apagar"
         destructive
         busy={busy}
@@ -290,8 +359,8 @@ export default function Chats() {
           const d = deleting
           if (!d) return
           setBusy(true)
-          engine
-            .deleteChat(d.id)
+          chatActions
+            .remove(d.id)
             .then(() => toast('Chat apagado'))
             .catch((e: unknown) => toast(describeError(e), 'danger'))
             .finally(() => {
@@ -365,6 +434,18 @@ const st = StyleSheet.create({
   },
   centerTitle: { color: colors.fg, fontSize: 16.5, fontWeight: '600', textAlign: 'center' },
   centerText: { color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center' },
+  emptyAction: { marginTop: 10, alignSelf: 'stretch', paddingHorizontal: 20 },
+  localPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: colors.border
+  },
+  localPillText: { color: colors.muted, fontSize: 12.5 },
   fab: {
     position: 'absolute',
     right: 18,

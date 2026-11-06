@@ -65,6 +65,8 @@ export interface HostStackDeps {
   timing?: HostDeps['timing']
   writerTiming?: { debounceMs?: number; retryMs?: number }
   interChatPollMs?: number
+  /** Sem conta ("Usar sem conta"): tudo roda e grava só aqui (§12 sobe depois, no merge). */
+  localOnly?: () => boolean
 }
 
 /** Registro `provider` (§4.3.1) → Provider (a chave fica só em memória/no cache privado). */
@@ -96,6 +98,12 @@ export interface HostStack {
   memory: MemorySystem
   divergence: DivergenceService
   providers: () => Provider[]
+  /**
+   * Renomear/apagar um chat sem conta (só neste aparelho; com conta a lista usa o motor, online).
+   * Apagar para o turno em andamento antes.
+   */
+  renameChatLocal: (chatId: string, title: string) => void
+  deleteChatLocal: (chatId: string) => Promise<void>
 }
 
 export function createHostStack(d: HostStackDeps): HostStack {
@@ -215,7 +223,7 @@ export function createHostStack(d: HostStackDeps): HostStack {
   const addListEntries = async (
     entries: { item: ApprovalListItem; list: 'allow' | 'deny'; entry: string }[]
   ): Promise<void> => {
-    await d.engine.saveLww({ type: 'setting', id: APPROVAL_LISTS_SETTING, scope: null }, (cur) => {
+    const mutate = (cur: Plain | null): Plain => {
       const lists = normalizeApprovalLists(cur?.value)
       for (const { item, list, entry } of entries) {
         const e = entry.replace(/\s+/g, ' ').trim()
@@ -225,7 +233,21 @@ export function createHostStack(d: HostStackDeps): HostStack {
         if (!lists[item][list].includes(e)) lists[item][list].push(e)
       }
       return { ...(cur ?? {}), sv: 1, value: lists }
-    })
+    }
+    if (d.localOnly?.()) {
+      // sem conta: a outbox LWW (sobe só depois do merge do primeiro login)
+      const plain = mutate(d.store.getPlain('setting', APPROVAL_LISTS_SETTING))
+      memory.writer.write({
+        type: 'setting',
+        id: APPROVAL_LISTS_SETTING,
+        scope: null,
+        plain,
+        patch: plain
+      })
+      d.engine.notifySettings()
+      return
+    }
+    await d.engine.saveLww({ type: 'setting', id: APPROVAL_LISTS_SETTING, scope: null }, mutate)
   }
   host = new HostService({
     ws: d.ws,
@@ -240,7 +262,8 @@ export function createHostStack(d: HostStackDeps): HostStack {
     notice: d.notice,
     log: d.log,
     timing: d.timing,
-    divergence: () => divergence
+    divergence: () => divergence,
+    localOnly: d.localOnly
   })
   const divergence = new DivergenceService({
     store: d.store,
@@ -264,5 +287,26 @@ export function createHostStack(d: HostStackDeps): HostStack {
     log: d.log
   })
   d.engine.setHoldContent((chatId) => divergence.hold(chatId))
-  return { repo, writer, runner, host, memory, divergence, providers }
+  const renameChatLocal = (chatId: string, title: string): void => {
+    const t = title.trim().slice(0, 200)
+    if (!t) throw new Error('Dê um nome ao chat.')
+    if (!d.store.getPlain('chat', chatId)) throw new Error('Este chat não existe mais.')
+    writer.writeChat(chatId, { title: t })
+  }
+  const deleteChatLocal = async (chatId: string): Promise<void> => {
+    if (runner.busyChats().has(chatId))
+      await runner.stopChat(chatId, true, 'interrupted').catch(() => undefined)
+    writer.deleteChat(chatId)
+  }
+  return {
+    repo,
+    writer,
+    runner,
+    host,
+    memory,
+    divergence,
+    providers,
+    renameChatLocal,
+    deleteChatLocal
+  }
 }

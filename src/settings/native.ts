@@ -2,7 +2,7 @@
 // retomada da outbox LWW: ao abrir o cofre e quando o WebSocket volta, o que ficou pendente
 // (memórias, provedores, personas, settings gravados offline ou antes de fechar o app) sobe.
 import { account } from '@/account/native'
-import { engine, store } from '@/data/native'
+import { engine, onAfterMerge, store } from '@/data/native'
 import { hostStack } from '@/host/native'
 import { invalidateModels } from '@/agent/providers'
 import { SettingsService } from './service'
@@ -29,6 +29,7 @@ export function startSettings(): void {
     unlocked = now
   }
   account.subscribe(sync)
+  onAfterMerge(() => writer.resume())
   account.addRealtimeListener({ onState: (online) => online && unlocked && writer.resume() })
   sync()
 }

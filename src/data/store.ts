@@ -1226,6 +1226,147 @@ export class LocalStore {
     return v == null ? undefined : (v as T)
   }
 
+  // ---------------- merge do primeiro login (§12) ----------------
+
+  /** Registros do cache (vivos e tombstones) com o plaintext — entrada do merge. */
+  allRecords(): {
+    type: string
+    id: string
+    scope: string | null
+    rev: number
+    seq: number
+    deleted: boolean
+    state: RecordStateCode
+    plain: Plain | null
+  }[] {
+    return this.sql
+      .all<{
+        type: string
+        id: string
+        scope: string | null
+        rev: number
+        seq: number
+        deleted: number
+        state: number
+        plain: string | null
+      }>('SELECT type, id, scope, rev, seq, deleted, state, plain FROM records')
+      .map((r) => ({
+        type: r.type,
+        id: r.id,
+        scope: r.scope,
+        rev: r.rev,
+        seq: r.seq,
+        deleted: !!r.deleted,
+        state: r.state as RecordStateCode,
+        plain: parse(r.plain)
+      }))
+  }
+
+  /**
+   * Troca o id de um registro local pelo da entidade online equivalente (dedupe do merge: o id
+   * canônico é sempre o online). Coleção: as memórias dela trocam de escopo junto.
+   */
+  renameRecord(type: string, oldId: string, newId: string): void {
+    this.sql.run('UPDATE records SET id = ? WHERE type = ? AND id = ?', [newId, type, oldId])
+    if (type === 'memory_collection')
+      this.sql.run("UPDATE records SET scope = ? WHERE type = 'memory' AND scope = ?", [
+        newId,
+        oldId
+      ])
+  }
+
+  /** Regrava o plaintext de um registro vivo (merge: referências remapeadas) e refaz os índices. */
+  replacePlain(type: string, id: string, plain: Plain): void {
+    const r = this.sql.get<{ scope: string | null }>(
+      'SELECT scope FROM records WHERE type = ? AND id = ? AND deleted = 0',
+      [type, id]
+    )
+    if (!r) return
+    this.sql.run('UPDATE records SET plain = ? WHERE type = ? AND id = ?', [
+      JSON.stringify(plain),
+      type,
+      id
+    ])
+    this.parsed.delete(id)
+    this.indexRecord(type, id, r.scope, plain)
+  }
+
+  /** Tira do cache um tombstone local (merge: apagado aqui e nunca enviado — nada a subir). */
+  dropTombstone(type: string, id: string): void {
+    this.sql.run('DELETE FROM records WHERE type = ? AND id = ? AND deleted = 1', [type, id])
+  }
+
+  /** Esvazia as duas outboxes (o merge as refaz a partir do cache). */
+  clearOutboxes(): void {
+    this.sql.run('DELETE FROM outbox')
+    this.sql.run('DELETE FROM lww_outbox')
+  }
+
+  /**
+   * Põe um registro do cache para subir (merge): `baseRev` = revisão online (0 = novo) e `seq` =
+   * o da revisão online (0 = nunca aceito). `plain` null = tombstone. Chat/sessão/mensagem vão na
+   * outbox do conteúdo (o `chat` com o registro inteiro como campos mudados); o resto na LWW.
+   */
+  queueForMerge(w: {
+    type: string
+    id: string
+    scope: string | null
+    baseRev: number
+    seq: number
+    plain: Plain | null
+  }): void {
+    const content = w.type === 'chat' || w.type === 'session' || w.type === 'message'
+    if (content) {
+      const chatId = w.type === 'chat' ? w.id : (w.scope ?? '')
+      this.sql.run(
+        `INSERT INTO outbox (type, id, scope, chat_id, base_rev, deleted, plain, patch, mark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+         ON CONFLICT(type, id) DO UPDATE SET scope = excluded.scope, chat_id = excluded.chat_id,
+           base_rev = excluded.base_rev, deleted = excluded.deleted, plain = excluded.plain,
+           patch = excluded.patch, mark = outbox.mark + 1`,
+        [
+          w.type,
+          w.id,
+          w.scope,
+          chatId,
+          w.baseRev,
+          w.plain ? 0 : 1,
+          w.plain ? JSON.stringify(w.plain) : null,
+          w.type === 'chat' && w.plain ? JSON.stringify(w.plain) : null
+        ]
+      )
+    } else {
+      this.sql.run(
+        `INSERT INTO lww_outbox (type, id, scope, base_rev, deleted, plain, patch, mark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+         ON CONFLICT(type, id) DO UPDATE SET scope = excluded.scope, base_rev = excluded.base_rev,
+           deleted = excluded.deleted, plain = excluded.plain, patch = excluded.patch,
+           mark = lww_outbox.mark + 1`,
+        [
+          w.type,
+          w.id,
+          w.scope,
+          w.baseRev,
+          w.plain ? 0 : 1,
+          w.plain ? JSON.stringify(w.plain) : null,
+          JSON.stringify(w.plain ?? {})
+        ]
+      )
+    }
+    this.sql.run('UPDATE records SET rev = ?, seq = ? WHERE type = ? AND id = ?', [
+      w.baseRev + 1,
+      w.seq,
+      w.type,
+      w.id
+    ])
+  }
+
+  /** Índices em memória (mensagens interpretadas, índice da memória) refeitos depois do merge. */
+  notifyReset(): void {
+    this.parsed.clear()
+    for (const fn of this.wipeListeners) fn()
+  }
+
   /** Contagens para diagnóstico (sem conteúdo). */
   stats(): { records: number; chats: number; messages: number } {
     const n = (sql: string) => this.sql.get<{ n: number }>(sql)?.n ?? 0

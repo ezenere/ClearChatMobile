@@ -10,6 +10,8 @@ import { UserError } from '@/account/errors'
 
 export interface UploadDeps {
   keys: () => { userId: string; sk: Subkeys } | null
+  /** Sem conta: o anexo fica só no store local (sobe no merge do primeiro login, §12/§14). */
+  localOnly?: () => boolean
   /** Grava no store local de anexos (a miniatura aparece na hora). */
   put: (file: string, data: Uint8Array) => void
   post: <T = unknown>(path: string, json: unknown) => Promise<T>
@@ -59,7 +61,8 @@ export async function prepareAttachment(
   mime: string | undefined
 ): Promise<PreparedAttachment> {
   const keys = deps.keys()
-  if (!keys) throw new UserError('Desbloqueie a conta primeiro.')
+  const local = !!deps.localOnly?.()
+  if (!keys && !local) throw new UserError('Desbloqueie a conta primeiro.')
   const cleanName = (name || 'arquivo').split(/[\\/]/).pop()!.slice(0, 180) || 'arquivo'
   if (data.length > ATTACHMENT_LIMITS.maxFileBytes)
     throw new UserError(
@@ -77,7 +80,8 @@ export async function prepareAttachment(
   const sha = hex(digest)
   const file = `${sha}.${storeExt(cleanName, finalMime, kind)}`
   deps.put(file, data)
-  const blobId = await blobIdFromSha256(keys.sk, digest)
+  // sem conta não há blob_id (depende da DEK): o host calcula ao subir, depois do merge
+  const blobId = keys ? await blobIdFromSha256(keys.sk, digest) : ''
   return {
     info: { name: cleanName, mime: finalMime, size: data.length, kind, file, sha256: sha },
     blobId,
@@ -90,7 +94,7 @@ export async function uploadAttachments(
   deps: UploadDeps,
   items: PreparedAttachment[]
 ): Promise<void> {
-  if (!items.length) return
+  if (!items.length || deps.localOnly?.()) return
   const keys = deps.keys()
   if (!keys) throw new UserError('Desbloqueie a conta primeiro.')
   const ids = [...new Set(items.map((i) => i.blobId))]

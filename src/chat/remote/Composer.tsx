@@ -35,6 +35,7 @@ import { describeError } from '@/account/errors'
 import { useAttachment, useSyncStatus } from '@/data/react'
 import type { HostSkill } from '@/remote/mirror'
 import { uploadDeps } from '@/remote/react'
+import { useSession } from '@/account/react'
 import {
   checkMessageLimits,
   prepareAttachment,
@@ -76,6 +77,9 @@ const clock = (ms: number): string => {
 /** Ponto de status: conectado (verde), reconectando (amarelo), sem conexão (vermelho). */
 function useConnectionTone(): { color: string; label: string } {
   const sync = useSyncStatus()
+  // sem conta não há servidor: o chat roda aqui, direto com o provedor
+  const local = useSession().phase === 'local'
+  if (local) return { color: colors.success, label: 'Neste celular, sem conta' }
   if (sync.live) return { color: colors.success, label: 'Conectado' }
   if (sync.phase === 'offline') return { color: colors.danger, label: 'Sem conexão' }
   return { color: colors.warning, label: 'Reconectando' }

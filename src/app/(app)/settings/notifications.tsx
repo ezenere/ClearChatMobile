@@ -22,6 +22,7 @@ import { Button } from '@/ui/Button'
 import { Banner, Card, Divider, SectionLabel, StatusPill, ToggleRow } from '@/ui/Card'
 import { useToast } from '@/ui/Toast'
 import { spacing } from '@/ui/theme'
+import { AccountRequired } from '@/settings/AccountRequired'
 
 const STATUS: Record<
   PushStatus,
@@ -37,7 +38,20 @@ const STATUS: Record<
   error: { tone: 'warning', label: 'Não registrado' }
 }
 
-export default function NotificationSettings() {
+/** Sem conta: explica e leva ao login (§ "Usar sem conta"). */
+export default function NotificationSettingsGate() {
+  const { phase } = useSession()
+  if (phase === 'local')
+    return (
+      <AccountRequired
+        title="Notificações"
+        what="As notificações avisam quando um chat do computador precisa de você ou termina uma resposta — elas chegam pelo servidor da conta (cifradas de ponta a ponta)."
+      />
+    )
+  return <NotificationSettings />
+}
+
+function NotificationSettings() {
   const s = useSession()
   const toast = useToast()
   const prefs = usePushPrefs()

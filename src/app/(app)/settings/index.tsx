@@ -1,7 +1,7 @@
 // Configurações (aberta pela lista de chats): a conta no topo e os mesmos grupos do desktop —
 // Geral (Novos chats, Personas, Voz), Agente (Aprovações, Memórias, Pesquisa na web) e Conexões
 // (Provedores, Dispositivos, Conta). Tudo sincroniza com os outros dispositivos, menos o que é do
-// aparelho (§4.4).
+// aparelho (§4.4). Sem conta: tudo fica só aqui, sem Dispositivos/Conta, e "Entrar numa conta" no topo.
 import { useRouter, type Href } from 'expo-router'
 import { StyleSheet, Text, View } from 'react-native'
 import { MEMORY_CATEGORIES } from '@shared/memory'
@@ -13,6 +13,7 @@ import { useSession } from '@/account/react'
 import type { Connection } from '@/account/session'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { SettingsScreen } from '@/settings/ui'
+import { SignInCard } from '@/settings/AccountRequired'
 import { usePushPrefs } from '@/push/react'
 import { Banner, Card, Divider, ListItem, SectionLabel, StatusPill } from '@/ui/Card'
 import type { IconName } from '@/ui/Button'
@@ -81,11 +82,14 @@ export default function SettingsHome() {
   const router = useRouter()
   const version = useSettingsVersion()
   const sum = readAt(version, summary)
-  const conn = CONNECTION[s.connection]
+  const local = s.phase === 'local'
+  const conn = local ? { tone: 'muted' as const, label: 'Neste celular' } : CONNECTION[s.connection]
   const push = usePushPrefs()
-  const notifSummary = push.enabled
-    ? `Neste aparelho: ${[push.pending && 'pendências', push.reply && 'respostas', push.error && 'erros', push.hostOffline && 'host offline'].filter(Boolean).join(', ') || 'nenhum tipo'}`
-    : 'Desligadas neste aparelho'
+  const notifSummary = local
+    ? 'Precisa de uma conta'
+    : push.enabled
+      ? `Neste aparelho: ${[push.pending && 'pendências', push.reply && 'respostas', push.error && 'erros', push.hostOffline && 'host offline'].filter(Boolean).join(', ') || 'nenhum tipo'}`
+      : 'Desligadas neste aparelho'
   const go = (href: Href) => () => router.push(href)
   const item = (
     href: Href,
@@ -113,14 +117,15 @@ export default function SettingsHome() {
       <View style={st.top}>
         <View style={{ flex: 1 }}>
           <Text style={st.name} numberOfLines={1}>
-            {s.account?.name || 'ClearChat'}
+            {local ? 'Sem conta' : s.account?.name || 'ClearChat'}
           </Text>
           <Text style={st.email} numberOfLines={1} testID="home-email">
-            {s.account?.email}
+            {local ? 'Os dados ficam só neste celular' : s.account?.email}
           </Text>
         </View>
         <StatusPill testID="home-connection" tone={conn.tone} label={conn.label} />
       </View>
+      {local ? <SignInCard testID="settings-signin" /> : null}
       {s.notice?.action === 'new-recovery-key' ? (
         <Banner tone={s.notice.tone} title={s.notice.title}>
           {s.notice.text}
@@ -168,27 +173,33 @@ export default function SettingsHome() {
           'server-outline',
           'Provedores',
           sum.providers,
-          'settings-providers'
+          'settings-providers',
+          local
         )}
-        {item(
-          '/settings/devices',
-          'phone-portrait-outline',
-          'Dispositivos',
-          `${s.device?.name ?? 'Este aparelho'} e os outros da conta`,
-          'settings-devices'
-        )}
-        {item(
-          '/settings/account',
-          'person-circle-outline',
-          'Conta',
-          'Senha, chave de recuperação, bloquear e sair',
-          'settings-account',
-          true
-        )}
+        {local
+          ? null
+          : item(
+              '/settings/devices',
+              'phone-portrait-outline',
+              'Dispositivos',
+              `${s.device?.name ?? 'Este aparelho'} e os outros da conta`,
+              'settings-devices'
+            )}
+        {local
+          ? null
+          : item(
+              '/settings/account',
+              'person-circle-outline',
+              'Conta',
+              'Senha, chave de recuperação, bloquear e sair',
+              'settings-account',
+              true
+            )}
       </Card>
       <Text style={st.foot}>
-        As configurações sincronizam com o computador e o site (cifradas). Ficam só aqui: este
-        aparelho lembrado, a biometria e as notificações.
+        {local
+          ? 'Sem conta, tudo fica só neste celular, no armazenamento privado do app: provedores (com as chaves), personas, chats, memórias e configurações. Só os provedores de IA e de voz que você cadastrar recebem o que for enviado a eles.'
+          : 'As configurações sincronizam com o computador e o site (cifradas). Ficam só aqui: este aparelho lembrado, a biometria e as notificações.'}
       </Text>
     </SettingsScreen>
   )

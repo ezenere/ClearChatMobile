@@ -14,8 +14,22 @@ import { Banner, Card, Divider, ListItem, SectionLabel, ToggleRow } from '@/ui/C
 import { ConfirmDialog } from '@/ui/Dialog'
 import { useToast } from '@/ui/Toast'
 import { spacing } from '@/ui/theme'
+import { AccountRequired } from '@/settings/AccountRequired'
 
-export default function AccountSettings() {
+/** Sem conta: explica e leva ao login (§ "Usar sem conta"). */
+export default function AccountSettingsGate() {
+  const { phase } = useSession()
+  if (phase === 'local')
+    return (
+      <AccountRequired
+        title="Conta"
+        what="Senha de criptografia, chave de recuperação, bloquear e sair são da conta. Sem conta, os dados ficam só neste celular, no armazenamento privado do app."
+      />
+    )
+  return <AccountSettings />
+}
+
+function AccountSettings() {
   const s = useSession()
   const router = useRouter()
   const toast = useToast()
@@ -182,7 +196,7 @@ export default function AccountSettings() {
       <ConfirmDialog
         visible={confirmOut}
         title="Sair da conta?"
-        message="Este aparelho será desconectado da conta e a chave guardada aqui será apagada. Para voltar, entre de novo com o código por e-mail."
+        message="Este aparelho será desconectado da conta e a chave guardada aqui será apagada, junto com os dados da conta neste celular (chats, provedores, personas, memórias) — eles continuam na conta. Para voltar, entre de novo com o código por e-mail; ou use sem conta, começando do zero."
         confirmLabel="Sair"
         destructive
         busy={out.busy}

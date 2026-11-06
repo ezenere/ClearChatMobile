@@ -398,3 +398,38 @@ Pendências / TODO:
   não o texto genérico do protocolo (o expo-notifications não monta `publicVersion`).
 - Dismiss do "host offline" ao religar não exercitado (o desktop religado entrou como dispositivo novo).
 - Aprovar/negar pela notificação: fase seguinte. iOS (APNs pelo FCM): depois.
+
+## Usar sem conta — estado (2026-11-06)
+
+Feito: "Usar sem conta" na primeira tela (fase `local` da conta, persistida; "Entrar numa conta" nas
+Configurações leva ao login normal e "Continuar sem conta" volta). Tudo funciona só no aparelho sobre
+o **mesmo cache e as mesmas outboxes** (dono `local`; `syncAllowed` zera as chaves do sync até o
+merge): provedores, personas, chats executados aqui (sem janela de escrita), memórias, settings, voz,
+anexos. Recursos só com conta (sync, controle remoto, dispositivos, push, conta/segurança) somem ou
+explicam com "Entrar numa conta". Onboarding: sem provedor, a lista leva a "Adicionar provedor" e
+depois ao "Novo chat" (que oferece "Usar como modelo padrão"). Entrar depois faz o **merge do
+primeiro login (§12)** — porta do desktop: online vazio sobe tudo; os dois com dados → "Priorizar
+online · Priorizar local" (contagens, chats conflitantes); dedupe com id canônico online,
+remapeamento do §12.5, idênticos sem envio, replay com `chat_bases = 0`, blobs antes. Detalhes:
+README § "Usar sem conta".
+
+Decisões:
+- **Logout igual a hoje** (apaga o cache da conta; o diálogo agora diz isso); depois, "Usar sem conta"
+  começa do zero. Manter a cópia (o §12 prevê) exigiria converter chats de outros hosts em locais.
+- Sair antes de concluir o merge não apaga os dados sem conta; erro de rede no merge → "Tentar de novo".
+- O merge do desktop (`engine.ts`) é amarrado ao SQLite dele: portado para `src/data/merge.ts` (mesmas
+  regras e normalizações), não vendorado. Sugestão para o desktop: extrair `dedupe`/`remapConfig`/
+  `normName`/`normBase` para `src/shared` (puros) — o celular passaria a vendorar.
+
+Verificado: `npm test` (287; 12 novos em `tests/noAccount.test.ts`), `npm run test:integration` (com
+`tests/integration/noAccount.test.ts`: sem conta → entrar → o "desktop" decifra tudo; 2º celular une
+com prioridade online e o provedor igual deduplicado) e E2E no AVD (instalação limpa → "Usar sem
+conta" → provedor apontando para o LLM falso → chat → reabrir o app com os dados → entrar no servidor
+local com uma conta que já tinha dados → pergunta → "Priorizar local" → os chats dos dois lados na
+lista, e um segundo cliente vendo o chat criado sem conta e o turno seguinte) + APK release (x86_64,
+chave descartável) no AVD. Screenshots em `scratchpad/mobile/noaccount/`.
+
+Pendências / TODO:
+- "Priorizar local" com chats conflitantes (mesmo id dos dois lados) só nos unitários — no uso real os
+  ids sem conta são novos (o conflito aparece se um dia o logout mantiver os dados).
+- iOS: não testado (como o resto).

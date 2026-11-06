@@ -15,7 +15,9 @@ export function bindHost(account: AccountService, host: HostService, runner: Run
   })
   let running = false
   const sync = () => {
-    const unlocked = account.getState().phase === 'unlocked'
+    // sem conta o celular também executa os chats dele (só aqui)
+    const p = account.getState().phase
+    const unlocked = p === 'unlocked' || p === 'local'
     if (unlocked && !running) {
       running = true
       host.start()

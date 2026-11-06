@@ -36,10 +36,10 @@ import {
   type Row
 } from '@/chat/viewModel'
 import { chatTitle } from '@/data/decode'
-import { engine, store, useChat, useNow } from '@/data/react'
+import { store, useChat, useNow } from '@/data/react'
 import { BUSY_STATUS, liveStatus } from '@/remote/mirror'
 import { remote, useRemoteNotices } from '@/remote/react'
-import { host, hostStack, onHostNotice, useChatRuntime } from '@/host/react'
+import { chatActions, host, hostStack, onHostNotice, useChatRuntime } from '@/host/react'
 import { HostError } from '@/host/host'
 import type { DivergenceDetails } from '@/host/divergence'
 import { divergedOf, handoverOf } from '@/remote/types'
@@ -1063,21 +1063,25 @@ export default function ChatScreen() {
         <RenameDialog
           initial={loaded.chat.title}
           onClose={() => setRenaming(false)}
-          onSave={(t) => engine.renameChat(id, t)}
+          onSave={(t) => chatActions.rename(id, t)}
         />
       ) : null}
       <ConfirmDialog
         visible={deleting}
         title="Apagar chat?"
-        message={`“${title}” será apagado em todos os seus dispositivos, com todas as mensagens. Não dá para desfazer.`}
+        message={
+          host.localOnly
+            ? `“${title}” será apagado deste celular, com todas as mensagens. Não dá para desfazer.`
+            : `“${title}” será apagado em todos os seus dispositivos, com todas as mensagens. Não dá para desfazer.`
+        }
         confirmLabel="Apagar"
         destructive
         busy={busyDelete}
         onClose={() => setDeleting(false)}
         onConfirm={() => {
           setBusyDelete(true)
-          engine
-            .deleteChat(id)
+          chatActions
+            .remove(id)
             .then(() => {
               toast('Chat apagado')
               router.back()

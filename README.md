@@ -130,7 +130,8 @@ núcleo — testável no Node):
   cadastrada (`requireAuthentication` do SecureStore, entrada separada; prompt cancelado → pede a senha).
   Bloquear apaga a DEK guardada; Sair revoga o aparelho (`POST /auth/logout`) e apaga tudo.
 - Rotas (`src/app`): `/` decide pela fase; `(auth)` = `login`, `code`, `server`, `captcha`, `setup`,
-  `unlock`, `recover` (cada fase libera só as suas via `Stack.Protected`); `(app)` = `settings/*`
+  `unlock`, `recover` (cada fase libera só as suas via `Stack.Protected`); `(app)` (cofre aberto ou
+  fase `local`, "Usar sem conta") = `settings/*`
   (fase 5; a antiga `home` virou `settings/account`), `recovery-key`. Componentes em `src/ui/` (botões, campos, código de 6 dígitos, cartões, banners,
   diálogo, toast, chave de recuperação, senha nova com medidor).
 - `EXPO_PUBLIC_CLEARCHAT_SYNC_URL` fixa o servidor (desenvolvimento), como o `CLEARCHAT_SYNC_URL` do desktop.
@@ -570,6 +571,59 @@ Roteiro: o celular manda `/search …` num chat do PC → aprovação chega com 
 **morto** (`am kill`) → aprovar no PC → some (dismiss) → resposta chega; PC ausente + turno local →
 resposta para todos; cofre bloqueado/biometria → genérico; matar o desktop com chat rodando →
 "Host offline" → religar o mesmo dispositivo → some.
+
+## Usar sem conta
+
+Na primeira tela, além de **Entrar**, há **Usar sem conta**: o app funciona como o desktop sem
+conta — provedores, personas, chats executados no celular (com versões, anexos, memória,
+subagentes, voz), memórias, aprovações, pesquisa na web e voz ficam **só neste aparelho** e nada vai
+a servidor nenhum além dos provedores de IA/voz que o usuário cadastrar. A conta só acrescenta sync,
+controle remoto dos chats do PC, dispositivos e notificações push.
+
+- **Fase `local`** da conta (`src/account/session.ts`): `useWithoutAccount()` (kv
+  `account.local_mode`, abre direto nos dados locais), `beginSignIn()` (Configurações → "Entrar numa
+  conta" → o login normal; "Continuar sem conta" volta). O WebSocket nunca liga nessa fase.
+- **Mesmo cache, sem parallel store**: o `LocalStore` com dono `local` (`meta.owner`). Toda escrita
+  já passa pelas outboxes persistidas (conteúdo: `outbox`; provedores/personas/settings/memórias:
+  `lww_outbox`), então o modo sem conta é só "outbox que não sobe": `syncAllowed(store)`
+  (`src/data/binding.ts`) zera as chaves do motor, das outboxes e do controle remoto enquanto o dono
+  for `local`. O host (`HostService.localOnly`) executa sem janela de escrita (sem `host.begin`) e
+  recusa trocar de host com "Entre numa conta…"; renomear/apagar chat vão pela outbox local
+  (`chatActions` em `src/host/react.ts`); anexos ficam no store local (sem `blob_id`, que depende da
+  DEK) e sobem no merge. Proteção em repouso igual à dos dados de uma conta (o mesmo SQLite privado
+  do app, sem backup; as chaves de API ficam no plaintext do registro `provider`, como hoje).
+- **Recursos só com conta**: Dispositivos e Conta somem das Configurações; Notificações, Conta,
+  Dispositivos, Trocar senha e Chave de recuperação mostram "Precisa de uma conta" com o botão
+  "Entrar numa conta" (`src/settings/AccountRequired.tsx`) — nenhum beco sem saída. A lista mostra o
+  selo "Neste celular" no lugar do sync; sem provedor, o vazio é o começo do onboarding ("Adicionar
+  provedor" → "Novo chat"); o Novo chat, sem modelo padrão, oferece "Usar como modelo padrão".
+- **Entrar depois = merge do primeiro login (§12)**, porta do `enterMerge`/`runMerge`/`dedupe`/
+  `applyRemap` do engine do desktop (`src/data/merge.ts`; lá o código é amarrado ao SQLite do desktop,
+  não dava para vendorar): no 1º desbloqueio com o cache `local`, baixa e decifra tudo
+  (`sync/changes` + `records/fetch` + `chat-states`), online vazio → sobe tudo sem perguntar, local
+  vazio → só baixa, os dois → a tela do desktop ("Este celular já tem dados", contagens, chats com
+  histórias diferentes, **Priorizar online · Priorizar local**, `src/settings/MergeScreen.tsx`).
+  Dedupe com id canônico online (provedor por baseUrl normalizada + nome/chave, persona por nome +
+  config, coleção por categoria + nome, memória por coleção + título) e remapeamento de todas as
+  referências do §12.5; conteúdo vencedor pela prioridade; idênticos não geram envio; tudo numa
+  transação (as outboxes são refeitas a partir do cache: novos com base 0, os que venceram por cima
+  com `base_rev` = rev online). Depois, cursor = head, dono = a conta e o sync normal liga: os chats
+  sobem em replay com `chat_bases = 0` (o celular vira o host deles), os blobs antes (§14). Erro de
+  rede → "Tentar de novo" (nada foi enviado, os dados locais ficam). Sair da conta antes do merge
+  não apaga os dados sem conta.
+- **Sair de uma conta (decisão: igual a hoje)**: apaga o cache da conta no celular (os dados ficam na
+  conta) — o texto do diálogo diz isso. Depois dá para entrar de novo ou "Usar sem conta" começando do
+  zero. O protocolo (§12, último parágrafo) prevê manter os dados no logout; não foi feito porque
+  exigiria transformar uma cópia de chats executados por outros dispositivos (com ferramentas locais,
+  anexos não baixados) em dados locais — fica como evolução.
+
+Testes: `tests/noAccount.test.ts` (fase, persistência no arquivo do SQLite, turno pelo provedor
+falso sem nenhuma chamada ao servidor, recusas, anexo, merge com o servidor falso: online vazio,
+pergunta, dedupe/remapeamento, prioridade local/online, rede caindo, logout antes/depois) e
+`tests/integration/noAccount.test.ts` (servidor real: sem conta → entrar → o "desktop" decifra tudo
+→ turno seguinte já com janela → 2º celular sem conta une com prioridade online e o provedor igual
+deduplicado). E2E: `E2E_TOOL=list` em `tests/integration/e2eTool.test.ts` mostra o que um segundo
+cliente vê na conta.
 
 ## Build iOS no Mac
 

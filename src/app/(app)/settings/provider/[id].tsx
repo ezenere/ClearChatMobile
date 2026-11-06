@@ -20,6 +20,7 @@ import {
   type ProviderDraft
 } from '@/settings/records'
 import { settings } from '@/settings/react'
+import { useSession } from '@/account/react'
 import { FieldLabel, Multiline, Note, SettingsScreen } from '@/settings/ui'
 import { Button } from '@/ui/Button'
 import { Banner, Card } from '@/ui/Card'
@@ -41,6 +42,7 @@ export default function ProviderEditor() {
   useSecureScreen()
   const { id } = useLocalSearchParams<{ id: string }>()
   const isNew = id === 'new'
+  const local = useSession().phase === 'local'
   const router = useRouter()
   const toast = useToast()
   const [initial] = useState(() => (isNew ? null : settings.provider(id)))
@@ -179,7 +181,7 @@ export default function ProviderEditor() {
         placeholder={
           draft.kind === 'anthropic' ? 'sk-ant-…' : draft.kind === 'elevenlabs' ? 'sk_…' : 'sk-…'
         }
-        hint={`${KEY_HINT[draft.kind]} Fica cifrada no sync; nos previews de request aparece mascarada.`}
+        hint={`${KEY_HINT[draft.kind]} ${local ? 'Fica só neste celular' : 'Fica cifrada no sync'}; nos previews de request aparece mascarada.`}
       />
 
       <Pressable

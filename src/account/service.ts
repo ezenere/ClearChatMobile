@@ -326,7 +326,7 @@ export class AccountService {
 
   /** Troca de servidor — só sem conta (§20.1: um app fala com uma instância por vez). */
   async setServer(kind: SyncServerKind, input?: string): Promise<SyncServerInfo | null> {
-    if (this.state.phase !== 'signed-out')
+    if (this.state.phase !== 'signed-out' && this.state.phase !== 'local')
       throw new UserError('Saia da conta antes de trocar de servidor.')
     if (this.deps.envUrl) throw new UserError('O servidor está fixado por CLEARCHAT_SYNC_URL.')
     const { kv } = this.deps
@@ -364,6 +364,7 @@ export class AccountService {
     const hasKeys = signedIn && !!kv.get(KV.keys)
     const remember = kv.get(KV.remember) !== '0'
     const biometric = kv.get(KV.biometric) === '1'
+    const local = !signedIn && kv.get(KV.localMode) === '1'
     let unlocked = false
     if (hasKeys && remember) {
       let raw: string | null = null
@@ -389,9 +390,36 @@ export class AccountService {
       hasKeys,
       unlocked,
       remember,
-      biometric
+      biometric,
+      local
     })
     this.updateRealtime()
+  }
+
+  // ---------------- sem conta (dados só neste aparelho) ----------------
+
+  /** "Usar sem conta": os dados ficam só neste aparelho; dá para entrar numa conta depois. */
+  useWithoutAccount(): void {
+    if (this.state.phase !== 'signed-out') throw new UserError('Saia da conta primeiro.')
+    this.deps.kv.set(KV.localMode, '1')
+    this.dispatch({ type: 'local' })
+    this.updateRealtime()
+  }
+
+  /** Modo sem conta → login (servidor + código). Os dados locais ficam até serem unidos (§12). */
+  beginSignIn(): void {
+    if (this.state.phase !== 'local') return
+    this.dispatch({ type: 'sign-in' })
+  }
+
+  /** O usuário usa (ou usou) o app sem conta e os dados locais ainda não foram unidos a uma conta. */
+  get localModeChosen(): boolean {
+    return this.deps.kv.get(KV.localMode) === '1'
+  }
+
+  /** Dados locais unidos à conta (§12): o modo sem conta deixa de ser o padrão ao sair. */
+  clearLocalMode(): void {
+    this.deps.kv.set(KV.localMode, null)
   }
 
   private storedAccount(): AccountInfo | null {

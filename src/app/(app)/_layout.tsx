@@ -1,6 +1,8 @@
 // Dentro da conta (cofre aberto): lista de chats, conversa, Configurações e chave de recuperação.
 // Também: abrir o chat de uma notificação tocada (§22.7) e, na primeira entrada, o convite para
-// ligar as notificações (antes do diálogo de permissão do Android 13+).
+// ligar as notificações (antes do diálogo de permissão do Android 13+). Sem conta: as mesmas telas,
+// só com os dados deste aparelho (sem convite de notificações). Primeiro desbloqueio de uma conta
+// com dados criados sem conta: a pergunta do merge (§12) no lugar de tudo até terminar.
 import { Stack, useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
@@ -10,6 +12,9 @@ import {
   requestPermission,
   shouldOfferPermission
 } from '@/push/native'
+import { useSession } from '@/account/react'
+import { useFirstLoginMerge } from '@/data/react'
+import { MergeScreen } from '@/settings/MergeScreen'
 import { Button } from '@/ui/Button'
 import { Dialog } from '@/ui/Dialog'
 import { useToast } from '@/ui/Toast'
@@ -19,6 +24,8 @@ export default function AppLayout() {
   const router = useRouter()
   const toast = useToast()
   const [offer, setOffer] = useState(false)
+  const local = useSession().phase === 'local'
+  const merge = useFirstLoginMerge()
 
   useEffect(() => {
     const open = () => {
@@ -30,6 +37,8 @@ export default function AppLayout() {
   }, [router])
 
   useEffect(() => {
+    // notificações push precisam de conta
+    if (local) return
     let alive = true
     void shouldOfferPermission()
       .then((yes) => {
@@ -39,7 +48,7 @@ export default function AppLayout() {
     return () => {
       alive = false
     }
-  }, [])
+  }, [local])
 
   const later = () => {
     setOffer(false)
@@ -55,6 +64,8 @@ export default function AppLayout() {
       })
       .catch(() => undefined)
   }
+
+  if (merge.phase !== 'idle') return <MergeScreen state={merge} />
 
   return (
     <>

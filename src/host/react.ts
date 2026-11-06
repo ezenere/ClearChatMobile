@@ -6,7 +6,7 @@ import type { ApprovalItemDecision } from '@shared/approvalPolicy'
 import type { ApiMessage, AttachmentInfo, QuestionAnswer } from '@shared/types'
 import type { VoiceMessageMeta } from '@shared/voiceCallMarks'
 import type { ChatState } from '@/data/types'
-import { store } from '@/data/native'
+import { engine, store } from '@/data/native'
 import type { MirrorView } from '@/remote/mirror'
 import { remote } from '@/remote/native'
 import type { CommandResult, HostMode } from '@/remote/types'
@@ -112,6 +112,16 @@ export function useChatRuntime(
     const localTools = usesLocalTools(
       config ?? (store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined)
     )
+    // sem conta: todo chat sem ferramentas locais roda aqui, sem servidor
+    if (host.localOnly)
+      return {
+        mode: 'local' as HostMode,
+        local: !localTools,
+        localTools,
+        view: localTools ? null : host.view(chatId),
+        driver: localDriver,
+        connected: true
+      }
     const mine = !!st?.host && st.host.device_id === host.deviceId
     // sem servidor, um chat que este celular executa continua local: o turno em andamento termina
     // aqui (a outbox sobe depois); começar outro turno espera a conexão
@@ -128,6 +138,21 @@ export function useChatRuntime(
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, state, config, rv, hv])
+}
+
+/**
+ * Renomear/apagar um chat da lista ou do menu: com conta vai ao servidor (motor, online); sem conta
+ * fica só neste aparelho (outbox local, sobe no merge do primeiro login).
+ */
+export const chatActions = {
+  rename: async (chatId: string, title: string): Promise<void> => {
+    if (host.localOnly) hostStack.renameChatLocal(chatId, title)
+    else await engine.renameChat(chatId, title)
+  },
+  remove: async (chatId: string): Promise<void> => {
+    if (host.localOnly) await hostStack.deleteChatLocal(chatId)
+    else await engine.deleteChat(chatId)
+  }
 }
 
 export { host, hostStack, onHostNotice }

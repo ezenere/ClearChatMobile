@@ -5,11 +5,13 @@ import type { SyncServerKind } from '@shared/sync'
 /**
  * - boot: restaurando a sessão salva (splash)
  * - signed-out: sem conta (escolha do servidor, login por código)
+ * - local: usando sem conta — os dados ficam só neste aparelho (nada vai a servidor nenhum); entrar
+ *   numa conta depois une os dados locais aos da conta (§12)
  * - needs-setup: logado, conta sem chaves (definir a senha de criptografia)
  * - locked: logado, DEK fora da memória (senha ou chave de recuperação)
  * - unlocked: DEK e subchaves em memória
  */
-export type Phase = 'boot' | 'signed-out' | 'needs-setup' | 'locked' | 'unlocked'
+export type Phase = 'boot' | 'signed-out' | 'local' | 'needs-setup' | 'locked' | 'unlocked'
 
 export type Connection = 'offline' | 'connecting' | 'online' | 'error'
 
@@ -86,8 +88,14 @@ export type SessionEvent =
       unlocked: boolean
       remember: boolean
       biometric: boolean
+      /** Sem conta: o usuário escolheu "Usar sem conta" (vale só sem sessão). */
+      local?: boolean
     }
   | { type: 'server'; server: ServerChoice }
+  /** "Usar sem conta" (da tela de login). */
+  | { type: 'local' }
+  /** "Entrar numa conta" a partir do modo sem conta (abre o login; os dados locais ficam). */
+  | { type: 'sign-in' }
   | { type: 'code-sent'; email: string; at: number }
   | { type: 'rate-limited'; until: number }
   | { type: 'login-cancelled' }
@@ -180,7 +188,9 @@ export function reduceSession(s: SessionState, e: SessionEvent): SessionState {
         remember: e.remember,
         biometric: e.biometric,
         phase: !signedIn
-          ? 'signed-out'
+          ? e.local
+            ? 'local'
+            : 'signed-out'
           : !e.hasKeys
             ? 'needs-setup'
             : e.unlocked
@@ -190,7 +200,15 @@ export function reduceSession(s: SessionState, e: SessionEvent): SessionState {
       }
     }
     case 'server':
-      return s.phase === 'signed-out' || s.phase === 'boot' ? { ...s, server: e.server } : s
+      return s.phase === 'signed-out' || s.phase === 'boot' || s.phase === 'local'
+        ? { ...s, server: e.server }
+        : s
+    case 'local':
+      return s.phase === 'signed-out'
+        ? { ...s, phase: 'local', login: null, notice: null, connection: 'offline' }
+        : s
+    case 'sign-in':
+      return s.phase === 'local' ? { ...s, phase: 'signed-out', login: null, notice: null } : s
     case 'code-sent':
       return { ...s, login: { email: e.email, sentAt: e.at }, notice: null }
     case 'rate-limited':

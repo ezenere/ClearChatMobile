@@ -111,6 +111,15 @@ export class ContentWriter {
     this.schedule(chatId)
   }
 
+  /** Apaga o chat aqui (tombstone + cascata no cache) — chats sem conta; sobe como os outros. */
+  deleteChat(chatId: string): void {
+    if (!this.d.store.getPlain('chat', chatId)) return
+    this.d.store.dropContentOutbox(chatId)
+    this.d.store.writeLocal({ type: 'chat', id: chatId, scope: chatId, chatId, plain: null })
+    this.d.notify([chatId])
+    this.schedule(chatId)
+  }
+
   pending(chatId: string): boolean {
     return this.d.store.hasOutbox(chatId) || this.flushing.has(chatId)
   }
