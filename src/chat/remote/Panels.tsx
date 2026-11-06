@@ -9,6 +9,7 @@ import { Image } from 'expo-image'
 import { Fragment, useState, type ReactNode } from 'react'
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,7 +26,6 @@ import {
 import { parseAttachmentUrl } from '@shared/attachments'
 import { groupHeadings } from '@shared/shellParse'
 import { categoryLabel } from '@shared/smartApprove'
-import { TOOL_LABELS } from '@shared/tools'
 import type {
   ApprovalRequest,
   AskUserHelp,
@@ -35,11 +35,14 @@ import type {
   QuestionRequest,
   RetryRequest,
   Session,
-  SmartApproveRecord,
-  ToolName
+  SmartApproveRecord
 } from '@shared/types'
 import { formatCost, formatDuration } from '@/chat/format'
 import { toolSummary } from '@/chat/toolSummary'
+import { toolLabel } from '@/agent/toolLabels'
+import { locationPrefs } from '@/location/native'
+import { useLocationPrefs } from '@/location/react'
+import { isLocationTool, locationApprovalText } from '@/location/service'
 import { sessionLabel } from '@/chat/viewModel'
 import { useAttachment } from '@/data/react'
 import type { IconName } from '@/ui/Button'
@@ -260,6 +263,13 @@ export function ApprovalPanel({
           who={fromSub ? 'o subagente' : 'o agente'}
           onDecide={onDecide}
         />
+      ) : isLocationTool(cur.toolName) ? (
+        <LocationPrompt
+          key={cur.id}
+          request={cur}
+          who={fromSub ? 'o subagente' : 'o agente'}
+          onDecide={onDecide}
+        />
       ) : (
         <SimplePrompt
           key={cur.id}
@@ -321,7 +331,7 @@ function SimplePrompt({
 }) {
   const [busy, setBusy] = useState<'allow' | 'deny' | null>(null)
   const [full, setFull] = useState(false)
-  const label = TOOL_LABELS[request.toolName as ToolName] ?? request.toolName
+  const label = toolLabel(request.toolName)
   const text = argsText(request)
   const decide = async (d: 'allow' | 'deny') => {
     haptic(d)
@@ -374,6 +384,101 @@ function SimplePrompt({
           })()}
         </Text>
       </Sheet>
+    </>
+  )
+}
+
+/**
+ * Localização (chats deste celular): diz o que vai para quem na precisão escolhida AQUI
+ * (Configurações → Localização) e oferece "Sempre permitir" (preferência do aparelho).
+ */
+function LocationPrompt({
+  request,
+  who,
+  onDecide
+}: {
+  request: ApprovalRequest
+  who: string
+  onDecide: (r: ApprovalRequest, d: 'allow' | 'deny') => Promise<boolean>
+}) {
+  const [busy, setBusy] = useState<'allow' | 'deny' | 'always' | null>(null)
+  const prefs = useLocationPrefs()
+  const args =
+    request.args && typeof request.args === 'object'
+      ? (request.args as Record<string, unknown>)
+      : {}
+  const text = locationApprovalText(
+    request.toolName,
+    args,
+    prefs,
+    who,
+    Platform.OS === 'ios' ? 'Apple' : 'Google'
+  )
+  const sum = toolSummary(request.toolName, args)
+  const decide = async (d: 'allow' | 'deny' | 'always') => {
+    haptic(d === 'deny' ? 'deny' : 'allow')
+    setBusy(d)
+    if (d === 'always') locationPrefs.set('approval', 'always')
+    if (!(await onDecide(request, d === 'deny' ? 'deny' : 'allow'))) setBusy(null)
+  }
+  return (
+    <>
+      <View style={[p.row, { alignItems: 'flex-start' }]}>
+        <Ionicons
+          name="location-outline"
+          size={16}
+          color={colors.warning}
+          style={{ marginTop: 2 }}
+        />
+        <Text style={[p.question, { flex: 1 }]} testID="approval-location-title">
+          {text.title}
+        </Text>
+      </View>
+      <Text style={[p.note, { flex: 0, fontSize: 13 }]} testID="approval-location-detail">
+        {text.detail}
+      </Text>
+      {sum ? (
+        <View style={p.pre}>
+          <Text style={p.preText} numberOfLines={3}>
+            {sum}
+          </Text>
+        </View>
+      ) : null}
+      <View style={p.actions}>
+        <Btn
+          label="Negar"
+          icon="close"
+          variant="secondary"
+          flex
+          loading={busy === 'deny'}
+          disabled={!!busy}
+          onPress={() => void decide('deny')}
+          testID="approval-deny"
+        />
+        <Btn
+          label="Permitir"
+          icon="checkmark"
+          variant="primary"
+          flex
+          loading={busy === 'allow'}
+          disabled={!!busy}
+          onPress={() => void decide('allow')}
+          testID="approval-allow"
+        />
+      </View>
+      <Pressable
+        disabled={!!busy}
+        onPress={() => void decide('always')}
+        hitSlop={6}
+        testID="approval-location-always"
+      >
+        <Text style={[p.link, { alignSelf: 'center' }]}>
+          {busy === 'always' ? 'Permitindo…' : 'Sempre permitir neste celular'}
+        </Text>
+      </Pressable>
+      <Text style={[p.note, { textAlign: 'center', flex: 0 }]}>
+        Precisão e aprovação em Configurações → Localização.
+      </Text>
     </>
   )
 }

@@ -8,6 +8,7 @@ import { account, kv } from '@/account/native'
 import type { Phase } from '@/account/session'
 import { store } from '@/data/native'
 import { hostStack } from '@/host/native'
+import { systemDialogOpen } from '@/platform/systemDialog'
 import { LocalHostNotifier } from './localHost'
 import { readPrefs, writePref, type PushPrefs } from './model'
 import { type PermissionState, PushRegistrar, pushFeatureOf } from './registration'
@@ -205,7 +206,7 @@ export function startPush(): void {
   localHost.start()
   AppState.addEventListener('change', (s) => {
     if (s === 'background') {
-      if (permissionDialog > 0) return
+      if (permissionDialog > 0 || systemDialogOpen()) return
       localHost.onBackground(hostStack.runner.busyChats())
     } else if (s === 'active') {
       localHost.onForeground()

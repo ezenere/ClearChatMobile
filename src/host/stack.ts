@@ -25,7 +25,13 @@ import type { Sql } from '@/data/sql'
 import { chatTitle } from '@/data/decode'
 import { historyStore } from '@/agent/historyStore'
 import { listModels as fetchModels } from '@/agent/providers'
-import { setMemorySources, setProviderNamesSource, setSiblingsSource } from '@/agent/request'
+import {
+  setLocationSource,
+  setMemorySources,
+  setProviderNamesSource,
+  setSiblingsSource
+} from '@/agent/request'
+import type { LocationService } from '@/location/service'
 import { Runner, type RunnerFiles } from '@/agent/runner'
 import { createMemorySystem, type MemorySystem } from '@/memory/system'
 import { DivergenceService } from './divergence'
@@ -67,6 +73,8 @@ export interface HostStackDeps {
   interChatPollMs?: number
   /** Sem conta ("Usar sem conta"): tudo roda e grava só aqui (§12 sobe depois, no merge). */
   localOnly?: () => boolean
+  /** get_location / nearby_places (src/location); ausente = sem as tools de localização. */
+  location?: LocationService
 }
 
 /** Registro `provider` (§4.3.1) → Provider (a chave fica só em memória/no cache privado). */
@@ -179,6 +187,10 @@ export function createHostStack(d: HostStackDeps): HostStack {
       }
     }
   })
+  const location = d.location
+  setLocationSource(
+    location ? { tools: () => location.tools(), definition: (n) => location.definition(n) } : null
+  )
   setSiblingsSource(({ id, parentSessionId }) => {
     const parent = repo.session(parentSessionId)
     return (
@@ -218,7 +230,8 @@ export function createHostStack(d: HostStackDeps): HostStack {
           updatedAt: c.updatedAt
         }
       }),
-    interChat: bridge
+    interChat: bridge,
+    location
   })
   const addListEntries = async (
     entries: { item: ApprovalListItem; list: 'allow' | 'deny'; entry: string }[]

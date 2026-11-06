@@ -7,8 +7,8 @@ import { memo, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { toolContentText } from '@shared/attachments'
 import { approxTokens } from '@shared/limits'
-import { TOOL_LABELS } from '@shared/tools'
-import type { AskUserRecord, ContentPart, Session, StoredMessage, ToolName } from '@shared/types'
+import { toolLabel } from '@/agent/toolLabels'
+import type { AskUserRecord, ContentPart, Session, StoredMessage } from '@shared/types'
 import { approvalOutcome, type ApprovalOutcome } from '@vendor/renderer/approvalOutcome'
 import type { ToolRun } from '@/remote/mirror'
 import type { IconName } from '@/ui/Button'
@@ -187,7 +187,7 @@ export const ToolCard = memo(function ToolCard({
   const [details, setDetails] = useState(false)
   const args = parseArgs(call.arguments)
   const name = call.name
-  const label = TOOL_LABELS[name as ToolName] ?? name
+  const label = toolLabel(name)
   const isDelegate = name === 'delegate_task'
   const resultText =
     result && result.message.role === 'tool' ? toolContentText(result.message.content) : ''

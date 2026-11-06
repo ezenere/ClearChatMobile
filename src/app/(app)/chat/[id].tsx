@@ -13,8 +13,8 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { ApprovalItemDecision } from '@shared/approvalPolicy'
-import { TOOL_LABELS } from '@shared/tools'
-import type { ApiMessage, ApprovalRequest, Session, StoredMessage, ToolName } from '@shared/types'
+import { toolLabel } from '@/agent/toolLabels'
+import type { ApiMessage, ApprovalRequest, Session, StoredMessage } from '@shared/types'
 import { regenerateTargets, trailingErrorId } from '@vendor/renderer/branchView'
 import { describeError } from '@/account/errors'
 import { HostBadge, RenameDialog } from '@/chat/ChatBits'
@@ -393,7 +393,7 @@ export default function ChatScreen() {
             : compaction?.state === 'running'
               ? 'Compactando conversa…'
               : toolName
-                ? `Executando ${TOOL_LABELS[toolName as ToolName] ?? toolName}…`
+                ? `Executando ${toolLabel(toolName)}…`
                 : draft && draft.reasoning && !draft.content && !draft.toolCalls.length
                   ? 'Pensando…'
                   : 'Trabalhando…'

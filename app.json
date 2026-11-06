@@ -28,7 +28,11 @@
         "backgroundColor": "#6a4be0"
       },
       "predictiveBackGestureEnabled": false,
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "blockedPermissions": [
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -84,6 +88,20 @@
           "enableRemoteNotifications": false
         }
       ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "O ClearChat usa a sua localização só quando um chat executado neste celular pede (com a sua aprovação), para dizer onde você está ou achar lugares por perto. Nunca em segundo plano.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false,
+          "locationFullAccuracyPermission": "Você escolheu a localização “Exata” no ClearChat: com ela o agente acha lugares bem perto de você. Sem ela, o resultado fica aproximado (~1 km).",
+          "motionUsagePermission": false,
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ],
+      "./plugins/withForegroundOnlyLocation",
       "expo-task-manager",
       "./plugins/withReleaseSigning",
       "expo-font",

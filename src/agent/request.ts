@@ -32,6 +32,7 @@ import type {
 import { adapterFor, buildHeaders, chatCompletionsUrl } from '@vendor/desktop/agent/adapters'
 import { buildAnthropicBody, dropAudioParts } from '@vendor/desktop/agent/adapters/anthropic'
 import { expandAttachments, hoistToolMedia, type AttachmentReader } from './attachments'
+import { LOCATION_TOOLS } from '@/location/service'
 import { cachedModelInfo } from './providers'
 
 export interface BuiltRequest {
@@ -62,7 +63,9 @@ export const MOBILE_TOOLS: readonly ToolName[] = [
   'get_chat_info',
   'list_chats',
   'send_to_chat',
-  'read_history'
+  'read_history',
+  // só no celular (src/location): fora do TOOL_NAMES do desktop, que as ignora em enabledTools
+  ...LOCATION_TOOLS
 ]
 
 let extraTools: readonly ToolName[] = []
@@ -153,6 +156,18 @@ function hasSiblings(session: SessionRef): boolean {
   )
 }
 
+// ---------------- localização (fonte registrada pelo app; sem registro = sem as tools) ----------------
+
+/** Tools de localização deste aparelho: as oferecidas agora e as definições (texto muda com a precisão). */
+export interface LocationToolsSource {
+  tools(): ToolName[]
+  definition(name: string): ToolDefinition | undefined
+}
+let locationSource: LocationToolsSource | null = null
+export function setLocationSource(src: LocationToolsSource | null): void {
+  locationSource = src
+}
+
 // ---------------- memória (fontes registradas pelo app; sem registro = nada de memória) ----------------
 
 /** Blocos de memória do system prompt (índice congelado + help). null = nada vai. */
@@ -203,6 +218,9 @@ export function availableTools(
       (n !== 'ask_user' || session.depth === 0) &&
       (!SUBAGENT_TOOLS.includes(n) || canDelegate || siblingOk(n))
   )
+  // localização: ligada no chat (enabledTools) e oferecida por este aparelho, depois das do desktop
+  const location = (locationSource?.tools() ?? []).filter((n) => enabled.has(n))
+  if (location.length) base.push(...location)
   const memory = memoryToolsSource(chat, session).filter((n) => !base.includes(n))
   // chamada de voz: `end_call` só nos turnos da chamada (sessão principal), salvo desligada em
   // "O agente pode encerrar a chamada" — independe de enabledTools/voice.tools (= desktop)
@@ -244,7 +262,7 @@ export function toolDefinitions(
   names: ToolName[],
   providerNames: string[] = providerNamesSource()
 ): ToolDefinition[] {
-  return names.map((n) => toolDefinitionFor(n, providerNames))
+  return names.map((n) => locationSource?.definition(n) ?? toolDefinitionFor(n, providerNames))
 }
 
 /** System prompt → <environment> → memória (índice + help, só a principal) → texto das tools. */

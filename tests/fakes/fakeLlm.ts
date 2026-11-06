@@ -364,6 +364,16 @@ export function startFakeLlm(
         }
         return 'tool'
       })()
+      // localização: devolve o resultado em Markdown (links de mapa tocáveis no E2E)
+      if (name === 'nearby_places' || name === 'get_location') {
+        const body = toolResult
+          .split('\n')
+          .filter((l) => !/^(Busca|Fonte|Ao responder):?/.test(l))
+          .join('\n')
+          .slice(0, 4000)
+        await streamText(`Resultado recebido (${name}):\n\n${body}`)
+        return
+      }
       await streamText(
         `Resultado recebido (${name}): ${toolResult.replace(/\s+/g, ' ').slice(0, 120)}`
       )
@@ -427,6 +437,27 @@ export function startFakeLlm(
     const hasEndCall = tools.some((t) => (t.function?.name ?? t.name) === 'end_call')
     if (hasEndCall && /tchau|desligar/i.test(text) && !toolResult)
       return toolCall('end_call', { reason: 'o usuário se despediu' }, 'Até mais, tchau! ')
+    // localização (tools só do celular): /where · /near <o quê> [raio] · /near-at <lugar> | <o quê>
+    if (text.startsWith('/where')) return toolCall('get_location', {}, 'Vou ver onde você está. ')
+    if (text.startsWith('/near-at')) {
+      const [place, what] = text
+        .slice(8)
+        .split('|')
+        .map((x) => x.trim())
+      return toolCall('nearby_places', { what: what || 'café', near: place, limit: 5 })
+    }
+    if (text.startsWith('/near')) {
+      const m = /^\/near\s+(.*?)(?:\s+(\d+))?$/.exec(text)
+      return toolCall(
+        'nearby_places',
+        {
+          what: m?.[1]?.trim() || 'café',
+          limit: 5,
+          ...(m?.[2] ? { radius_m: Number(m[2]) } : {})
+        },
+        'Vou procurar por perto. '
+      )
+    }
     if (text.startsWith('/chats')) return toolCall('list_chats', {})
     if (text.startsWith('/info')) return toolCall('get_chat_info', {})
     if (text.startsWith('/history'))

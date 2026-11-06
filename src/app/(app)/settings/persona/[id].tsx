@@ -14,6 +14,8 @@ import { TOOL_LABELS, TOOL_NAMES } from '@shared/tools'
 import type { ChatConfig, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { MOBILE_TOOLS } from '@/agent/request'
+import { locationToolHelp, toolLabel } from '@/agent/toolLabels'
+import { LOCATION_TOOLS } from '@/location/service'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
@@ -123,7 +125,7 @@ export default function PersonaEditor() {
       enabledTools: on ? [...tools.filter((x) => x !== t), t] : tools.filter((x) => x !== t)
     })
   // "também no celular" = as tools que o celular executa (MOBILE_TOOLS); o resto só no computador
-  const portable = TOOL_NAMES.filter((t) => MOBILE_TOOLS.includes(t))
+  const portable = [...TOOL_NAMES, ...LOCATION_TOOLS].filter((t) => MOBILE_TOOLS.includes(t))
   const local = TOOL_NAMES.filter((t) => !MOBILE_TOOLS.includes(t))
 
   return (
@@ -277,8 +279,8 @@ export default function PersonaEditor() {
               <View key={t} style={st.toolRow}>
                 {i ? <Divider /> : null}
                 <ToggleRow
-                  title={TOOL_LABELS[t]}
-                  subtitle={TOOL_HELP[t]}
+                  title={toolLabel(t)}
+                  subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
                   value={tools.includes(t)}
                   onChange={(v) => toggleTool(t, v)}
                   testID={`persona-tool-${t}`}

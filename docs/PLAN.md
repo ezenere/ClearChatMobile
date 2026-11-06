@@ -12,7 +12,7 @@ precisamos de módulos nativos. Implementa o protocolo de sync v1.7.0.
 2. **Chats executados no celular** (sem ferramentas locais): o agente roda no aparelho chamando os
    provedores direto (OpenRouter, Anthropic nativa, OpenAI-compatible), com ferramentas
    conversacionais — pesquisa na web, `browse_url` (fetch), memória, `ask_user`, `list_models`, entre
-   chats e subagentes. Só com o app em primeiro plano (o SO suspende em segundo plano). **Decisão de
+   chats e subagentes — e as de localização só do celular (`get_location`, `nearby_places`). Só com o app em primeiro plano (o SO suspende em segundo plano). **Decisão de
    produto:** chats executados no celular não são controlados remotamente (as tools são só
    conversacionais): o celular não publica o stream e recusa comandos remotos; um computador que quiser
    o chat o traz com "Executar neste dispositivo" (§8.8) e continua lá.
@@ -433,3 +433,49 @@ Pendências / TODO:
 - "Priorizar local" com chats conflitantes (mesmo id dos dois lados) só nos unitários — no uso real os
   ids sem conta são novos (o conflito aparece se um dia o logout mantiver os dados).
 - iOS: não testado (como o resto).
+
+## Localização — estado (2026-11-06)
+
+Feito: tools **`get_location`** (posição "durante o uso" pelo `expo-location`, precisão, lugar pelo
+geocodificador do sistema com o Nominatim de reserva) e **`nearby_places`** (Overpass com reserva;
+centro = posição atual, `near` geocodificado no Nominatim/Photon ou coordenadas; texto livre → tags
+OSM; distância no aparelho; endereço, horário, telefone, site e links `geo:`/`maps:`/OSM tocáveis no
+chat) nos chats executados no celular (`src/location/`). Configurações → Localização (precisão
+Aproximada/Exata, aprovação Perguntar/Sempre/Nunca, estado da permissão com atalho para o sistema) e
+o mesmo controle em Aprovações → "Neste celular"; card de aprovação dizendo o que vai para quem.
+Detalhes e decisões: README § "Localização (tools do celular)".
+
+Decisões:
+- Ligar a tool por chat/persona em `config.enabledTools` (sincronizado; nomes fora do `TOOL_NAMES`
+  do desktop, que os ignora sem quebrar); precisão e aprovação **só no aparelho** (o `approvalModes`
+  sincronizado é normalizado pelo desktop e não tem "nunca").
+- Aproximada = só `ACCESS_COARSE_LOCATION` e coordenadas com 2 casas (~1 km) para o modelo, o OSM e o
+  geocodificador; Exata pede a fina (iOS: precisão total temporária) e, recusada, cai para a
+  aproximada avisando.
+- Diálogo de permissão no meio do turno não conta como segundo plano (`src/platform/systemDialog.ts`).
+
+Verificado: `npm test` (31 novos em `tests/location.test.ts`), typecheck, lint, `vendor:check`,
+`expo prebuild --platform ios` numa cópia descartável (só "When In Use", chave de precisão temporária,
+sem modos de segundo plano) e E2E no AVD sem conta com o LLM falso e posição falsa (`adb emu geo
+fix`): card → diálogo do Android só com "aproximada" → turno continua → resultado arredondado + link
+abrindo o Google Maps; `nearby_places` com o Overpass real (pizzarias, ~1 min com a instância pública
+lenta; a primeira tentativa estourou o teto de 25 s → teto ajustado para 45 s por instância/70 s no
+total); "Exata" → diálogo de troca para precisa → "manter aproximada" → aviso; precisa concedida →
+5 casas e rua; `near` pelo Nominatim real (farmácias na Sé); permissão negada → faixa + configurações
+do sistema + erro legível no chat. Screenshots em `scratchpad/mobile/location/`.
+
+Pendências / TODO:
+- **iOS não testado** (só o prebuild): diálogo "durante o uso", precisão total temporária com a
+  "Localização Precisa" desligada, `maps://` abrindo o Apple Mapas, `CLGeocoder`.
+- Desktop: incluir `get_location`/`nearby_places` no `ToolName`/`TOOL_LABELS` (e um card próprio) para
+  o histórico aparecer com rótulo lá; o editor de tools do desktop descarta os nomes desconhecidos de
+  `enabledTools` ao salvar.
+- Política de privacidade do site: acrescentar o parágrafo de localização (texto no relatório desta
+  entrega; não editado aqui).
+- Overpass público às vezes leva perto de 1 min (fila da instância): avaliar mostrar "ainda buscando…"
+  com mais destaque ou uma instância própria.
+
+## Ideias
+
+- Google Places como provedor opcional de lugares (avaliações, fotos, horários mais completos) — pago,
+  com chave do usuário.

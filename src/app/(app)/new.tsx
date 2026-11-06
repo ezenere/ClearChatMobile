@@ -8,7 +8,6 @@ import { useMemo, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { providerKind } from '@shared/providerKinds'
-import { TOOL_LABELS } from '@shared/tools'
 import { ENGINE_META } from '@shared/webSearchSettings'
 import type { ChatParams, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
@@ -17,6 +16,7 @@ import { settings as settingsService } from '@/settings/react'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { store } from '@/data/native'
 import { MOBILE_TOOLS } from '@/agent/request'
+import { locationToolHelp, toolLabel } from '@/agent/toolLabels'
 import { searchPlan } from '@/agent/tools/web'
 import { hostStack } from '@/host/native'
 import {
@@ -243,8 +243,8 @@ export default function NewChatScreen() {
           {MOBILE_TOOLS.map((t) => (
             <ToggleRow
               key={t}
-              title={TOOL_LABELS[t]}
-              subtitle={TOOL_HELP[t]}
+              title={toolLabel(t)}
+              subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
               value={tools.includes(t)}
               onChange={(v) =>
                 setTools((x) => (v ? [...x.filter((y) => y !== t), t] : x.filter((y) => y !== t)))
@@ -261,9 +261,8 @@ export default function NewChatScreen() {
           ) : null}
           {dropped.length ? (
             <Text style={st.hint} testID="new-dropped-tools">
-              Ferramentas locais da persona (
-              {dropped.map((t) => TOOL_LABELS[t as ToolName] ?? t).join(', ')}) ficam desligadas: o
-              celular não executa arquivos, shell nem processos.
+              Ferramentas locais da persona ({dropped.map((t) => toolLabel(t)).join(', ')}) ficam
+              desligadas: o celular não executa arquivos, shell nem processos.
             </Text>
           ) : null}
         </View>

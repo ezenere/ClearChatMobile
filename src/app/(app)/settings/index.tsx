@@ -15,6 +15,8 @@ import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { SettingsScreen } from '@/settings/ui'
 import { SignInCard } from '@/settings/AccountRequired'
 import { usePushPrefs } from '@/push/react'
+import { useLocationPrefs } from '@/location/react'
+import { APPROVAL_LABEL, PRECISION_LABEL } from '@/location/settings'
 import { Banner, Card, Divider, ListItem, SectionLabel, StatusPill } from '@/ui/Card'
 import type { IconName } from '@/ui/Button'
 import { colors, spacing } from '@/ui/theme'
@@ -90,6 +92,8 @@ export default function SettingsHome() {
     : push.enabled
       ? `Neste aparelho: ${[push.pending && 'pendências', push.reply && 'respostas', push.error && 'erros', push.hostOffline && 'host offline'].filter(Boolean).join(', ') || 'nenhum tipo'}`
       : 'Desligadas neste aparelho'
+  const loc = useLocationPrefs()
+  const locationSummary = `Neste aparelho: ${PRECISION_LABEL[loc.precision].toLowerCase()} · ${APPROVAL_LABEL[loc.approval].toLowerCase()}`
   const go = (href: Href) => () => router.push(href)
   const item = (
     href: Href,
@@ -163,7 +167,15 @@ export default function SettingsHome() {
           'settings-approvals'
         )}
         {item('/settings/memory', 'library-outline', 'Memórias', sum.memory, 'settings-memory')}
-        {item('/settings/web', 'globe-outline', 'Pesquisa na web', sum.web, 'settings-web', true)}
+        {item('/settings/web', 'globe-outline', 'Pesquisa na web', sum.web, 'settings-web')}
+        {item(
+          '/settings/location',
+          'location-outline',
+          'Localização',
+          locationSummary,
+          'settings-location',
+          true
+        )}
       </Card>
 
       <SectionLabel>Conexões</SectionLabel>
@@ -199,7 +211,7 @@ export default function SettingsHome() {
       <Text style={st.foot}>
         {local
           ? 'Sem conta, tudo fica só neste celular, no armazenamento privado do app: provedores (com as chaves), personas, chats, memórias e configurações. Só os provedores de IA e de voz que você cadastrar recebem o que for enviado a eles.'
-          : 'As configurações sincronizam com o computador e o site (cifradas). Ficam só aqui: este aparelho lembrado, a biometria e as notificações.'}
+          : 'As configurações sincronizam com o computador e o site (cifradas). Ficam só aqui: este aparelho lembrado, a biometria, as notificações e a localização.'}
       </Text>
     </SettingsScreen>
   )

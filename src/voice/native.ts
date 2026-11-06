@@ -21,6 +21,7 @@ import {
 import { expoPlayback, fileClipStore, NativeMicSource, requestMicPermission } from './nativeAudio'
 import { createVoiceStack } from './stack'
 import { resampleMono } from '@vendor/renderer/audio/pcm'
+import { systemDialogOpen } from '@/platform/systemDialog'
 
 const FAKE_KEY = 'dev.fakeMic'
 const POLL_KEY = 'dev.fakeMicPoll'
@@ -177,7 +178,7 @@ export function startVoice(): void {
   if (started) return
   started = true
   AppState.addEventListener('change', (s) => {
-    if (s === 'active' || permissionPending > 0) return
+    if (s === 'active' || permissionPending > 0 || systemDialogOpen()) return
     if (voice.call.getView().call.active) voice.call.stop('o app foi para o segundo plano')
     if (voice.dictation.getView().phase !== 'idle') voice.dictation.cancel()
   })

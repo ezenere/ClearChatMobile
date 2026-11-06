@@ -625,6 +625,86 @@ pergunta, dedupe/remapeamento, prioridade local/online, rede caindo, logout ante
 deduplicado). E2E: `E2E_TOOL=list` em `tests/integration/e2eTool.test.ts` mostra o que um segundo
 cliente vê na conta.
 
+## Localização (tools do celular)
+
+Duas tools só dos **chats executados neste celular** (`src/location/`, núcleo puro + `native.ts`):
+
+- **`get_location`** — posição atual pelo `expo-location` (só **durante o uso**, nunca em segundo
+  plano), precisão em metros e o lugar "humano" (bairro, cidade, estado, país) pelo **geocodificador
+  do sistema** (`reverseGeocodeAsync`: Android Geocoder / Apple CLGeocoder — sem chave). Sem resposta
+  do sistema → **Nominatim** reverso do OpenStreetMap.
+- **`nearby_places`** — pontos de interesse em volta de um centro (posição atual por padrão, `near`
+  = nome/endereço geocodificado no Nominatim com o Photon de reserva, ou `latitude`+`longitude`) pela
+  **Overpass API** (`overpass-api.de`, reserva `overpass.private.coffee`). `what` em texto livre
+  (pt-BR/inglês: restaurante, pizzaria, café, farmácia, mercado, posto, hospital, "restaurante
+  japonês"…) vira tags OSM (`amenity`/`shop`/`tourism`/`leisure` + `cuisine`/`diet:*`, `tags.ts`);
+  uma tag direta (`amenity=cafe`) também vale; nada reconhecido → busca pelo nome. Por lugar: nome,
+  categoria, culinária, distância (calculada no aparelho), endereço, `opening_hours`, telefone, site
+  e **links de mapa** (Android `geo:lat,lon?q=lat,lon(nome)`, iOS `maps://?q=…&ll=…`, e o https do
+  OpenStreetMap). O Markdown do chat abre `geo:`/`maps:` (sem app de mapas → o link do OSM). A
+  descrição avisa o modelo que o OSM não tem avaliações e manda usar `web_search` para isso. Sem SDK
+  de mapa nem tiles.
+
+Uso justo dos serviços públicos: User-Agent `ClearChat/<versão> (+https://clear.ezenere.com)`, raio
+máximo de 5 km, até 25 lugares (120 elementos pedidos e ordenados aqui), `[timeout:20]` no Overpass e
+25 s no cliente, um pedido por vez com intervalo (≥ 1 s no Overpass, ≥ 1,1 s no Nominatim/Photon),
+cache de 5 min das consultas idênticas (10 min nas geocodificações), sem uso em lote. A reserva só
+entra com a principal sobrecarregada (429/5xx/timeout/rede); consulta recusada (400) não é repetida.
+
+**Configurações → Localização** (preferências do **aparelho**, no kv — não sincronizam):
+
+- **Precisão**: _Aproximada_ (padrão) pede só `ACCESS_COARSE_LOCATION` no Android (o diálogo nem
+  oferece a precisa) e aceita a precisão reduzida do iOS; a posição vai **arredondada a 2 casas
+  (~1 km)** para o modelo, para o OSM e para o geocodificador, sem a rua. _Exata_ pede
+  `ACCESS_FINE_LOCATION` / precisão total; no iOS 14+ com "Localização Precisa" desligada, o pedido
+  mostra o aviso de precisão total temporária (`NSLocationTemporaryUsageDescriptionDictionary`,
+  chave `ExpoLocationFullAccuracy`). Recusado (nos dois sistemas), o resultado fica aproximado e a
+  tool diz isso; o app só insiste uma vez por execução.
+- **Aprovação**: _Perguntar_ (padrão) — card "Permitir que o agente veja sua localização?" com o que
+  vai para quem ("Sua localização aproximada (~1 km) vai para o modelo e para o OpenStreetMap") e
+  "Sempre permitir neste celular"; _Sempre permitir_; _Nunca_ — `get_location` some e o
+  `nearby_places` só aceita `near`/coordenadas. Só pergunta quando a posição do aparelho é usada
+  (`nearby_places` com `near` roda direto). O mesmo controle aparece em Configurações → Aprovações
+  ("Neste celular").
+- **Permissão do sistema**: estado (permitida precisa/aproximada, negada, ainda não pedida,
+  localização do aparelho desligada), "Permitir agora" e "Abrir configurações do sistema".
+
+Decisões:
+
+- **Ligar a tool é por chat, como as outras** (`config.enabledTools`, sincronizado): o Novo chat e a
+  persona listam "Localização" e "Lugares próximos" junto das tools do celular; chats novos as trazem
+  ligadas quando a persona não escolhe as tools. Os nomes ficam **fora** do `ToolName`/`TOOL_NAMES`
+  do desktop (não dá para editar o outro repositório): o desktop trata nomes desconhecidos em
+  `enabledTools` sem quebrar — `normalizeToolList` os mantém, `availableTools` filtra por
+  `TOOL_NAMES` (não oferece), `usesLocalTools` não os conta como locais (o celular continua podendo
+  executar o chat) e o editor de tools do desktop só os perde se o usuário mexer nas tools lá.
+  Mensagens antigas com `get_location` viram card genérico no desktop.
+- **Aprovação no aparelho, fora dos `approvalModes`**: o desktop normaliza esse setting por
+  `APPROVAL_ITEMS` (descartaria um item novo na próxima gravação), o tipo `ApprovalMode` não tem
+  "nunca" e a localização é deste aparelho. O runner usa o `ApprovalRegistry` de sempre (mesmo card,
+  mesmo `DENIED_TEXT`), sem `meta.approval` (o `ApprovalItem` do protocolo não tem o item).
+- **Diálogo de permissão no meio do turno**: no Android ele pausa a Activity (AppState
+  "background"), o que pararia o turno. `src/platform/systemDialog.ts` marca o diálogo e os ouvintes
+  de segundo plano (conta/host, avisos locais, voz) ignoram essa pausa.
+- Manifesto: o plugin `./plugins/withForegroundOnlyLocation` remove os dois serviços em primeiro
+  plano do expo-location; `android.blockedPermissions` bloqueia `ACCESS_BACKGROUND_LOCATION` e
+  `FOREGROUND_SERVICE_LOCATION`. iOS: só `NSLocationWhenInUseUsageDescription` (sem as chaves
+  "Always"), `NSLocationTemporaryUsageDescriptionDictionary`, sem `UIBackgroundModes` de localização
+  e sem o sensor de movimento (`motionUsagePermission: false`) — conferido com `expo prebuild
+--platform ios` numa cópia descartável.
+- Privacidade: a localização vai só para o provedor do modelo do chat e para o OSM (Overpass,
+  Nominatim, Photon) — e para o geocodificador do sistema (Google/Apple); nunca para o servidor do
+  ClearChat. O resultado da tool fica no histórico do chat (sincronizado cifrado, como qualquer
+  mensagem). Ideia futura: Google Places com chave do usuário (ver `docs/PLAN.md` → Ideias).
+
+Testes: `tests/location.test.ts` (texto → tags, consulta Overpass, distância, arredondamento,
+leitura do JSON — fixture inventada em `tests/fakes/osm.ts` —, links, preferências, permissão
+negada/pedida/precisão reduzida, serviços desligados, geocodificador do sistema → Nominatim, reservas
+do Overpass e do Photon, cache, intervalo, oferta na request e o runner com o provedor falso:
+perguntar/permitir/negar/sempre/nunca). O LLM falso ganhou `/where`, `/near <o quê> [raio]` e
+`/near-at <lugar> | <o quê>` (devolve o resultado em Markdown, com os links). E2E no emulador:
+`adb emu geo fix <lon> <lat>` (ex.: Av. Paulista, `-46.6544 -23.5614`).
+
 ## Build iOS no Mac
 
 O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem
@@ -682,7 +762,11 @@ texto em pt-BR). Problemas prováveis e onde mexer:
 - áudio: a sessão é `playAndRecord` com alto-falante (`ensureAudioMode` em
   `src/voice/nativeAudio.ts`), sem o modo de voz do iOS — ou seja, sem cancelamento de eco, como no
   Android: mantenha "Interromper falando" desligado sem fone;
-- `UIBackgroundModes` fica vazio de propósito (chamada e host só em primeiro plano).
+- `UIBackgroundModes` fica vazio de propósito (chamada e host só em primeiro plano);
+- localização: Configurações → Localização → "Permitir agora" (diálogo "durante o uso" em pt-BR);
+  com "Exata" e a "Localização Precisa" desligada nos Ajustes, o pedido deve mostrar o aviso de
+  precisão temporária; o link `maps://` de um lugar abre o Apple Mapas. No simulador: Features →
+  Location → Custom Location.
 
 ## Servidor local para testes
 
@@ -786,6 +870,7 @@ src/host/              chats executados no celular: outbox, janelas, troca de ho
                        divergência com versão local, send_to_chat entre dispositivos
 src/memory/            memória: índice local (SQLite em memória) + outbox LWW + MemoryService
 src/settings/          Configurações: registros/serviço (outbox LWW) + componentes das telas
+src/location/          localização: tags OSM, Overpass, Nominatim/Photon, links de mapa, preferências, aparelho
 src/voice/             voz: STT/TTS pela API, sessão, microfone (expo-audio/teste), fila de
                        reprodução, chamada (VoiceCallManager vendorado + sensor), ditado
 src/crypto/            cripto do protocolo para o app (reexporta a vendorada)

@@ -129,6 +129,15 @@ export function toolSummary(name: string, args: Record<string, unknown> | null):
             : `  · a partir da linha ${o}`
       return pick('path') + range
     }
+    case 'get_location':
+      return ''
+    case 'nearby_places':
+      return join([
+        pick('what'),
+        pick('cuisine'),
+        pick('near') ? `perto de ${pick('near')}` : args.latitude != null ? 'coordenadas' : '',
+        args.radius_m != null && `${String(args.radius_m)} m`
+      ])
     case 'present_file':
       return Array.isArray(args.files)
         ? (args.files as unknown[])
@@ -174,7 +183,9 @@ const ICONS: Record<string, IconName> = {
   memory_delete: 'trash-outline',
   list_skills: 'bulb-outline',
   skill_load: 'bulb-outline',
-  skill_read: 'bulb-outline'
+  skill_read: 'bulb-outline',
+  get_location: 'location-outline',
+  nearby_places: 'map-outline'
 }
 
 export const toolIcon = (name: string): IconName => ICONS[name] ?? 'construct-outline'

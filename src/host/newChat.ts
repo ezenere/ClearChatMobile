@@ -9,6 +9,7 @@ import { isChatProvider, providerKind } from '@shared/providerKinds'
 import type { ChatConfig, ChatParams, Preset, Provider, ToolName } from '@shared/types'
 import type { Plain } from '@/data/types'
 import { MOBILE_TOOLS } from '@/agent/request'
+import { LOCATION_TOOLS } from '@/location/service'
 import { LOCAL_TOOLS } from './policy'
 
 export function presetFromPlain(id: string, p: Plain): Preset {
@@ -80,6 +81,13 @@ export function resolveNewChat(
     if (p) cfg.cacheEnabled = supportsCacheControl(providerKind(p))
   }
   cfg.enabledTools = portableOf(cfg.enabledTools)
+  // localização (só no celular, fora do TOOL_NAMES do desktop): ligada quando a persona não escolhe
+  // as tools — como as outras ferramentas no DEFAULT_CHAT_CONFIG; cada uso pergunta por padrão
+  if (!preset?.config.enabledTools)
+    cfg.enabledTools = [
+      ...cfg.enabledTools,
+      ...LOCATION_TOOLS.filter((t) => !cfg.enabledTools.includes(t))
+    ]
   return mobileSafe(cfg)
 }
 

@@ -13,10 +13,12 @@ import {
   type VoiceCallConfig,
   type VoiceCallPromptMode
 } from '@shared/voice'
-import { TOOL_LABELS, TOOL_NAMES } from '@shared/tools'
+import { TOOL_NAMES } from '@shared/tools'
 import type { Provider, ToolName } from '@shared/types'
 import { Text, View } from 'react-native'
 import { MOBILE_TOOLS } from '@/agent/request'
+import { toolLabel } from '@/agent/toolLabels'
+import { LOCATION_TOOLS } from '@/location/service'
 import { ModelField } from '@/settings/ModelPicker'
 import { FieldLabel, Multiline, Note, NumberField, Segmented } from '@/settings/ui'
 import { Card, Checkbox, Divider, ToggleRow } from '@/ui/Card'
@@ -144,7 +146,7 @@ export function VoiceConfigEditor({
   const set = (p: Partial<VoiceCallConfig>) => onChange({ ...v, ...p })
   const from = scope === 'chat' ? 'a persona e Configurações → Voz' : 'Configurações → Voz'
   const tools = v.tools?.enabledTools ?? null
-  const portable = TOOL_NAMES.filter((t) => MOBILE_TOOLS.includes(t))
+  const portable = [...TOOL_NAMES, ...LOCATION_TOOLS].filter((t) => MOBILE_TOOLS.includes(t))
   const localOn = (tools ?? []).filter((t) => !MOBILE_TOOLS.includes(t))
   const toggleTool = (t: ToolName, on: boolean) => {
     const cur = tools ?? []
@@ -298,7 +300,7 @@ export function VoiceConfigEditor({
             <View key={t} style={{ paddingHorizontal: spacing.lg, paddingVertical: 2 }}>
               {i ? <Divider /> : null}
               <ToggleRow
-                title={TOOL_LABELS[t]}
+                title={toolLabel(t)}
                 value={tools.includes(t)}
                 onChange={(on) => toggleTool(t, on)}
                 testID={`${testID}-tool-${t}`}
@@ -309,8 +311,8 @@ export function VoiceConfigEditor({
       ) : null}
       {localOn.length ? (
         <Text style={{ color: colors.warning, fontSize: 12.5, lineHeight: 17 }}>
-          Ligadas no computador: {localOn.map((t) => TOOL_LABELS[t] ?? t).join(', ')} — com elas a
-          chamada (e o chat) só roda no computador.
+          Ligadas no computador: {localOn.map((t) => toolLabel(t)).join(', ')} — com elas a chamada
+          (e o chat) só roda no computador.
         </Text>
       ) : null}
       <NumberField

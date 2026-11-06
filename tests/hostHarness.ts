@@ -14,6 +14,7 @@ import { DesktopWriter, FakeSync } from './fakeSync'
 import { openNodeSql } from './nodeSql'
 import { startFakeLlm, type FakeLlm } from './fakes/fakeLlm'
 import type { InterChatSendMeta } from '@shared/interChat'
+import type { LocationService } from '../src/location/service'
 
 export class FakeWs implements HostWs {
   epoch = 0
@@ -89,7 +90,9 @@ export interface Harness {
   close(): Promise<void>
 }
 
-export async function makeHarness(opts: { kind?: 'openai' | 'anthropic' } = {}): Promise<Harness> {
+export async function makeHarness(
+  opts: { kind?: 'openai' | 'anthropic'; location?: LocationService } = {}
+): Promise<Harness> {
   const server = new FakeSync()
   const desk = await new DesktopWriter(server).init()
   const store = new LocalStore(openNodeSql())
@@ -148,7 +151,8 @@ export async function makeHarness(opts: { kind?: 'openai' | 'anthropic' } = {}):
     notice: (n) => notices.push(n.text),
     remoteSend: (c, s, t, m) =>
       box.remoteSend ? box.remoteSend(c, s, t, m) : Promise.reject(new Error('sem host remoto')),
-    interChatPollMs: 30
+    interChatPollMs: 30,
+    location: opts.location
   })
   stack.host.onConnection(true)
   stack.host.start()

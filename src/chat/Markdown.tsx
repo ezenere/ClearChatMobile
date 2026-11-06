@@ -6,15 +6,20 @@ import { memo, type ReactNode } from 'react'
 import { Linking, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native'
 import type { Token, Tokens } from 'marked'
 import { attachmentFile } from '@/data/attachments'
+// web, e-mail e os links de mapas das tools de localização (geo: no Android, maps: no iOS)
+import { SAFE_LINK, webFallback } from '@/location/links'
 import { colors, font } from '@/ui/theme'
 import { InlineAttachmentImage } from './Attachments'
 import { lexMarkdown, tableColumnChars, tokensText } from './markdownTokens'
 import { CopyButton } from './ui'
 
-const SAFE_LINK = /^(https?:|mailto:)/i
-
 function openLink(href: string) {
-  if (SAFE_LINK.test(href)) void Linking.openURL(href).catch(() => undefined)
+  if (!SAFE_LINK.test(href)) return
+  void Linking.openURL(href).catch(() => {
+    // sem app de mapas para o geo:/maps: → o mesmo ponto no OpenStreetMap
+    const web = webFallback(href)
+    if (web) void Linking.openURL(web).catch(() => undefined)
+  })
 }
 
 function inline(tokens: Token[] | undefined, k: string): ReactNode[] {

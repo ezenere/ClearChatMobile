@@ -22,7 +22,14 @@ import {
 } from '@shared/approvalPolicy'
 import { SMART_DEFAULTS_SETTING } from '@shared/smartDefaults'
 import type { ApprovalItem, ApprovalListItem, ApprovalSettings } from '@shared/types'
+import { useRouter } from 'expo-router'
 import { MOBILE_TOOLS } from '@/agent/request'
+import { locationPrefs } from '@/location/native'
+import { useLocationPrefs } from '@/location/react'
+import {
+  APPROVAL_HINT as LOCATION_APPROVAL_HINT,
+  APPROVAL_LABEL as LOCATION_APPROVAL_LABEL
+} from '@/location/settings'
 import { ModelField } from '@/settings/ModelPicker'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { FieldLabel, Multiline, Note, Segmented, SettingsScreen } from '@/settings/ui'
@@ -45,6 +52,8 @@ export default function ApprovalsSettings() {
   const version = useSettingsVersion()
   const a = readAt(version, read)
   const [listItem, setListItem] = useState<ApprovalListItem>('commands')
+  const loc = useLocationPrefs()
+  const router = useRouter()
   const [env, setEnv] = useState(a.smart.environment)
   const [seenEnv, setSeenEnv] = useState(a.smart.environment)
   if (seenEnv !== a.smart.environment) {
@@ -89,6 +98,35 @@ export default function ApprovalsSettings() {
           </Card>
         </View>
       ))}
+
+      <FieldLabel>Neste celular</FieldLabel>
+      <Card>
+        <View style={{ gap: 6 }}>
+          <View style={st.itemHead}>
+            <Text style={st.itemTitle}>Localização</Text>
+            <Text style={st.here}>só neste aparelho</Text>
+          </View>
+          <Segmented
+            options={(['ask', 'always', 'never'] as const).map((v) => ({
+              value: v,
+              label: LOCATION_APPROVAL_LABEL[v]
+            }))}
+            value={loc.approval}
+            onChange={(v) => locationPrefs.set('approval', v)}
+            testID="location-approval-mode"
+          />
+          <Text style={st.hint}>
+            {LOCATION_APPROVAL_HINT[loc.approval]}. Precisão e permissão do sistema em{' '}
+            <Text
+              style={{ color: colors.accentStrong }}
+              onPress={() => router.push('/settings/location')}
+            >
+              Configurações → Localização
+            </Text>
+            .
+          </Text>
+        </View>
+      </Card>
 
       <FieldLabel>Smart-Approve — padrões globais</FieldLabel>
       <Card>

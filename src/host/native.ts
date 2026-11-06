@@ -7,6 +7,7 @@ import { attachments, engine, isLocalMode, onAfterMerge, store, syncKeys } from 
 import { hex, sha256 } from '@/crypto'
 import { setEnvSource } from '@/agent/request'
 import { setSearchBases } from '@/agent/tools/web'
+import { location } from '@/location/native'
 import { openNativeSql } from '@/data/sqlNative'
 import { remote } from '@/remote/native'
 import { bindHost } from './binding'
@@ -21,7 +22,12 @@ const keys = syncKeys
 const dir = new Directory(Paths.document, 'attachments')
 const fileOf = (name: string): File => new File(dir, name)
 
-setEnvSource(() => ({ os: `Android ${String(Platform.Version)}` }))
+setEnvSource(() => ({
+  os:
+    Platform.OS === 'ios'
+      ? `iOS ${String(Platform.Version)}`
+      : `Android ${String(Platform.Version)}`
+}))
 // desenvolvimento/E2E: buscador falso local (nunca em produção — só com a variável definida)
 if (process.env.EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG)
   setSearchBases({ ddg: process.env.EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG })
@@ -81,7 +87,8 @@ export const hostStack = createHostStack({
     for (const fn of listeners) fn(n)
   },
   log,
-  localOnly: isLocalMode
+  localOnly: isLocalMode,
+  location
 })
 
 export const host = hostStack.host

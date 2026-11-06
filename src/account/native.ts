@@ -9,6 +9,7 @@ import { CaptchaBroker } from './captcha'
 import { defaultDeviceName } from './deviceName'
 import { AccountService, type DeviceProfile } from './service'
 import { KV, type KeyValueStore, type SecretStore } from './storage'
+import { systemDialogOpen } from '@/platform/systemDialog'
 
 const TOKENS = 'clearchat.tokens'
 const DEK = 'clearchat.dek'
@@ -130,7 +131,11 @@ let started: Promise<void> | null = null
 export function startAccount(): Promise<void> {
   if (started) return started
   account.setForeground(AppState.currentState !== 'background')
-  AppState.addEventListener('change', (s) => account.setForeground(s !== 'background'))
+  AppState.addEventListener('change', (s) => {
+    // diálogo de permissão do sistema (ex.: localização no meio de um turno): não é segundo plano
+    if (s === 'background' && systemDialogOpen()) return
+    account.setForeground(s !== 'background')
+  })
   started = account.init()
   return started
 }

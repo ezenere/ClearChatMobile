@@ -194,6 +194,7 @@ import {
   type ToolContext
 } from './tools/util'
 import { browseUrl, webSearch } from './tools/web'
+import { isLocationTool, type LocationService } from '@/location/service'
 
 export const CANCELLED_TEXT = '[Interrompido pelo usuário antes de concluir]'
 export const DENIED_TEXT = 'O usuário negou a execução desta ferramenta.'
@@ -284,6 +285,8 @@ export interface RunnerDeps {
   /** Entrega de send_to_chat em outro chat (local ou ao host remoto). */
   interChat?: InterChatRouter
   now?: () => number
+  /** get_location / nearby_places (src/location); ausente = sem as tools de localização. */
+  location?: LocationService
   /** Coleta de contexto do Smart-Approve: chamada ao modelo (testes) e espera (padrão do desktop). */
   capture?: {
     call?: ConstructorParameters<typeof ContextCaptureService>[0]['call']
@@ -1248,10 +1251,17 @@ export class Runner {
     // resultado ok e desliga quando a despedida terminar de tocar)
     if (name === 'end_call') return done({ content: END_CALL_RESULT, status: 'ok' })
     const settings = this.approvalSettings()
-    let route =
+    // localização: aprovação do APARELHO (Perguntar/Sempre/Nunca — Configurações → Localização), não
+    // os modos sincronizados; só pergunta quando a posição do aparelho é usada
+    const loc = isLocationTool(name) ? this.d.location : undefined
+    let route: ReturnType<typeof approvalRoute> =
       name === 'ask_user'
         ? { kind: 'run' as const }
-        : approvalRoute(chat.config, settings.modes, name)
+        : isLocationTool(name)
+          ? loc?.needsApproval(name, args)
+            ? { kind: 'user' as const }
+            : { kind: 'run' as const }
+          : approvalRoute(chat.config, settings.modes, name)
     const item = TOOL_ITEM[name]
     const mode = item ? effectiveMode(chat.config, settings.modes, item) : null
     if (route.kind !== 'run' && takeOverride(session.id, name, args)) {
@@ -1479,7 +1489,9 @@ export class Runner {
                   ? listChatsTool
                   : name === 'read_history'
                     ? readHistoryTool
-                    : null
+                    : loc && isLocationTool(name)
+                      ? (a: Record<string, unknown>, c: ToolContext) => loc.run(name, a, c)
+                      : null
       if (!impl)
         return done({
           content: `Erro: ferramenta "${name}" indisponível no celular.`,
