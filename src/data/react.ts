@@ -1,6 +1,15 @@
 // Ligações React do sync de dados: status, lista de chats (com busca), conteúdo de um chat e anexos.
 // Tudo recarrega sozinho com os eventos do motor (pull, `sync.changes` ao vivo, escrita local).
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { attachments, engine, firstLoginMerge, store } from './native'
 import type { MergeState } from './merge'
 import type { DataEvent, SyncStatus } from './engine'
@@ -17,12 +26,15 @@ export interface ChatListData {
   items: ChatListItem[]
   states: Map<string, ChatState>
   presets: Map<string, { name: string; icon: string }>
+  /** Chats "Só neste aparelho" (§23.10). */
+  localOnly: Set<string>
 }
 
 const readList = (query: string): ChatListData => ({
   items: store.listChats(query),
   states: store.chatStates(),
-  presets: store.presets()
+  presets: store.presets(),
+  localOnly: new Set(store.localOnlyChats())
 })
 
 /** Versão que sobe a cada evento do motor que pode mudar a lista (com um pequeno debounce). */
@@ -98,24 +110,43 @@ export interface AttachmentState {
   load: () => void
 }
 
+/**
+ * De onde vêm os anexos exibidos: o store do aparelho (padrão) ou outra fonte — os chats só ao
+ * vivo (§23.7) baixam do host para a MEMÓRIA (`memoryOnly`: nada de cache de imagem em disco).
+ */
+export interface AttachmentSource {
+  local(file: string): string | null
+  ensure(file: string): Promise<string>
+  onReady(fn: (file: string) => void): () => void
+  memoryOnly?: boolean
+}
+
+export const AttachmentSourceCtx = createContext<AttachmentSource | null>(null)
+
+/** A fonte em uso (para o `cachePolicy` das imagens). */
+export function useAttachmentSource(): AttachmentSource {
+  return useContext(AttachmentSourceCtx) ?? attachments
+}
+
 /** Anexo no aparelho (`auto` = baixa sozinho, ex.: imagens na conversa). */
 export function useAttachment(file: string | null, auto: boolean): AttachmentState {
+  const src = useAttachmentSource()
   const [ready, setReady] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => attachments.onReady((f) => f === file && setReady((x) => x + 1)), [file])
+  useEffect(() => src.onReady((f) => f === file && setReady((x) => x + 1)), [file, src])
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `ready` é o gatilho de releitura
-  const uri = useMemo(() => (file ? attachments.local(file) : null), [file, ready])
+  const uri = useMemo(() => (file ? src.local(file) : null), [file, ready, src])
   const load = useCallback(() => {
     if (!file) return
     setLoading(true)
     setError(null)
-    attachments
+    src
       .ensure(file)
       .then(() => setReady((x) => x + 1))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Falha ao baixar.'))
       .finally(() => setLoading(false))
-  }, [file])
+  }, [file, src])
   useEffect(() => {
     if (!file || uri || !auto) return
     const t = setTimeout(load, 0)

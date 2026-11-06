@@ -369,6 +369,10 @@ export class SyncEngine {
         if (online.has(key(l.type, l.id)) || l.type === 'setting') continue
         // escrito aqui e ainda não aceito (outbox): não é "sumiu do servidor"
         if (this.d.store.isPending(l.type, l.id)) continue
+        // "Só neste aparelho" (§23.2): nunca esteve no servidor
+        const chatOf = l.type === 'chat' ? l.id : l.scope
+        if ((l.type === 'chat' || l.type === 'session' || l.type === 'message') && chatOf)
+          if (this.d.store.isLocalOnly(chatOf)) continue
         this.d.store.removeRecord(l.type, l.id, l.scope)
         if (l.type === 'chat') gone.push(l.id)
       }
@@ -481,6 +485,11 @@ export class SyncEngine {
     opened: { plain: Plain | null; state: RecordStateCode } | undefined
   ): boolean {
     const store = this.d.store
+    // chat só deste aparelho (§23.8.5): o que vier do servidor com o mesmo id (o tombstone de
+    // quando foi tirado do servidor) não mexe na cópia local
+    const chatOf =
+      c.type === 'chat' ? c.id : c.type === 'session' || c.type === 'message' ? c.scope : null
+    if (chatOf && store.isLocalOnly(chatOf)) return false
     const local = store.recordMeta(c.type, c.id)
     if (local && c.rev < local.rev) {
       this.log(`revisão antiga ignorada: ${c.type}/${c.id} ${c.rev} < ${local.rev}`)

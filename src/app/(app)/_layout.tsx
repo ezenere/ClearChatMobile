@@ -13,7 +13,9 @@ import {
   shouldOfferPermission
 } from '@/push/native'
 import { useSession } from '@/account/react'
-import { useFirstLoginMerge } from '@/data/react'
+import { store, useFirstLoginMerge } from '@/data/react'
+import { live } from '@/live/native'
+import { resolvePushOpen } from '@/live/navigation'
 import { MergeScreen } from '@/settings/MergeScreen'
 import { Button } from '@/ui/Button'
 import { Dialog } from '@/ui/Dialog'
@@ -28,13 +30,25 @@ export default function AppLayout() {
   const merge = useFirstLoginMerge()
 
   useEffect(() => {
+    let alive = true
     const open = () => {
-      const chatId = pushNavigation.take()
-      if (chatId) router.push({ pathname: '/chat/[id]', params: { id: chatId } })
+      const t = pushNavigation.take()
+      if (!t) return
+      void resolvePushOpen(t, live, (id) => !!store.getPlain('chat', id)).then((r) => {
+        if (!alive) return
+        if (r.kind === 'chat') router.push({ pathname: '/chat/[id]', params: { id: r.chatId } })
+        else if (r.kind === 'live')
+          router.push({ pathname: '/live/[id]', params: { id: r.chatId } })
+        else toast(r.text, 'info')
+      })
     }
     open()
-    return pushNavigation.subscribe(open)
-  }, [router])
+    const off = pushNavigation.subscribe(open)
+    return () => {
+      alive = false
+      off()
+    }
+  }, [router, toast])
 
   useEffect(() => {
     // notificações push precisam de conta
@@ -78,6 +92,7 @@ export default function AppLayout() {
       >
         <Stack.Screen name="chats" />
         <Stack.Screen name="chat/[id]" />
+        <Stack.Screen name="live/[id]" />
         <Stack.Screen name="new" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="files/[chat]" />
         <Stack.Screen name="file/[chat]" />

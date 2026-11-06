@@ -30,6 +30,10 @@ type Params = {
   mode?: string
   nokey?: string
   raw?: string
+  /** 1.8.0: device_id do host (hostDeviceId / from_device_id / device_id do host_offline). */
+  hostid?: string
+  /** 1.8.0: chat só ao vivo (tocar abre o visualizador). */
+  live?: string
 }
 
 async function craft(p: Params): Promise<Record<string, string>> {
@@ -40,7 +44,13 @@ async function craft(p: Params): Promise<Record<string, string>> {
   const base = { v: '1', kind, tag, sent_at: sentAt }
   if (kind === 'dismiss') return { ...base, env: '' }
   if (kind === 'host_offline')
-    return { ...base, env: '', chat_id: p.chat ?? '', device_name: p.host ?? 'Desktop de casa' }
+    return {
+      ...base,
+      env: '',
+      chat_id: p.chat ?? '',
+      device_name: p.host ?? 'Desktop de casa',
+      ...(p.hostid ? { device_id: p.hostid } : {})
+    }
   const userId = account.accountUserId
   const key = p.mode === 'badkey' ? randomBytes(32) : account.pushKey
   if (!userId || !key) throw new Error('cofre fechado')
@@ -53,10 +63,16 @@ async function craft(p: Params): Promise<Record<string, string>> {
     text: p.text ?? 'Executar: npm test',
     requestId: kind === 'reply' || kind === 'error' ? undefined : 'req-dev',
     hostName: p.host ?? 'Desktop de casa',
+    ...(p.hostid ? { hostDeviceId: p.hostid } : {}),
+    ...(p.live === '1' ? { live: true } : {}),
     ts: p.mode === 'old' ? Date.now() - 2 * 86_400_000 : Date.now()
   }
   const env = await sealPush(key, userId, kind, tag, payload)
-  return { ...base, env: JSON.stringify(env) }
+  return {
+    ...base,
+    env: JSON.stringify(env),
+    ...(p.hostid ? { from_device_id: p.hostid } : {})
+  }
 }
 
 export default function DevPush() {

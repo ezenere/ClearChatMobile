@@ -112,8 +112,8 @@ export function useChatRuntime(
     const localTools = usesLocalTools(
       config ?? (store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined)
     )
-    // sem conta: todo chat sem ferramentas locais roda aqui, sem servidor
-    if (host.localOnly)
+    // sem conta / "Só neste aparelho": todo chat sem ferramentas locais roda aqui, sem servidor
+    if (host.localOnlyChat(chatId))
       return {
         mode: 'local' as HostMode,
         local: !localTools,
@@ -146,11 +146,11 @@ export function useChatRuntime(
  */
 export const chatActions = {
   rename: async (chatId: string, title: string): Promise<void> => {
-    if (host.localOnly) hostStack.renameChatLocal(chatId, title)
+    if (host.localOnlyChat(chatId)) hostStack.renameChatLocal(chatId, title)
     else await engine.renameChat(chatId, title)
   },
   remove: async (chatId: string): Promise<void> => {
-    if (host.localOnly) await hostStack.deleteChatLocal(chatId)
+    if (host.localOnlyChat(chatId)) await hostStack.deleteChatLocal(chatId)
     else await engine.deleteChat(chatId)
   }
 }

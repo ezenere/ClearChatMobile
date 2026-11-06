@@ -77,7 +77,7 @@ export interface LoadedChat {
   broken: number
 }
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -148,8 +148,19 @@ CREATE TABLE IF NOT EXISTS parked_queue (
   at INTEGER NOT NULL
 );
 INSERT OR REPLACE INTO meta (key, value) VALUES ('history_backfill', '1');
+`,
+  // 1.8.0 (§23.2): modo local de cada chat executado aqui — `live` = "Só neste aparelho" (nunca
+  // vai ao servidor); ausente = online. `tomb_rev` = rev do tombstone de quando foi tirado do
+  // servidor (para uma volta futura com base_rev certa, §23.8)
+  5: `
+CREATE TABLE IF NOT EXISTS chat_storage (
+  chat_id TEXT PRIMARY KEY, storage TEXT NOT NULL, tomb_rev INTEGER NOT NULL DEFAULT 0
+);
 `
 }
+
+/** Modo de um chat deste aparelho (§23.2). `live_pending` conta como `live` para tudo. */
+export type ChatStorage = 'online' | 'live' | 'live_pending'
 
 /** Texto indexado na busca: só a conversa (usuário/assistente), cortado. */
 const FTS_MAX_CHARS = 20_000
@@ -292,7 +303,8 @@ export class LocalStore {
         'commands_seen',
         'lww_outbox',
         'parked_queue',
-        'history_fts'
+        'history_fts',
+        'chat_storage'
       ])
         this.sql.run(`DELETE FROM ${t}`)
       this.sql.run(`INSERT INTO messages_fts(messages_fts) VALUES ('delete-all')`)
@@ -775,6 +787,12 @@ export class LocalStore {
       }
       if (w.plain) this.putRecord(change, w.plain, RecordState.Ok)
       else this.deleteRecord(change)
+      // "Só neste aparelho" (§23.2): NADA deste chat vai para a outbox
+      if (this.isLocalOnly(w.chatId)) {
+        if (!w.plain && w.type === 'chat') this.purgeChat(w.chatId)
+        this.refreshDirtyChats()
+        return
+      }
       const patch = w.patch ? { ...(parse(row?.patch ?? null) ?? {}), ...w.patch } : null
       if (patch && w.patch?.config && typeof w.patch.config === 'object') {
         const prev = parse(row?.patch ?? null)?.config
@@ -797,6 +815,91 @@ export class LocalStore {
         ]
       )
       this.refreshDirtyChats()
+    })
+  }
+
+  // ---------------- modo do chat (§23.2) ----------------
+
+  storageOf(chatId: string): ChatStorage {
+    const r = this.sql.get<{ storage: string }>(
+      'SELECT storage FROM chat_storage WHERE chat_id = ?',
+      [chatId]
+    )
+    return r?.storage === 'live' || r?.storage === 'live_pending' ? r.storage : 'online'
+  }
+
+  /** Chat guardado só neste aparelho (nunca enviado nem anunciado pelo celular). */
+  isLocalOnly(chatId: string): boolean {
+    return this.storageOf(chatId) !== 'online'
+  }
+
+  setStorage(chatId: string, storage: ChatStorage, tombRev?: number): void {
+    if (storage === 'online') this.sql.run('DELETE FROM chat_storage WHERE chat_id = ?', [chatId])
+    else
+      this.sql.run(
+        `INSERT INTO chat_storage (chat_id, storage, tomb_rev) VALUES (?, ?, ?)
+         ON CONFLICT(chat_id) DO UPDATE SET storage = excluded.storage,
+           tomb_rev = COALESCE(?, chat_storage.tomb_rev)`,
+        [chatId, storage, tombRev ?? 0, tombRev ?? null]
+      )
+  }
+
+  /** Ids dos chats só neste aparelho que ainda existem. */
+  localOnlyChats(): string[] {
+    return this.sql
+      .all<{ chat_id: string }>(
+        `SELECT s.chat_id FROM chat_storage s JOIN records r ON r.type = 'chat' AND r.id = s.chat_id
+         WHERE r.deleted = 0`
+      )
+      .map((r) => r.chat_id)
+  }
+
+  /** Quantas mensagens (todas as versões) o chat tem no aparelho. */
+  messageCount(chatId: string): number {
+    return (
+      this.sql.get<{ n: number }>('SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?', [chatId])
+        ?.n ?? 0
+    )
+  }
+
+  /** Apaga de vez um chat só deste aparelho (sem tombstone: o servidor nunca o viu). */
+  purgeChat(chatId: string): void {
+    this.sql.tx(() => {
+      this.removeRecord('chat', chatId, chatId)
+      this.sql.run('DELETE FROM outbox WHERE chat_id = ?', [chatId])
+      this.sql.run('DELETE FROM parked_queue WHERE chat_id = ?', [chatId])
+      this.sql.run('DELETE FROM chat_storage WHERE chat_id = ?', [chatId])
+    })
+  }
+
+  /**
+   * "Salvar online" (§23.8, ao vivo → online): o chat vira um chat comum CRIADO OFFLINE — o
+   * registro `chat` (base = rev do tombstone, se já foi online antes) e todo o conteúdo (base 0)
+   * entram na outbox; o envio segue as regras normais (blobs antes, replay com `chat_bases = 0`).
+   * Devolve quantos registros vão subir.
+   */
+  convertToOnline(chatId: string): number {
+    return this.sql.tx(() => {
+      const plain = this.getPlain('chat', chatId)
+      if (!plain) return 0
+      const tomb =
+        this.sql.get<{ tomb_rev: number }>('SELECT tomb_rev FROM chat_storage WHERE chat_id = ?', [
+          chatId
+        ])?.tomb_rev ?? 0
+      this.sql.run('DELETE FROM chat_storage WHERE chat_id = ?', [chatId])
+      this.sql.run('DELETE FROM outbox WHERE chat_id = ?', [chatId])
+      this.queueForMerge({ type: 'chat', id: chatId, scope: chatId, baseRev: tomb, seq: 0, plain })
+      const content = this.contentRecords(chatId)
+      for (const r of content)
+        this.queueForMerge({
+          type: r.type,
+          id: r.id,
+          scope: chatId,
+          baseRev: 0,
+          seq: 0,
+          plain: r.plain
+        })
+      return content.length + 1
     })
   }
 

@@ -11,6 +11,7 @@ import { startAccount } from '@/account/native'
 import { useSession } from '@/account/react'
 import { startData } from '@/data/native'
 import { startRemote } from '@/remote/native'
+import { startLive } from '@/live/native'
 import { startHost } from '@/host/native'
 import { startSettings } from '@/settings/native'
 import { startVoice } from '@/voice/native'
@@ -39,6 +40,7 @@ export default function RootLayout() {
   useEffect(() => {
     startData()
     startRemote()
+    startLive()
     startHost()
     startSettings()
     startVoice()
@@ -97,6 +99,10 @@ export default function RootLayout() {
               />
               <Stack.Screen
                 name="dev/push"
+                options={{ presentation: 'transparentModal', animation: 'none' }}
+              />
+              <Stack.Screen
+                name="dev/live"
                 options={{ presentation: 'transparentModal', animation: 'none' }}
               />
             </Stack>

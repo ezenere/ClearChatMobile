@@ -38,6 +38,8 @@ export interface MergeInfo {
   online: MergeCounts
   /** Chats com o mesmo id nos dois lados e histórias diferentes (a versão não priorizada é apagada). */
   conflictingChats: number
+  /** Chats "Só neste aparelho": continuam locais depois do login (salvar online é opt-in, §12.7). */
+  localOnlyChats: number
 }
 
 export interface OnlineRecord {
@@ -213,11 +215,19 @@ export async function downloadOnline(
 const liveOnline = (snap: OnlineSnapshot, type: string): OnlineRecord[] =>
   [...snap.records.values()].filter((r) => r.change.type === type && !r.change.deleted)
 
+/** Registros vivos deste aparelho que entram no merge (chats "Só neste aparelho" não, §12.7). */
 const liveLocal = (store: LocalStore, type: string): number =>
   store.sql.get<{ n: number }>(
-    'SELECT COUNT(*) AS n FROM records WHERE type = ? AND deleted = 0 AND state = 0',
+    `SELECT COUNT(*) AS n FROM records WHERE type = ? AND deleted = 0 AND state = 0
+     AND NOT (type = 'chat' AND id IN (SELECT chat_id FROM chat_storage))`,
     [type]
   )?.n ?? 0
+
+/** Chat (ou conteúdo de chat) que fica só neste aparelho e nunca entra no merge (§12.7, §23.2). */
+function localOnlyOf(store: LocalStore, type: string, id: string, scope: string | null): boolean {
+  const chatId = type === 'chat' ? id : isContent(type) ? scope : null
+  return !!chatId && store.isLocalOnly(chatId)
+}
 
 /** O aparelho tem dados próprios (os settings sozinhos não contam, como no desktop)? */
 export function localHasData(store: LocalStore): boolean {
@@ -236,7 +246,7 @@ export function conflictingChats(store: LocalStore, snap: OnlineSnapshot): strin
   const out: string[] = []
   for (const r of liveOnline(snap, 'chat')) {
     const chatId = r.change.id
-    if (!store.getPlain('chat', chatId)) continue
+    if (!store.getPlain('chat', chatId) || store.isLocalOnly(chatId)) continue
     const online = [...snap.records.values()].filter(
       (x) => isContent(x.change.type) && x.change.scope === chatId && !x.change.deleted
     )
@@ -265,7 +275,8 @@ export function mergeInfo(store: LocalStore, snap: OnlineSnapshot): MergeInfo {
       presets: liveOnline(snap, 'preset').length,
       memories: liveOnline(snap, 'memory').length
     },
-    conflictingChats: conflictingChats(store, snap).length
+    conflictingChats: conflictingChats(store, snap).length,
+    localOnlyChats: store.localOnlyChats().length
   }
 }
 
@@ -444,6 +455,8 @@ export function applyMerge(
     })
     for (const r of online) {
       const c = r.change
+      // um chat só deste aparelho com o mesmo id do online: a cópia local fica (nunca é unida)
+      if (localOnlyOf(store, c.type, c.id, c.scope ?? null)) continue
       if (!isRecordType(c.type)) {
         if (!c.deleted && !store.recordMeta(c.type, c.id))
           store.putRecord(c, null, RecordState.Opaque)
@@ -480,6 +493,8 @@ export function applyMerge(
     // 3) tudo o que é local e não existe online → sobe como novo (base 0)
     for (const l of store.allRecords()) {
       if (snap.records.has(key(l.type, l.id)) || !MERGE_TYPES.has(l.type)) continue
+      // "Só neste aparelho": nunca sobe sozinho (salvar online é opt-in, §12.7)
+      if (localOnlyOf(store, l.type, l.id, l.scope)) continue
       if (l.deleted) {
         store.dropTombstone(l.type, l.id) // apagado aqui e nunca enviado
         continue
@@ -493,6 +508,9 @@ export function applyMerge(
     store.replaceChatStates(snap.states)
     store.setCursor(snap.head)
     store.setMeta('owner', owner)
+    // a lista oferece "Salvar online" para os que ficaram só aqui (§12.7)
+    const kept = store.localOnlyChats().length
+    store.setMeta('merge_local_only', kept ? kept : null)
     for (const k of store.refetchChats()) store.setMeta(`refetch:${k}`, null)
     store.refreshDirtyChats()
     return { queued: queue.length, remapped: remap.size }

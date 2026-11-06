@@ -2,7 +2,7 @@
 import { account } from '@/account/native'
 import { attachments, engine, isLocalMode, store, syncKeys } from '@/data/native'
 import { bindRemote } from './binding'
-import { RemoteController } from './controller'
+import { RemoteController, type LiveHook } from './controller'
 import type { UploadDeps } from './upload'
 
 const log = (msg: string): void => {
@@ -12,14 +12,37 @@ const log = (msg: string): void => {
 
 const keys = syncKeys
 
+type WsRequest = (
+  t: string,
+  fields?: Record<string, unknown>,
+  timeoutMs?: number
+) => Promise<Record<string, unknown>>
+let devWs: WsRequest | null = null
+/** Só __DEV__ (rota clearchat://dev/live): um relé falso na frente do WebSocket da conta. */
+export function setDevWs(fn: WsRequest | null): void {
+  if (__DEV__) devWs = fn
+}
+/** WebSocket da conta (ou o relé de desenvolvimento, se ligado). */
+export const accountWs = {
+  request: (t: string, f?: Record<string, unknown>, ms?: number) =>
+    devWs ? devWs(t, f, ms) : account.wsRequest(t, f, ms)
+}
+
+let liveHook: LiveHook | null = null
+/** O visualizador de chats ao vivo se liga aqui (src/live/native.ts). */
+export function setLiveHook(h: LiveHook | null): void {
+  liveHook = h
+}
+
 export const remote = new RemoteController({
-  ws: { request: (t, f, ms) => account.wsRequest(t, f, ms) },
+  ws: accountWs,
   keys,
   deviceId: () => account.getState().device?.id ?? null,
   chatState: (id) => store.chatState(id),
   post: (path, json) => account.http.post(path, json),
   assistantIds: (id) => store.assistantIds(id),
   loadMessage: (id) => store.message(id),
+  live: () => liveHook,
   log
 })
 

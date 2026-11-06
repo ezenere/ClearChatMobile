@@ -36,7 +36,8 @@ const GROUPS = {
       'test-vectors/realtime.json',
       'test-vectors/ids.json',
       'test-vectors/branches.json',
-      'test-vectors/push.json'
+      'test-vectors/push.json',
+      'test-vectors/live.json'
     ]
   },
   site: {

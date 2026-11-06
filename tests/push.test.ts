@@ -74,7 +74,9 @@ describe('decidePush (§22.7)', () => {
         cc: 'push',
         kind: 'approval',
         tag: approval.tag,
-        chatId: '3d6f0a52-7c1e-4b8a-9f2d-0e4c5b6a7d8e'
+        chatId: '3d6f0a52-7c1e-4b8a-9f2d-0e4c5b6a7d8e',
+        // desde 1.8.0 o aviso guarda o host (o nome casa o host_offline de servidores antigos)
+        hostName: 'Desktop de casa'
       }
     })
     const r = await decidePush(fcm(reply), ctx({ now: 1760000400000 }))

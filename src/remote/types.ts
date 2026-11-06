@@ -55,9 +55,27 @@ export const COMMAND_KINDS = [
   'branch.regenerate',
   'branch.select',
   'fs.list',
-  'fs.read'
+  'fs.read',
+  // 1.8.0 — só chats só ao vivo (§23.5, §23.7)
+  'history.list',
+  'history.changes',
+  'history.item',
+  'chat.update',
+  'attach.put',
+  'attach.get'
 ] as const
 export type CommandKind = (typeof COMMAND_KINDS)[number]
+
+/** Leitura/transferência (sem janela, sem dedupe): no máximo 3 em voo por visualizador (§23.5). */
+export const TRANSFER_KINDS: ReadonlySet<string> = new Set([
+  'fs.list',
+  'fs.read',
+  'history.list',
+  'history.changes',
+  'history.item',
+  'attach.put',
+  'attach.get'
+])
 
 export interface CommandResult {
   status: 'accepted' | 'duplicate'

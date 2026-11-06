@@ -181,7 +181,8 @@ export class ContentWriter {
   /** Retoma a outbox persistida (início / reconexão). */
   resume(): void {
     this.stopped = false
-    for (const id of this.d.store.outboxChats()) this.schedule(id, 0)
+    for (const id of this.d.store.outboxChats())
+      if (!this.d.store.isLocalOnly(id)) this.schedule(id, 0)
   }
 
   stop(): void {
@@ -290,6 +291,8 @@ export class ContentWriter {
     const keys = this.d.keys()
     if (!keys) return false
     const store = this.d.store
+    // "Só neste aparelho" (§23.2): nunca sobe nada (a outbox nem recebe; defensivo)
+    if (store.isLocalOnly(chatId)) return true
     // 1. registro `chat` (LWW) — o conteúdo precisa do chat no servidor
     for (let attempt = 0; attempt < 5; attempt++) {
       const row = store.outbox(chatId).find((r) => r.type === 'chat')

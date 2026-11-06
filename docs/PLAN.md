@@ -1,7 +1,7 @@
 # ClearChat Mobile — plano
 
 App Android (iOS depois) em **Expo SDK 58 / React Native 0.88**, com dev build (`expo prebuild`) —
-precisamos de módulos nativos. Implementa o protocolo de sync v1.7.0.
+precisamos de módulos nativos. Implementa o protocolo de sync v1.8.0.
 
 ## Escopo
 
@@ -474,6 +474,45 @@ Pendências / TODO:
   entrega; não editado aqui).
 - Overpass público às vezes leva perto de 1 min (fila da instância): avaliar mostrar "ainda buscando…"
   com mais destaque ou uma instância própria.
+
+## Chats só ao vivo (1.8.0) — estado (2026-11-06)
+
+Feito: o celular como **visualizador** dos chats só ao vivo de um PC (`src/live/`): `caps:
+["live_chats"]`, seção "Ao vivo em <host>" na lista (status, reconectando…, some quando o host fecha o
+app ou depois da tolerância), visualizador `live/[id]` com o histórico sob demanda (`history.*`,
+pedaços, `rec`, buracos → `history.changes`, `reset`, epoch novo) e todos os comandos remotos +
+`chat.update` (renomear, trocar o modelo), anexos ao host por `attach.put` (progresso, retomada,
+cancelar) e do host por `attach.get` (sha256, memória), arquivos do host; **nada gravado** (só
+memória; temporários de PDF/áudio apagados). Chats do celular com a escolha **"Salvar online" · "Só
+neste aparelho"** (`chat_storage`, padrões do §23.1, merge do primeiro login pulando os locais,
+"Salvar online" depois em replay). Push: host de cada aviso, `host_offline` apaga as pendências do
+host, toque em aviso ao vivo. Detalhes: README § "Chats só ao vivo (protocolo 1.8.0)".
+
+Decisões:
+- Visualizador numa tela própria (`live/[id].tsx`) reusando linhas, cards, painéis e composer — a
+  tela do chat comum lê o cache e mistura host local; separar garante que nada do ao vivo toque o
+  SQLite.
+- Relé e host falsos em `src/live/devRelay.ts`/`devHost.ts` (dev/testes) — os testes os usam pelo
+  `tests/fakeServer.ts` e a rota `clearchat://dev/live` também.
+- Retentativa do `attach.put` também em `disconnected`: abrir o seletor de arquivos põe o app em
+  segundo plano e a conta fecha o WebSocket (visto no E2E).
+- A AAD `live-announce` veio vendorada da cripto do site (o agente do servidor já a acrescentou).
+
+Verificado: `npm test` (367; 49 novos: 33 em `tests/live.test.ts`, 7 em `tests/liveStorage.test.ts` e os 9 casos de `live.json` no self-test),
+`tests/integration/live.test.ts` e `tests/integration/localOnly.test.ts` contra o servidor local com o
+código 1.8.0 do agente do servidor (lista, histórico, enviar, anexo de 1,2 MiB em 3 pedaços,
+`chat.update`, `live.withdraw quit`, queda → tolerância → some; chat só local nunca no servidor e
+"Salvar online" com o celular virando host), o resto da integração sem regressão, e E2E no AVD com o
+host roteirizado (`E2E_TOOL=livehost`) no servidor real. Screenshots em `scratchpad/mobile/live/`.
+
+Pendências / TODO:
+- **E2E com o desktop real** como host (depois do agente do desktop) — roteiro no relatório.
+- "Tirar do servidor" (online → só neste aparelho, §23.8) não existe no celular (só a volta, "Salvar
+  online"); o celular não anuncia os chats dele (decisão do §23.10).
+- "Salvar online" não confere a cota antes (`GET /account`, DEVERIA no §23.8).
+- Logout continua apagando o cache — inclusive os chats "Só neste aparelho" (o diálogo avisa que
+  apaga os dados deste aparelho).
+- iOS: não testado (como o resto).
 
 ## Ideias
 

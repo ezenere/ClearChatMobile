@@ -16,6 +16,8 @@ import {
   decidePush,
   describeDecision,
   extractFcmData,
+  hostOfflineTarget,
+  pendingToClear,
   readPrefs,
   type PushDecision,
   type ShownNotification
@@ -73,7 +75,7 @@ export async function present(n: ShownNotification): Promise<void> {
       title: n.title,
       body: n.body,
       subtitle: n.subtitle ?? null,
-      data: n.data,
+      data: { ...n.data },
       color: '#6a4be0',
       autoDismiss: true,
       priority:
@@ -100,6 +102,25 @@ export async function dismissChat(chatId: string): Promise<void> {
     }
   } catch {
     /* sem permissão / sem notificações */
+  }
+}
+
+/** Apaga da bandeja as aprovações/perguntas/retries de um host que caiu. */
+export async function clearHostPending(target: {
+  deviceId?: string
+  deviceName?: string
+}): Promise<number> {
+  try {
+    const shown = await Notifications.getPresentedNotificationsAsync()
+    const ids = pendingToClear(
+      shown.map((n) => ({ id: n.request.identifier, data: n.request.content.data })),
+      target
+    )
+    for (const id of ids) await Notifications.dismissNotificationAsync(id).catch(() => undefined)
+    if (ids.length) log(`host offline: ${ids.length} pendência(s) apagada(s)`)
+    return ids.length
+  } catch {
+    return 0
   }
 }
 
@@ -133,6 +154,10 @@ export async function handlePushData(payload: unknown): Promise<PushDecision | n
     log('mensagem sem os campos do ClearChat')
     return null
   }
+  // §22.7 (desde 1.8.0): o host caiu → as pendências dele somem da bandeja (ele não vai mandar
+  // os `dismiss`), mesmo que o aviso de host offline em si não seja mostrado
+  const target = hostOfflineTarget(data)
+  if (target) await clearHostPending(target)
   const d = await decidePush(data, {
     userId: kv.get(KV.userId),
     key: keyWithoutPrompt,

@@ -178,6 +178,8 @@ export class AccountService {
   helloSubscriptions: () => string[] = () => []
   /** Janelas de escrita abertas por este aparelho (host no celular, §8.3: reabre na reconexão). */
   helloActiveWindows: () => { chat_id: string; epoch: number }[] = () => []
+  /** Capacidades opcionais do `hello` (§10.3, desde 1.8.0: `live_chats`). */
+  helloCaps: () => string[] = () => []
   /**
    * Antes de fechar o WebSocket ao ir para o segundo plano (host no celular: para o turno, envia o
    * que falta e fecha as janelas). Teto de `BACKGROUND_HOOK_MS`.
@@ -206,7 +208,8 @@ export class AccountService {
           cursor: this.helloCursor(),
           state_cursor: 0,
           active_windows: this.helloActiveWindows(),
-          subscriptions: this.helloSubscriptions()
+          subscriptions: this.helloSubscriptions(),
+          ...(this.helloCaps().length ? { caps: this.helloCaps() } : {})
         }
       },
       onWelcome: (w) => this.onWelcome(w),

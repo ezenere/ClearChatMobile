@@ -705,6 +705,82 @@ perguntar/permitir/negar/sempre/nunca). O LLM falso ganhou `/where`, `/near <o q
 `/near-at <lugar> | <o quê>` (devolve o resultado em Markdown, com os links). E2E no emulador:
 `adb emu geo fix <lon> <lat>` (ex.: Av. Paulista, `-46.6544 -23.5614`).
 
+## Chats só ao vivo (protocolo 1.8.0)
+
+Contrato: §23 do `SYNC_PROTOCOL.md` (e as mudanças do 1.8.0 em §10.3–10.5, §11, §8.6, §12.7, §14,
+§17, §22.7). Código em `src/live/` (visualizador), `src/host/storageChoice.ts` + `chat_storage` no
+cache (chats deste celular) e as telas `src/app/(app)/live/[id].tsx` e `src/chat/LiveSection.tsx`.
+
+**Celular como visualizador** dos chats só ao vivo de um PC:
+
+- `hello.caps: ["live_chats"]` sempre; o app só usa `live.*`/`history.*`/`attach.*`/`chat.update`
+  com `live_chats` de volta no `welcome.caps`. A escolha no Novo chat precisa também de
+  `features.liveChats` em `/api/info` (o último valor conhecido por instância fica no kv — só o
+  booleano).
+- Lista (`src/live/list.ts`): `live.list` depois de cada `welcome` (e de novo ao abrir o cofre — o
+  socket conecta com a conta bloqueada e os anúncios não decifram sem a DEK) substitui tudo; `live.*`
+  antes do ack são descartados, os de depois entram por cima numa fila (decifrar é assíncrono). Anúncio
+  decifrado com a AAD `live-announce` montada com os campos DE FORA; falha ou `chatId` diferente →
+  some. Anti-replay por `arev` no mesmo epoch; epoch novo → o espelho recomeça. Socket caiu → tudo
+  "reconectando…"; lista nova com `settling_s` mantém os ausentes até o prazo. Seção "Ao vivo em
+  <host>" no topo da lista (agrupada por host, `updatedAt`, status rodando / aguardando você (n) /
+  ocioso / reconectando…); some com a busca (§23.9: a busca não acha chats ao vivo).
+- Histórico (`src/live/history.ts`): inscrição no stream confirmada → `history.list` do chat, das
+  sessões e da principal (todas as páginas, "Carregando de <host>… N mensagens"), `large` por
+  pedaços (`history.item { piece }`), `omitted` por `history.item { items }`; `rec` guardados durante
+  o carregamento; maior `lseq` vence, exclusões guardadas; `rec` com buraco ou `snapshot.live.lseq`
+  maior → `history.changes { since }` (`reset` → recarrega); epoch diferente num resultado → recomeça.
+  Subsessões carregam quando abertas. O resultado vira o mesmo `LoadedChat` das telas (versões,
+  caminho ativo, cards de tool).
+- Stream/comandos pelo `RemoteController` de sempre (gancho `live`: host e status vêm do anúncio,
+  não de `chat_states`). Todos os comandos do §8.6 (enviar, fila, ⚡, parar, aprovação, pergunta,
+  retry, versões, editar/apagar, compactar, memória, subagentes, `fs.*`) + `chat.update` (renomear,
+  trocar o modelo). No máximo 3 `history.*`/`attach.*`/`fs.*` em voo. Fim do turno = anúncio com
+  `running: false`; a mensagem do assistente num `rec` troca o draft.
+- Anexos (`src/live/attach.ts`): o composer manda ao host por `attach.put` (512 KiB por pedaço, um
+  por vez, progresso no chip, retentativa do mesmo pedaço em timeout/queda/socket voltando, `offset`
+  recusado → continua do `received`, `expired` → recomeça com outro `uploadId`, remover o chip =
+  `cancel`), o `send` leva o `AttachmentInfo` do host. A cópia que o seletor deixa no cache do app é
+  apagada depois de lida. Exibir: `attach.get` em pedaços com SHA-256 conferido, cache **em memória**
+  (LRU ~96 MiB); imagens viram `data:` com o expo-image só no cache de memória
+  (`AttachmentSourceCtx` com `memoryOnly`); PDF/áudio, que só abrem no app do sistema, passam por
+  `cache/live-view/`, apagada ao sair do chat, ao bloquear e ao abrir o app (o mesmo para os arquivos
+  do host abertos num chat ao vivo).
+- **Só em memória**: nada desses chats vai ao SQLite, a arquivos persistentes, ao índice de busca ou a
+  logs (os logs de dev só têm ids/contagens). O espelho fica para voltar ao chat sem recarregar (os 3
+  últimos) e é descartado quando sai da lista, o epoch muda ou a conta bloqueia/sai. Conferido nos
+  testes (contagens das tabelas antes/depois) e no aparelho (`run-as` + busca no `.db`).
+- Saiu da lista: `saved_online` → espera o registro chegar e abre o chat comum; `deleted` → "foi
+  apagado em <host>"; resto → "não está disponível agora — <host> não está conectado".
+
+**Chats executados no celular — "Salvar online" · "Só neste aparelho"** (§23.10): o celular NÃO
+anuncia os dele em 1.8.0. "Só neste aparelho" = linha em `chat_storage` (migração 5, `storage =
+live`): o `writeLocal` não põe nada na outbox, o host roda sem janela (`localOnlyChat`), o writer
+nunca envia, o pull/resync não mexe na cópia, apagar some sem tombstone. Padrão = última escolha
+(`newChatStorage` no kv); instalação nova: só neste aparelho; instalação que já sincronizava antes do
+1.8.0: online (gravado na primeira execução). Sem conta: sem seletor, grava o padrão. Servidor sem
+suporte: seletor escondido e tudo online. Selo "Só neste aparelho" na lista e no cabeçalho; "Salvar
+online" no menu do chat e no toque longo: o chat vira um chat comum criado offline (o `chat` com
+`base_rev` = rev do tombstone, se houver, e todo o conteúdo com base 0 na outbox; blobs antes; replay
+com `chat_bases = 0`; o celular vira o host). O merge do primeiro login pula esses chats
+(continuam locais), a pergunta avisa quantos são e a lista oferece "Salvar online" para todos.
+
+**Notificações (§22.7)**: cada aviso guarda o host (`hostDeviceId` decifrado, senão o
+`from_device_id`; e o `hostName`). `host_offline` com `device_id` apaga da bandeja as
+aprovações/perguntas/retries daquele host (servidor antigo: pelo nome, só os decifrados); `reply`/
+`error` ficam. Tocar num aviso `live` abre o visualizador se o chat estiver na lista (espera até 6 s
+a lista chegar), senão "Este chat só ao vivo não está disponível agora — <host> não está conectado".
+
+**Teste e E2E**: `tests/live.test.ts` + `tests/liveStorage.test.ts` (unitários, com o relé
+`FakeLiveRelay` de `tests/fakeServer.ts` = `src/live/devRelay.ts` e o host falso `src/live/devHost.ts`),
+`tests/integration/live.test.ts` e `tests/integration/localOnly.test.ts` (servidor real). No
+emulador: `E2E_TOOL=seed` e depois `E2E_TOOL=livehost E2E_STATE=<arquivo>` (o "desktop" vira um host
+de chats ao vivo no WebSocket real; escrever `grace`/`back`/`quit`/`announce`/`stop` em
+`<arquivo>.ctl`). Sem servidor 1.8.0: `clearchat://dev/live` (só dev) liga relé + host falsos no
+aparelho (`?do=grace|back|drop|quit|saved|off`). `clearchat://dev/push` aceita `hostid=` e `live=1`. No
+E2E, `adb shell input text` só traduz `%s` (espaço): `%3F` chega literal — para `?` use
+`input text '\?'`.
+
 ## Build iOS no Mac
 
 O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem

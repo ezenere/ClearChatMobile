@@ -173,6 +173,14 @@ export class HostService {
     return !!this.d.localOnly?.()
   }
 
+  /**
+   * Este chat roda sem servidor: sem conta, ou "Só neste aparelho" (§23.10 — sem janela, sem push,
+   * sem `host.*`; o celular não anuncia chats só ao vivo em 1.8.0).
+   */
+  localOnlyChat(chatId: string): boolean {
+    return this.localOnly || this.d.store.isLocalOnly(chatId)
+  }
+
   private log(msg: string): void {
     this.d.log?.(msg)
   }
@@ -231,7 +239,7 @@ export class HostService {
   }
 
   isHostHere(chatId: string): boolean {
-    if (this.localOnly) return true
+    if (this.localOnlyChat(chatId)) return true
     return this.state(chatId)?.host?.device_id === this.me || this.windows.has(chatId)
   }
 
@@ -396,8 +404,8 @@ export class HostService {
   async ensureWindow(chatId: string, purpose: 'run' | 'edit' | 'replay' = 'run'): Promise<void> {
     const refused = this.refusal(chatId)
     if (refused) throw new HostError('local_tools', refused)
-    if (this.localOnly) {
-      // sem conta não há janela: o turno só depende do app em primeiro plano
+    if (this.localOnlyChat(chatId)) {
+      // sem conta / só neste aparelho não há janela: o turno só depende do app em primeiro plano
       if (!this.foreground) throw new HostError('background', 'O app está em segundo plano.')
       return
     }
@@ -462,7 +470,7 @@ export class HostService {
 
   /** Modo do próximo lote de conteúdo do chat (ContentWriter). */
   async pushMode(chatId: string): Promise<{ epoch: number | null } | null> {
-    if (this.localOnly) return null
+    if (this.localOnlyChat(chatId)) return null
     const st = this.state(chatId)
     if (st?.diverged) return null
     const w = this.windows.get(chatId)
@@ -572,6 +580,8 @@ export class HostService {
     if (refused) throw new HostError('local_tools', refused)
     if (this.localOnly)
       throw new HostError('no_account', 'Entre numa conta para trocar chats entre dispositivos.')
+    if (this.d.store.isLocalOnly(chatId))
+      throw new HostError('live', 'Este chat fica só neste aparelho — salve online antes.')
     if (!this.connected) throw new HostError('offline', 'Sem conexão com o servidor.')
     let ack: Record<string, unknown>
     try {

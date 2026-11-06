@@ -22,7 +22,7 @@ import {
 import { formatSize } from '@shared/attachments'
 import { splitInterChatText } from '@shared/interChat'
 import { splitSiblingText } from '@shared/siblings'
-import type { QueuedMessage } from '@shared/types'
+import type { AttachmentInfo, QueuedMessage } from '@shared/types'
 import type { VoiceMessageMeta } from '@shared/voiceCallMarks'
 import {
   dictationPreview,
@@ -32,7 +32,7 @@ import {
 } from '@vendor/renderer/voice/dictation'
 import { useDictationView, voice } from '@/voice/react'
 import { describeError } from '@/account/errors'
-import { useAttachment, useSyncStatus } from '@/data/react'
+import { useAttachment, useAttachmentSource, useSyncStatus } from '@/data/react'
 import type { HostSkill } from '@/remote/mirror'
 import { uploadDeps } from '@/remote/react'
 import { useSession } from '@/account/react'
@@ -58,6 +58,32 @@ interface Pending {
   error?: string
   prepared?: PreparedAttachment
   done: Promise<PreparedAttachment | null>
+  /** Fração enviada (anexos de chats ao vivo, §23.7). */
+  progress?: number
+  cancel?: () => void
+}
+
+/**
+ * Envio de anexos alternativo (chats só ao vivo, §23.7: o arquivo vai ao host em pedaços pelo
+ * `attach.put`, nada vira blob). `done` = o `AttachmentInfo` salvo no host.
+ */
+export interface ComposerAttach {
+  start(
+    data: Uint8Array,
+    name: string,
+    mime: string | undefined,
+    onProgress: (sent: number, total: number) => void
+  ): Promise<{
+    file: string
+    kind: string
+    size: number
+    name: string
+    done: Promise<AttachmentInfo>
+    cancel: () => void
+  }>
+  checkLimits?: (list: { size: number }[]) => string | null
+  /** Apaga a cópia que o seletor deixou no cache do app depois de ler (nada fica em disco). */
+  ephemeral?: boolean
 }
 
 export interface SendInput {
@@ -184,6 +210,7 @@ function QueueChip({
 function AttachmentChip({ a, onRemove }: { a: Pending; onRemove: () => void }) {
   const img = a.kind === 'image' && a.file
   const local = useAttachment(img ? a.file : null, false)
+  const memoryOnly = !!useAttachmentSource().memoryOnly
   const icon: IconName =
     a.kind === 'image'
       ? 'image-outline'
@@ -196,7 +223,12 @@ function AttachmentChip({ a, onRemove }: { a: Pending; onRemove: () => void }) {
       testID="composer-attachment"
     >
       {img && local.uri ? (
-        <Image source={{ uri: local.uri }} style={c.attThumb} contentFit="cover" />
+        <Image
+          source={{ uri: local.uri }}
+          style={c.attThumb}
+          contentFit="cover"
+          cachePolicy={memoryOnly ? 'memory' : undefined}
+        />
       ) : (
         <View style={[c.attThumb, { alignItems: 'center', justifyContent: 'center' }]}>
           <Ionicons name={icon} size={18} color={colors.muted} />
@@ -214,7 +246,9 @@ function AttachmentChip({ a, onRemove }: { a: Pending; onRemove: () => void }) {
             ? (a.error ?? 'falhou')
             : a.status === 'ready'
               ? formatSize(a.size)
-              : 'enviando…'}
+              : a.progress !== undefined && a.size
+                ? `enviando… ${Math.round(a.progress * 100)}%`
+                : 'enviando…'}
         </Text>
       </View>
       {a.status === 'preparing' || a.status === 'uploading' ? (
@@ -238,7 +272,9 @@ export function RemoteComposer({
   onSend,
   onStop,
   onQueueForce,
-  onQueueRemove
+  onQueueRemove,
+  attach,
+  hostUnavailable
 }: {
   busy: boolean
   statusText: string | null
@@ -251,6 +287,9 @@ export function RemoteComposer({
   onStop: () => Promise<unknown>
   onQueueForce: (id: string) => Promise<unknown>
   onQueueRemove: (id: string) => Promise<unknown>
+  attach?: ComposerAttach
+  /** O host não está ao alcance (chat ao vivo: reconectando / indisponível) — ponto amarelo. */
+  hostUnavailable?: boolean
 }) {
   const toast = useToast()
   const [text, setText] = useState('')
@@ -261,7 +300,11 @@ export function RemoteComposer({
   const [stopping, setStopping] = useState(false)
   const [sending, setSending] = useState(false)
   const seq = useRef(0)
-  const tone = useConnectionTone()
+  const connTone = useConnectionTone()
+  const tone =
+    hostUnavailable && connTone.color === colors.success
+      ? { color: colors.warning, label: `${hostName} reconectando` }
+      : connTone
   // ---- ditado ----
   const dict = useDictationView()
   const recording = dict.phase !== 'idle'
@@ -310,7 +353,35 @@ export function RemoteComposer({
       ])
       void (async () => {
         try {
-          const data = new Uint8Array(await new File(uri).arrayBuffer())
+          const picked = new File(uri)
+          const data = new Uint8Array(await picked.arrayBuffer())
+          if (attach) {
+            if (attach.ephemeral && /\/cache\//.test(uri)) {
+              try {
+                picked.delete()
+              } catch {
+                /* o seletor já apagou */
+              }
+            }
+            // chat ao vivo: pedaços pelo attach.put direto ao host (§23.7)
+            const up = await attach.start(data, name, mime, (sent, total) =>
+              patch(key, { progress: total ? sent / total : 1 })
+            )
+            patch(key, {
+              status: 'uploading',
+              file: up.file,
+              kind: up.kind,
+              size: up.size,
+              name: up.name,
+              progress: 0,
+              cancel: up.cancel
+            })
+            const info = await up.done
+            const prep: PreparedAttachment = { info, blobId: '', data: new Uint8Array(0) }
+            patch(key, { status: 'ready', prepared: prep, progress: 1 })
+            resolveDone(prep)
+            return
+          }
           const prep = await prepareAttachment(uploadDeps, data, name, mime)
           patch(key, {
             status: 'uploading',
@@ -329,7 +400,7 @@ export function RemoteComposer({
         }
       })()
     },
-    []
+    [attach]
   )
 
   /** Fecha a folha antes de abrir o seletor (o Modal fechando atrapalha a Activity do seletor). */
@@ -372,7 +443,9 @@ export function RemoteComposer({
     if (override === undefined && !canSend) return
     const value = override ?? text
     if (!value.trim() && !atts.some((a) => a.status !== 'error') && !picked.length) return
-    const limits = checkMessageLimits(atts.filter((a) => a.status !== 'error'))
+    const limits = (attach?.checkLimits ?? checkMessageLimits)(
+      atts.filter((a) => a.status !== 'error')
+    )
     if (limits) {
       toast(limits, 'danger')
       return
@@ -515,7 +588,11 @@ export function RemoteComposer({
               <AttachmentChip
                 key={a.key}
                 a={a}
-                onRemove={() => setAtts((x) => x.filter((y) => y.key !== a.key))}
+                onRemove={() => {
+                  // envio ao host em andamento (chat ao vivo): cancela lá também
+                  if (a.status !== 'ready') a.cancel?.()
+                  setAtts((x) => x.filter((y) => y.key !== a.key))
+                }}
               />
             ))}
           </ScrollView>

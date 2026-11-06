@@ -51,6 +51,8 @@ import realtimeJson from '@vendor/protocol/test-vectors/realtime.json'
 import recordsJson from '@vendor/protocol/test-vectors/records.json'
 import recoveryJson from '@vendor/protocol/test-vectors/recovery.json'
 import pushJson from '@vendor/protocol/test-vectors/push.json'
+import liveJson from '@vendor/protocol/test-vectors/live.json'
+import { aadLiveAnnounce, openAnnounce, sealAnnounce } from '@/live/crypto'
 import { aadPush, openPush, pushKey, sealPush } from '@/push/crypto'
 import { deepEq, eq, ok, rejects, throws } from './assert'
 
@@ -170,6 +172,14 @@ const push = pushJson as unknown as {
     nonce_hex: string
     envelope: Envelope
   }[]
+}
+
+const liveV = liveJson as unknown as {
+  user_id: string
+  host_device_id: string
+  stream_key_hex: string
+  cases: StreamCase[]
+  must_fail: { name: string; aad_utf8: string; envelope: Envelope }[]
 }
 
 const pattern = (len: number): Uint8Array => {
@@ -415,6 +425,40 @@ export function vectorCases(): VectorCase[] {
       await rejects(openPush(pk, push.user_id, other, c.tag, c.envelope), 'kind trocado')
       await rejects(openPush(pk, push.user_id, c.kind, '0'.repeat(32), c.envelope), 'tag trocada')
       await rejects(openPush(pk, 'outro-usuario', c.kind, c.tag, c.envelope), 'usuário trocado')
+    })
+
+  // ---------------- live.json (chats só ao vivo, §23) ----------------
+  const liveKey = fromHex(liveV.stream_key_hex)
+  for (const c of liveV.cases)
+    add('live.json', c.name, async () => {
+      const frame = await frameJson(c.json, false)
+      eq(hex(frame), c.frame_hex, 'moldura')
+      if (c.aad_utf8.includes('|live-announce|')) {
+        const [, , , user, host, chat, epoch, arev] = c.aad_utf8.split('|')
+        eq(fromUtf8(aadLiveAnnounce(user, host, chat, +epoch, +arev)), c.aad_utf8, 'AAD')
+        const env = await sealAnnounce(
+          liveKey,
+          user,
+          host,
+          chat,
+          +epoch,
+          +arev,
+          JSON.parse(c.json) as Record<string, unknown>,
+          fromHex(c.nonce_hex)
+        )
+        deepEq(env, c.envelope, 'envelope')
+        const back = await openAnnounce(liveKey, user, host, chat, +epoch, +arev, c.envelope)
+        eq(JSON.stringify(back), c.json, 'JSON')
+        return
+      }
+      const env = await seal(liveKey, utf8(c.aad_utf8), frame, fromHex(c.nonce_hex))
+      deepEq(env, c.envelope, 'envelope')
+      const back = await unframeJson(await open(liveKey, utf8(c.aad_utf8), env))
+      eq(JSON.stringify(back), c.json, 'JSON')
+    })
+  for (const c of liveV.must_fail)
+    add('live.json', `DEVE falhar: ${c.name}`, async () => {
+      await rejects(open(liveKey, utf8(c.aad_utf8), c.envelope), c.name)
     })
 
   // ---------------- branches.json (árvore de versões, §4.3.8) ----------------

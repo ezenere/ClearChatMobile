@@ -126,17 +126,24 @@ export function declinePermissionOffer(): void {
 
 // ---------------- toque na notificação → abre o chat ----------------
 
-let pendingChat: string | null = null
+/** Chat a abrir pelo toque: `live` = chat só ao vivo (§22.7, abre o visualizador). */
+export interface PushTarget {
+  chatId: string
+  live: boolean
+  hostName: string | null
+}
+
+let pendingChat: PushTarget | null = null
 const navListeners = new Set<() => void>()
 
 export const pushNavigation = {
   /** Chat a abrir (consumido pela pilha da conta quando o cofre está aberto). */
-  take(): string | null {
+  take(): PushTarget | null {
     const c = pendingChat
     pendingChat = null
     return c
   },
-  peek: (): string | null => pendingChat,
+  peek: (): PushTarget | null => pendingChat,
   subscribe(fn: () => void): () => void {
     navListeners.add(fn)
     return () => navListeners.delete(fn)
@@ -147,11 +154,20 @@ function onResponse(r: Notifications.NotificationResponse | null): void {
   if (!r) return
   log(`toque: ${r.actionIdentifier}`)
   if (r.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return
-  const data = r.notification.request.content.data as { cc?: unknown; chatId?: unknown } | null
+  const data = r.notification.request.content.data as {
+    cc?: unknown
+    chatId?: unknown
+    live?: unknown
+    hostName?: unknown
+  } | null
   if (data?.cc !== 'push') return
   Notifications.clearLastNotificationResponse()
   if (typeof data.chatId !== 'string' || !data.chatId) return
-  pendingChat = data.chatId
+  pendingChat = {
+    chatId: data.chatId,
+    live: data.live === true,
+    hostName: typeof data.hostName === 'string' && data.hostName ? data.hostName : null
+  }
   for (const fn of navListeners) fn()
 }
 

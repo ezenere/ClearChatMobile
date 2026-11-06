@@ -19,7 +19,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { formatSize, KIND_LABEL, textFileBody } from '@shared/attachments'
 import type { AttachmentKind, AttachmentMeta, ContentPart } from '@shared/types'
-import { useAttachment } from '@/data/react'
+import { useAttachment, useAttachmentSource } from '@/data/react'
 import { useToast } from '@/ui/Toast'
 import type { IconName } from '@/ui/Button'
 import { colors, font, radius } from '@/ui/theme'
@@ -49,6 +49,7 @@ function ImageViewer({
   onClose: () => void
 }) {
   const insets = useSafeAreaInsets()
+  const memoryOnly = !!useAttachmentSource().memoryOnly
   const scale = useSharedValue(1)
   const baseScale = useSharedValue(1)
   const tx = useSharedValue(0)
@@ -113,6 +114,7 @@ function ImageViewer({
               style={StyleSheet.absoluteFill}
               contentFit="contain"
               accessibilityLabel={name}
+              cachePolicy={memoryOnly ? 'memory' : undefined}
             />
           </Animated.View>
         </GestureDetector>
@@ -129,18 +131,20 @@ function ImageViewer({
           <Text style={st.viewerName} numberOfLines={1}>
             {name}
           </Text>
-          <Pressable
-            onPress={() =>
-              void Sharing.shareAsync(uri, { mimeType: mime, dialogTitle: name }).catch(
-                () => undefined
-              )
-            }
-            hitSlop={10}
-            accessibilityLabel="Compartilhar"
-            style={st.viewerBtn}
-          >
-            <Ionicons name="share-outline" size={22} color="#fff" />
-          </Pressable>
+          {memoryOnly ? null : (
+            <Pressable
+              onPress={() =>
+                void Sharing.shareAsync(uri, { mimeType: mime, dialogTitle: name }).catch(
+                  () => undefined
+                )
+              }
+              hitSlop={10}
+              accessibilityLabel="Compartilhar"
+              style={st.viewerBtn}
+            >
+              <Ionicons name="share-outline" size={22} color="#fff" />
+            </Pressable>
+          )}
         </View>
       </View>
     </Modal>
@@ -164,6 +168,7 @@ export const ImageThumb = memo(function ImageThumb({
   maxHeight?: number
 }) {
   const a = useAttachment(file, true)
+  const memoryOnly = !!useAttachmentSource().memoryOnly
   const [ratio, setRatio] = useState<number | null>(null)
   const [zoom, setZoom] = useState(false)
   const [broken, setBroken] = useState(false)
@@ -207,6 +212,7 @@ export const ImageThumb = memo(function ImageThumb({
           style={[st.thumb, { width: Math.max(64, w), height: Math.max(48, h) }]}
           contentFit="cover"
           recyclingKey={file}
+          cachePolicy={memoryOnly ? 'memory' : undefined}
           onLoad={(e) => {
             const { width, height } = e.source
             if (width && height) setRatio(width / height)

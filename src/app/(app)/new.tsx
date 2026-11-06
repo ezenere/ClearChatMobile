@@ -19,6 +19,14 @@ import { MOBILE_TOOLS } from '@/agent/request'
 import { locationToolHelp, toolLabel } from '@/agent/toolLabels'
 import { searchPlan } from '@/agent/tools/web'
 import { hostStack } from '@/host/native'
+import { kv } from '@/account/native'
+import {
+  rememberChoice,
+  STORAGE_TEXT,
+  storageOffer,
+  type NewChatStorage
+} from '@/host/storageChoice'
+import { useLiveSupported } from '@/live/react'
 import {
   droppedLocalTools,
   finalizeNewChat,
@@ -74,6 +82,11 @@ export default function NewChatScreen() {
   const [picker, setPicker] = useState(false)
   const [creating, setCreating] = useState(false)
   const local = useSession().phase === 'local'
+  // §23.1/§23.10: "Salvar online" · "Só neste aparelho" (padrão = a última escolha daqui)
+  const liveSupported = useLiveSupported()
+  const offer = storageOffer(kv, !local, liveSupported)
+  const [storagePick, setStoragePick] = useState<NewChatStorage | null>(null)
+  const storage: NewChatStorage = offer.show ? (storagePick ?? offer.storage) : offer.storage
   /** Sem modelo padrão (começo do uso): o modelo escolhido aqui vira o padrão dos próximos. */
   const noDefault = !settings.defaultModel?.model
   const [saveDefault, setSaveDefault] = useState(true)
@@ -109,7 +122,8 @@ export default function NewChatScreen() {
       )
       if (noDefault && saveDefault)
         settingsService.setSetting('defaultModel', { providerId, model: model.trim() })
-      const { chat } = hostStack.repo.createChat({ config, title: '' })
+      if (offer.show) rememberChoice(kv, storage)
+      const { chat } = hostStack.repo.createChat({ config, title: '', storage })
       router.replace({ pathname: '/chat/[id]', params: { id: chat.id } })
     } catch (e) {
       toast(describeError(e), 'danger')
@@ -131,7 +145,11 @@ export default function NewChatScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={st.title}>Novo chat</Text>
-          <Text style={st.sub}>Executado neste celular</Text>
+          <Text style={st.sub}>
+            {storage === 'live' && !local
+              ? 'Executado e guardado só neste celular'
+              : 'Executado neste celular'}
+          </Text>
         </View>
       </View>
       <ScrollView
@@ -238,6 +256,39 @@ export default function NewChatScreen() {
           </>
         ) : null}
 
+        {offer.show ? (
+          <>
+            <Text style={st.label}>Onde guardar</Text>
+            <View style={st.storageRow} testID="new-storage">
+              {(['online', 'live'] as const).map((k) => {
+                const on = storage === k
+                return (
+                  <Pressable
+                    key={k}
+                    onPress={() => setStoragePick(k)}
+                    style={[st.storage, on && st.storageOn]}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: on }}
+                    testID={`new-storage-${k}`}
+                  >
+                    <View style={st.storageHead}>
+                      <Ionicons
+                        name={k === 'online' ? 'cloud-outline' : 'phone-portrait-outline'}
+                        size={16}
+                        color={on ? colors.accentStrong : colors.subtle}
+                      />
+                      <Text style={[st.storageTitle, on && { color: colors.fg }]}>
+                        {STORAGE_TEXT[k].title}
+                      </Text>
+                    </View>
+                    <Text style={st.storageText}>{STORAGE_TEXT[k].detail}</Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+          </>
+        ) : null}
+
         <Text style={st.label}>Ferramentas</Text>
         <View style={st.box}>
           {MOBILE_TOOLS.map((t) => (
@@ -322,6 +373,20 @@ const st = StyleSheet.create({
     letterSpacing: 0.4
   },
   hint: { color: colors.subtle, fontSize: 12.5, lineHeight: 18 },
+  storageRow: { flexDirection: 'row', gap: 10 },
+  storage: {
+    flex: 1,
+    gap: 4,
+    padding: 12,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface
+  },
+  storageOn: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  storageHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  storageTitle: { color: colors.muted, fontSize: 14, fontWeight: '600' },
+  storageText: { color: colors.subtle, fontSize: 12, lineHeight: 16 },
   chips: { gap: 8, paddingVertical: 4 },
   persona: {
     flexDirection: 'row',

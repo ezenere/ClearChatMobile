@@ -1,6 +1,9 @@
 // Servidor de sync de mentira (fetch falso) para os testes da conta: só o que a fase 1 usa —
 // /api/info, código por e-mail, refresh rotativo (reuso revoga), logout, chaves, dispositivos e o
 // token de push (§22.2: `features.push`, PUT/DELETE /devices/current/push, `push` na lista).
+// Desde 1.8.0 também `features.liveChats` e o relé dos chats só ao vivo (`FakeLiveRelay`, §23):
+// vínculos em memória por chat, `live.list`/`live.update`/`live.removed`/`live.host`/`live.refresh`,
+// roteamento de `remote.send`/`stream.*` pelo vínculo e a tolerância de queda do host.
 import type { KeysResponse } from '../src/crypto'
 import { bytesEqual, fromB64u, sha256 } from '../src/crypto'
 
@@ -35,6 +38,8 @@ export class FakeServer {
   protocol = { min: 1, max: 1, version: '1.7.0' }
   /** `features.push` (§6.2): false = `null` (instância sem push). */
   push = true
+  /** `features.liveChats` (§6.2, desde 1.8.0). */
+  liveChats = true
   email = 'ana@example.test'
   userId = 'user-1'
   code = '123456'
@@ -98,7 +103,8 @@ export class FakeServer {
           features: {
             signupOpen: true,
             captcha: this.captcha ? { provider: 'turnstile', siteKey: 'x' } : null,
-            push: this.push ? { providers: ['fcm'] } : null
+            push: this.push ? { providers: ['fcm'] } : null,
+            liveChats: this.liveChats
           },
           links: { signup: `${this.base}/signup` }
         }
@@ -251,3 +257,9 @@ export class FakeServer {
     return this.calls.filter((c) => c.path === path)
   }
 }
+
+// ---------------- chats só ao vivo (§23): relé do servidor ----------------
+// O relé (vínculos em memória, live.list/update/removed/host/refresh, roteamento de remote.send e
+// stream.* pelo vínculo, tolerância de queda) mora em src/live/devRelay.ts porque a rota de
+// desenvolvimento `clearchat://dev/live` usa o mesmo no aparelho.
+export { DevLiveRelay as FakeLiveRelay } from '../src/live/devRelay'

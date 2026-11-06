@@ -117,6 +117,13 @@ export function MergeScreen({ state }: { state: MergeState }) {
             : `${n} chats existem nos dois lados com histórias diferentes; a versão não priorizada será apagada.`}
         </Banner>
       ) : null}
+      {state.info.localOnlyChats ? (
+        <Banner tone="info" testID="merge-local-only">
+          {state.info.localOnlyChats === 1
+            ? '1 chat “Só neste aparelho” continua só neste celular — não entra na união. Depois, dá para salvá-lo online pela lista de chats.'
+            : `${state.info.localOnlyChats} chats “Só neste aparelho” continuam só neste celular — não entram na união. Depois, dá para salvá-los online pela lista de chats.`}
+        </Banner>
+      ) : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <View style={st.choice}>
         <Button

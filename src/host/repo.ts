@@ -23,7 +23,7 @@ import type {
   StoredMessage
 } from '@shared/types'
 import { chatFromPlain, sessionFromPlain } from '@/data/decode'
-import type { LocalStore } from '@/data/store'
+import type { ChatStorage, LocalStore } from '@/data/store'
 import type { Plain } from '@/data/types'
 import type { ContentWriter } from './writer'
 
@@ -100,12 +100,19 @@ export class ChatRepo {
   }
 
   /** Cria o chat (registro + sessão principal) — o push leva o chat antes do conteúdo. */
-  createChat(input: { config: Partial<ChatConfig>; title?: string }): {
+  createChat(input: {
+    config: Partial<ChatConfig>
+    title?: string
+    /** "Só neste aparelho" (§23.10): nada do chat vai ao servidor. Padrão: online. */
+    storage?: ChatStorage
+  }): {
     chat: Chat
     session: Session
   } {
     const chatId = this.uuid()
     const now = this.now()
+    // o modo vem ANTES da primeira escrita (a outbox nunca vê um chat só deste aparelho)
+    if (input.storage && input.storage !== 'online') this.store.setStorage(chatId, input.storage)
     const { cwd: _cwd, ...config } = input.config
     void _cwd
     const sid = this.uuid()

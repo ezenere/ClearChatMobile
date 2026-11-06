@@ -4,9 +4,13 @@
 //   E2E_TOOL=seed   E2E_STATE=…  → conta com chaves + "desktop" + conversas realistas (fase 2)
 //   E2E_TOOL=rename E2E_STATE=… E2E_CHAT=<id> E2E_TITLE=<título>   → o desktop renomeia (ao vivo)
 //   E2E_TOOL=delete E2E_STATE=… E2E_CHAT=<id>                       → o desktop apaga (ao vivo)
+//   E2E_TOOL=livehost E2E_STATE=… [E2E_CTL=<arquivo>] [E2E_HOLD_S=900]
+//       → 1.8.0: o "desktop" vira um host de chats SÓ AO VIVO (DevLiveHost no WebSocket real, com
+//         caps live_chats) e fica rodando; escrever no arquivo de controle uma linha `grace`
+//         (derruba o socket), `back` (reconecta), `quit` (live.withdraw quit), `announce`, `stop`
 // O arquivo de estado guarda e-mail, senha, chave de recuperação e o token da sessão "site" — é dado
 // de teste descartável do servidor local, fora do repositório.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { fromHex, hex } from '../../src/crypto'
 import {
@@ -142,3 +146,97 @@ it.runIf(enabled && action === 'list' && !!state)('e2e: o desktop lista a conta'
   console.log(`E2E_LIST ${JSON.stringify(out)}`)
   expect(out.chat?.length ?? 0).toBeGreaterThan(0)
 })
+
+// 1.8.0 (§23): host de chats só ao vivo para o E2E no emulador (o celular de verdade vê a seção
+// "Ao vivo em PC de casa", abre o chat, manda mensagens/anexos, aprova…). Controlado por arquivo.
+it.runIf(enabled && action === 'livehost' && !!state)(
+  'e2e: host de chats só ao vivo',
+  async () => {
+    const { RealtimeClient } = await import('../../src/vendor/desktop/sync/ws')
+    const { DevLiveHost } = await import('../../src/live/devHost')
+    const { URL_ } = await import('./realServer')
+    const s = JSON.parse(readFileSync(state, 'utf8')) as E2EState
+    const d = await desktopOf(s)
+    const ctl = process.env.E2E_CTL ?? `${state}.ctl`
+    const hold = Number(process.env.E2E_HOLD_S ?? 900) * 1000
+    let ws!: InstanceType<typeof RealtimeClient>
+    const dev = new DevLiveHost({
+      userId: d.userId,
+      deviceId: d.deviceId,
+      sk: d.sk,
+      replyMs: 2500,
+      emit: (f) => {
+        const { t, ...fields } = f as { t: string } & Record<string, unknown>
+        if (t === 'stream.event') ws.send(t, fields)
+        else void ws.request(t, fields).catch(() => undefined)
+      }
+    })
+    dev.createChat({
+      title: 'Plano da viagem a Lisboa',
+      hostCwd: '/home/ana/viagem',
+      messages: [
+        { role: 'user', content: 'Monte um roteiro de 3 dias em Lisboa.' },
+        {
+          role: 'assistant',
+          content:
+            '**Dia 1 — Alfama e Castelo**\n\n- Castelo de São Jorge de manhã\n- Almoço em Alfama\n- Miradouro da Senhora do Monte no fim da tarde'
+        },
+        { role: 'user', content: 'E o dia 2?' },
+        {
+          role: 'assistant',
+          content:
+            '**Dia 2 — Belém**\n\n1. Mosteiro dos Jerónimos\n2. Torre de Belém\n3. Pastéis de Belém'
+        }
+      ]
+    })
+    dev.createChat({
+      title: 'Refatorar o login',
+      subagent: true,
+      hostCwd: '/home/ana/projeto',
+      messages: [
+        { role: 'user', content: 'Revise o fluxo de login.' },
+        { role: 'assistant', content: 'Delegando a análise a um subagente…' }
+      ]
+    })
+    ws = new RealtimeClient({
+      url: () => URL_.replace(/^http/, 'ws') + '/ws',
+      hello: async () => ({
+        access_token: d.token,
+        cursor: 0,
+        state_cursor: 0,
+        active_windows: [],
+        subscriptions: [],
+        caps: ['live_chats']
+      }),
+      onWelcome: () => void dev.announce(true),
+      onEvent: (f) => {
+        if (f.t === 'remote.command') {
+          console.log(`E2E_LIVE comando ${String(f.kind)}`)
+          void dev.onCommand(f)
+        } else if (f.t === 'stream.resync_request') void dev.snapshot(String(f.chat_id))
+        else if (f.t === 'live.refresh_request') void dev.announce(true)
+      },
+      onState: (st) => console.log(`E2E_LIVE ws ${st}`),
+      onUnauthorized: async () => false,
+      onFatal: (c) => console.log(`E2E_LIVE fatal ${c}`),
+      timing: { backoffBaseMs: 200, backoffMaxMs: 1000 }
+    })
+    ws.start()
+    writeFileSync(ctl, '')
+    const t0 = Date.now()
+    while (Date.now() - t0 < hold) {
+      await new Promise((r) => setTimeout(r, 500))
+      const cmd = existsSync(ctl) ? readFileSync(ctl, 'utf8').trim() : ''
+      if (!cmd) continue
+      writeFileSync(ctl, '')
+      console.log(`E2E_LIVE ctl ${cmd}`)
+      if (cmd === 'stop') break
+      if (cmd === 'grace') ws.stop()
+      else if (cmd === 'back') ws.start()
+      else if (cmd === 'quit') await ws.request('live.withdraw', { chat_ids: null, reason: 'quit' })
+      else if (cmd === 'announce') await dev.announce(true)
+    }
+    ws.stop()
+  },
+  3_600_000
+)

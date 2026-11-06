@@ -2,7 +2,7 @@
 // (expo-file-system). Nunca loga conteúdo nem chaves.
 import { Directory, File, Paths } from 'expo-file-system'
 import { AppState, Platform } from 'react-native'
-import { account } from '@/account/native'
+import { account, kv } from '@/account/native'
 import { attachments, engine, isLocalMode, onAfterMerge, store, syncKeys } from '@/data/native'
 import { hex, sha256 } from '@/crypto'
 import { setEnvSource } from '@/agent/request'
@@ -11,6 +11,7 @@ import { location } from '@/location/native'
 import { openNativeSql } from '@/data/sqlNative'
 import { remote } from '@/remote/native'
 import { bindHost } from './binding'
+import { initStorageDefault } from './storageChoice'
 import { createHostStack } from './stack'
 
 const log = (msg: string): void => {
@@ -99,6 +100,8 @@ let started = false
 export function startHost(): void {
   if (started) return
   started = true
+  // 1.8.0 (§23.1): quem já sincronizava continua criando chats online por padrão
+  initStorageDefault(kv, store.cursor > 0)
   bindHost(account, host, hostStack.runner)
   // dados sem conta unidos à conta (§12): o conteúdo gravado aqui sobe
   onAfterMerge(() => hostStack.writer.resume())

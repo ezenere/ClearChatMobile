@@ -21,6 +21,7 @@ import { LiveMirror, type MirrorTimers, type MirrorView } from './mirror'
 import {
   COMMAND_KINDS,
   divergedOf,
+  TRANSFER_KINDS,
   type CommandKind,
   type CommandResult,
   type HostMode,
@@ -33,6 +34,17 @@ export interface RemoteWs {
     fields?: Record<string, unknown>,
     timeoutMs?: number
   ): Promise<Record<string, unknown>>
+}
+
+/**
+ * Chats só ao vivo (§23): o host e o status vêm do anúncio (não de `chat_states`) e o stream deles
+ * também traz `rec`/`snapshot.live` para o histórico em memória.
+ */
+export interface LiveHook {
+  /** Entrada da lista ao vivo (null = não é um chat ao vivo conhecido). */
+  entry(chatId: string): { hostName: string; online: boolean } | null
+  /** Evento do stream decifrado de um chat ao vivo (depois do espelho). */
+  onStream(chatId: string, epoch: number, payload: Record<string, unknown>): void
 }
 
 export interface RemoteDeps {
@@ -52,6 +64,8 @@ export interface RemoteDeps {
   /** Tempos (testes encurtam). */
   timing?: Partial<typeof DEFAULT_TIMING>
   log?: (msg: string) => void
+  /** Chats só ao vivo (o serviço liga depois de criar). */
+  live?: () => LiveHook | null
 }
 
 export const DEFAULT_TIMING: { commandMs: number; fsMs: number; resyncGapMs: number } = {
@@ -79,6 +93,9 @@ interface PendingCmd {
 }
 
 const KINDS = new Set<string>(COMMAND_KINDS)
+
+/** `history.*`/`attach.*`/`fs.*` em voo por visualizador (§23.5). */
+const MAX_TRANSFERS = 3
 
 /** Resposta do host 0.7+ a um `message.edit` numa mensagem digitada pelo usuário (§8.6). */
 const EDIT_NEEDS_UPDATE_RE = /^Editar uma mensagem sua agora cria uma nova versão/
@@ -128,6 +145,11 @@ export class RemoteController {
   private listeners = new Set<() => void>()
   private noticeListeners = new Set<(n: RemoteNotice) => void>()
   private version = 0
+  /** Inscrição do chat aberto confirmada (ack do `stream.subscribe`). */
+  private subscribedP: Promise<void> = Promise.resolve()
+  /** Fila dos comandos de leitura/transferência (no máximo 3 em voo, §23.5). */
+  private transferSlots = 0
+  private transferWaiters: (() => void)[] = []
 
   constructor(deps: RemoteDeps) {
     this.d = deps
@@ -182,6 +204,11 @@ export class RemoteController {
   // ---------------- estado / modo (§8.2) ----------------
 
   mode(chatId: string): HostMode {
+    const live = this.d.live?.()?.entry(chatId)
+    if (live) {
+      if (!this.connected) return 'offline'
+      return live.online ? 'remote' : 'host-offline'
+    }
     const st = this.d.chatState(chatId)
     if (divergedOf(st)) return 'diverged'
     if (!this.connected) return 'offline'
@@ -191,6 +218,8 @@ export class RemoteController {
   }
 
   hostName(chatId: string): string {
+    const live = this.d.live?.()?.entry(chatId)
+    if (live) return live.hostName
     return this.d.chatState(chatId)?.host?.name ?? 'outro dispositivo'
   }
 
@@ -290,8 +319,51 @@ export class RemoteController {
     this.knownAssistant = new Set(chatId ? this.d.assistantIds(chatId) : [])
     if (chatId && this.connected)
       // o servidor pede o snapshot ao host
-      void this.d.ws.request('stream.subscribe', { chat_ids: [chatId] }).catch(() => undefined)
+      this.subscribedP = this.d.ws
+        .request('stream.subscribe', { chat_ids: [chatId] })
+        .then(() => undefined)
+    else this.subscribedP = Promise.resolve()
+    this.subscribedP.catch(() => undefined)
     this.changed()
+  }
+
+  /**
+   * Espera o ack do `stream.subscribe` do chat aberto (chats ao vivo: os `rec` só ficam guardados
+   * depois dele, §23.5.1). Sem conexão / outro chat → rejeita.
+   */
+  async subscribed(chatId: string): Promise<void> {
+    if (this.active !== chatId) throw new RemoteError('inactive', 'O chat não está aberto.')
+    if (!this.connected) throw new RemoteError('disconnected', 'Sem conexão com o servidor.')
+    await this.subscribedP
+  }
+
+  /** Reinscreve o chat aberto (reconexão com o chat ao vivo de volta na lista). */
+  resubscribe(chatId: string): Promise<void> {
+    if (this.active !== chatId || !this.connected) return Promise.resolve()
+    this.subscribedP = this.d.ws
+      .request('stream.subscribe', { chat_ids: [chatId] })
+      .then(() => undefined)
+    this.subscribedP.catch(() => undefined)
+    return this.subscribedP
+  }
+
+  /** Fim do turno num chat ao vivo (anúncio com `running: false`, §11). */
+  endLiveTurn(chatId: string): void {
+    if (this.active === chatId) this.mirror?.endTurn()
+  }
+
+  /** Mensagem do assistente chegou num `rec` (chat ao vivo): troca o draft (§23.6). */
+  onLiveAssistant(chatId: string, msg: StoredMessage): void {
+    if (this.active !== chatId || !this.mirror) return
+    this.mirror.onPersistedAssistant(msg)
+  }
+
+  /** Esquece o espelho de um chat ao vivo (saiu da lista / epoch novo). */
+  dropLive(chatId: string): void {
+    if (this.active === chatId) {
+      this.disposeMirror()
+      this.changed()
+    }
   }
 
   private disposeMirror(): void {
@@ -341,6 +413,8 @@ export class RemoteController {
     // epoch menor que o do espelho = evento atrasado de um host antigo
     if (this.mirror && epoch < this.mirror.epoch) return
     this.ensureMirror(chatId, epoch).onEvent(n, p)
+    const live = this.d.live?.()
+    if (live?.entry(chatId)) live.onStream(chatId, epoch, p)
   }
 
   /**
@@ -368,6 +442,38 @@ export class RemoteController {
    * `WsRequestError` do `remote.send`, ou `RemoteError` (host caiu / sem resposta).
    */
   private async commandResult(
+    chatId: string,
+    kind: CommandKind,
+    payload: Record<string, unknown>,
+    timeoutMs: number,
+    timeoutText: string
+  ): Promise<Record<string, unknown>> {
+    if (TRANSFER_KINDS.has(kind)) {
+      await this.acquireTransfer()
+      try {
+        return await this.sendCommand(chatId, kind, payload, timeoutMs, timeoutText)
+      } finally {
+        this.releaseTransfer()
+      }
+    }
+    return this.sendCommand(chatId, kind, payload, timeoutMs, timeoutText)
+  }
+
+  private acquireTransfer(): Promise<void> {
+    if (this.transferSlots < MAX_TRANSFERS) {
+      this.transferSlots++
+      return Promise.resolve()
+    }
+    return new Promise((resolve) => this.transferWaiters.push(resolve))
+  }
+
+  private releaseTransfer(): void {
+    const next = this.transferWaiters.shift()
+    if (next) next()
+    else this.transferSlots--
+  }
+
+  private async sendCommand(
     chatId: string,
     kind: CommandKind,
     payload: Record<string, unknown>,
@@ -440,6 +546,11 @@ export class RemoteController {
         case 'host_offline':
           return new RemoteError(e.code, `O host (${name}) está offline.`)
         case 'no_host':
+          if (this.d.live?.()?.entry(chatId))
+            return new RemoteError(
+              e.code,
+              `${name} não está conectado — este chat só ao vivo está indisponível agora.`
+            )
           return new RemoteError(
             e.code,
             'Este chat não tem host — abra-o num computador para executá-lo.'
@@ -599,6 +710,45 @@ export class RemoteController {
   }
   selectBranch(chatId: string, messageId: string): Promise<CommandResult> {
     return this.command(chatId, 'branch.select', { messageId })
+  }
+
+  /** Renomear / trocar a config de um chat só ao vivo (§23.7). `config` sem `cwd`. */
+  chatUpdate(
+    chatId: string,
+    patch: { title?: string; config?: Record<string, unknown> }
+  ): Promise<CommandResult> {
+    return this.command(chatId, 'chat.update', { chatId, ...patch })
+  }
+
+  // ---------------- chats só ao vivo: histórico e anexos (§23.5, §23.7) ----------------
+
+  /**
+   * Comando de leitura/transferência de um chat ao vivo (`history.*`, `attach.*`): devolve o
+   * resultado decifrado como veio (inclusive `rejected`, com `code`); falha de rede/servidor vira
+   * `RemoteError` em pt-BR (`code`: `host_offline`, `command_timeout`, `disconnected`, …).
+   */
+  async liveCommand(
+    chatId: string,
+    kind: Extract<CommandKind, `history.${string}` | `attach.${string}`>,
+    payload: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    try {
+      return await this.commandResult(
+        chatId,
+        kind,
+        payload,
+        this.t.fsMs,
+        `O host (${this.hostName(chatId)}) não respondeu a tempo.`
+      )
+    } catch (e) {
+      const err = this.sendError(chatId, e)
+      if (err instanceof RemoteError && err.code === 'invalid_request')
+        throw new RemoteError(
+          err.code,
+          'O servidor do sync ainda não permite chats só ao vivo — atualize o servidor.'
+        )
+      throw err
+    }
   }
 
   // ---------------- arquivos do host (fs.list / fs.read, §8.6) ----------------

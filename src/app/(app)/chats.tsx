@@ -34,6 +34,9 @@ import {
   SyncIndicator
 } from '@/chat/ChatBits'
 import { relativeTime } from '@/chat/format'
+import { LiveSection } from '@/chat/LiveSection'
+import { useLiveGroups } from '@/live/react'
+import { store } from '@/data/native'
 import { Banner } from '@/ui/Card'
 import { ConfirmDialog } from '@/ui/Dialog'
 import { useToast } from '@/ui/Toast'
@@ -62,6 +65,7 @@ const ChatRow = memo(function ChatRow({
   state,
   icon,
   now,
+  localOnly,
   onOpen,
   onLong
 }: {
@@ -69,6 +73,8 @@ const ChatRow = memo(function ChatRow({
   state: ChatState | undefined
   icon: string | null
   now: number
+  /** "Só neste aparelho" (§23.10): nunca vai ao servidor. */
+  localOnly: boolean
   onOpen: (id: string) => void
   onLong: (item: ChatListItem) => void
 }) {
@@ -100,7 +106,12 @@ const ChatRow = memo(function ChatRow({
         ) : (
           <Text style={[st.preview, { color: colors.faint }]}>Sem mensagens</Text>
         )}
-        {state?.host ? (
+        {localOnly ? (
+          <View style={st.localOnly} testID="badge-local-only">
+            <Ionicons name="phone-portrait-outline" size={11} color={colors.subtle} />
+            <Text style={st.localOnlyText}>Só neste aparelho</Text>
+          </View>
+        ) : state?.host ? (
           <View style={{ marginTop: 3 }}>
             <HostBadge state={state} selfId={account.getState().device?.id} />
           </View>
@@ -119,7 +130,13 @@ export default function Chats() {
   const settingsVersion = useSettingsVersion()
   const hasProvider = readAt(settingsVersion, () => hostStack.providers().length > 0)
   const [query, setQuery] = useState('')
-  const { items, states, presets } = useChatList(query)
+  const { items, states, presets, localOnly } = useChatList(query)
+  const liveGroups = useLiveGroups()
+  // a busca roda só nos registros deste aparelho (§23.9): a seção ao vivo some com ela
+  const shownLive = !query && !local ? liveGroups : []
+  const [saving, setSaving] = useState<ChatListItem | null>(null)
+  const [savingAll, setSavingAll] = useState(false)
+  const [mergeKept, setMergeKept] = useState(() => Number(store.getMeta('merge_local_only') ?? 0))
   const [refreshing, setRefreshing] = useState(false)
   const [menu, setMenu] = useState<ChatListItem | null>(null)
   const [renaming, setRenaming] = useState<ChatListItem | null>(null)
@@ -131,6 +148,26 @@ export default function Chats() {
     (id: string) => router.push({ pathname: '/chat/[id]', params: { id } }),
     [router]
   )
+  const openLive = useCallback(
+    (id: string) => router.push({ pathname: '/live/[id]', params: { id } }),
+    [router]
+  )
+  /** "Salvar online" (§23.8): sobe pela outbox; sem conexão, espera. */
+  const saveOnline = (ids: string[]): void => {
+    let n = 0
+    for (const cid of ids) {
+      try {
+        if (hostStack.saveOnline(cid)) n++
+      } catch (e) {
+        toast(describeError(e), 'danger')
+      }
+    }
+    if (n) toast(n === 1 ? 'Salvando online…' : `Salvando ${n} chats online…`)
+  }
+  const dismissMergeKept = () => {
+    store.setMeta('merge_local_only', null)
+    setMergeKept(0)
+  }
   const onLong = useCallback((item: ChatListItem) => setMenu(item), [])
   const refresh = async () => {
     setRefreshing(true)
@@ -145,7 +182,7 @@ export default function Chats() {
     !local && !items.length && !query && status.initial && status.phase !== 'offline'
   /** Sem conta e sem provedor: o vazio é o começo do onboarding. */
   const needsProvider = local && !hasProvider
-  const empty = !items.length && !loadingFirst
+  const empty = !items.length && !loadingFirst && !shownLive.length
 
   return (
     <View style={[st.root, { paddingTop: insets.top }]} testID="screen-chats">
@@ -196,6 +233,37 @@ export default function Chats() {
       {!local && status.phase === 'offline' && items.length ? (
         <View style={st.banner}>
           <Banner tone="warning">Sem conexão — mostrando o que está salvo neste aparelho.</Banner>
+        </View>
+      ) : null}
+      {!local && mergeKept > 0 && localOnly.size > 0 && !query ? (
+        <View style={st.banner}>
+          <Banner
+            tone="info"
+            testID="banner-local-only"
+            action={
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <Button
+                  title="Salvar online"
+                  icon="cloud-upload-outline"
+                  variant="secondary"
+                  full={false}
+                  onPress={() => setSavingAll(true)}
+                  testID="banner-local-only-save"
+                />
+                <Button
+                  title="Agora não"
+                  variant="ghost"
+                  full={false}
+                  onPress={dismissMergeKept}
+                  testID="banner-local-only-dismiss"
+                />
+              </View>
+            }
+          >
+            {localOnly.size === 1
+              ? '1 chat continua só neste aparelho (não foi enviado ao entrar na conta).'
+              : `${localOnly.size} chats continuam só neste aparelho (não foram enviados ao entrar na conta).`}
+          </Banner>
         </View>
       ) : null}
       {!local && status.phase === 'error' && status.error ? (
@@ -285,6 +353,11 @@ export default function Chats() {
           data={items}
           keyExtractor={(c) => c.id}
           extraData={states}
+          ListHeaderComponent={
+            shownLive.length ? (
+              <LiveSection groups={shownLive} now={now} onOpen={openLive} />
+            ) : undefined
+          }
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
           refreshControl={
@@ -304,6 +377,7 @@ export default function Chats() {
               state={states.get(item.id)}
               icon={item.presetId ? (presets.get(item.presetId)?.icon ?? null) : null}
               now={now}
+              localOnly={localOnly.has(item.id)}
               onOpen={open}
               onLong={onLong}
             />
@@ -334,8 +408,40 @@ export default function Chats() {
             setDeleting(menu)
             setMenu(null)
           }}
+          onSaveOnline={
+            !local && localOnly.has(menu.id)
+              ? () => {
+                  setSaving(menu)
+                  setMenu(null)
+                }
+              : undefined
+          }
         />
       ) : null}
+      <ConfirmDialog
+        visible={!!saving}
+        title="Salvar online?"
+        message={`O histórico inteiro (${saving ? store.messageCount(saving.id) : 0} mensagens e os anexos) vai para o servidor, cifrado, e o chat passa a sincronizar com os seus dispositivos.`}
+        confirmLabel="Salvar online"
+        onClose={() => setSaving(null)}
+        onConfirm={() => {
+          const c = saving
+          setSaving(null)
+          if (c) saveOnline([c.id])
+        }}
+      />
+      <ConfirmDialog
+        visible={savingAll}
+        title="Salvar online?"
+        message={`Os ${localOnly.size} chats só deste aparelho (com o histórico e os anexos) vão para o servidor, cifrados, e passam a sincronizar com os seus dispositivos.`}
+        confirmLabel="Salvar todos"
+        onClose={() => setSavingAll(false)}
+        onConfirm={() => {
+          setSavingAll(false)
+          saveOnline([...localOnly])
+          dismissMergeKept()
+        }}
+      />
       {renaming ? (
         <RenameDialog
           initial={renaming.title}
@@ -347,7 +453,7 @@ export default function Chats() {
         visible={!!deleting}
         title="Apagar chat?"
         message={
-          local
+          local || (deleting && localOnly.has(deleting.id))
             ? `“${chatTitle(deleting?.title)}” será apagado deste celular, com todas as mensagens. Não dá para desfazer.`
             : `“${chatTitle(deleting?.title)}” será apagado em todos os seus dispositivos, com todas as mensagens. Não dá para desfazer.`
         }
@@ -446,6 +552,8 @@ const st = StyleSheet.create({
     borderColor: colors.border
   },
   localPillText: { color: colors.muted, fontSize: 12.5 },
+  localOnly: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  localOnlyText: { color: colors.subtle, fontSize: 11.5 },
   fab: {
     position: 'absolute',
     right: 18,

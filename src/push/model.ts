@@ -25,6 +25,10 @@ export interface PushPayload {
   text: string
   requestId?: string
   hostName: string
+  /** Desde 1.8.0: device_id do host (escritores ≥ 1.8.0 DEVEM enviar). */
+  hostDeviceId?: string
+  /** Desde 1.8.0: chat só ao vivo (§23) — tocar abre o visualizador ao vivo. */
+  live?: true
   ts: number
 }
 
@@ -165,16 +169,33 @@ export interface ShownNotification {
   body: string
   /** Android: subtexto (nome do host). */
   subtitle?: string
-  data: { cc: 'push'; kind: ContentKind | 'host_offline'; tag: string; chatId?: string }
+  data: NotificationData
+}
+
+/** Dados guardados junto de cada aviso mostrado (§22.7). */
+export interface NotificationData {
+  cc: 'push'
+  kind: ContentKind | 'host_offline'
+  tag: string
+  chatId?: string
+  /** Host do aviso (desde 1.8.0): `hostDeviceId` decifrado, senão o `from_device_id` de fora. */
+  host?: string
+  /** Nome do host (só nos decifrados) — casa o `host_offline` de servidores < 1.8.0. */
+  hostName?: string
+  /** Chat só ao vivo (§22.7): tocar abre o visualizador. */
+  live?: true
 }
 
 /** Monta a notificação de um aviso decifrado (push do host ou chat executado aqui). */
 export function buildNotification(
   tag: string,
-  p: Pick<PushPayload, 'kind' | 'chatId' | 'chatTitle' | 'text' | 'hostName'>,
+  p: Pick<PushPayload, 'kind' | 'chatId' | 'chatTitle' | 'text' | 'hostName'> &
+    Partial<Pick<PushPayload, 'hostDeviceId' | 'live'>>,
   prefs: Pick<PushPrefs, 'excerpt'>,
   /** Texto do próprio app (não é conteúdo do chat): sempre mostrado, sem rótulo. */
-  appText = false
+  appText = false,
+  /** `from_device_id` de fora (§22.3): o host quando o payload não diz. */
+  fromDeviceId?: string
 ): ShownNotification {
   const title = clip(p.chatTitle, PUSH_TITLE_MAX_CHARS) || APP_TITLE
   const text = clip(p.text, PUSH_TEXT_MAX_CHARS)
@@ -193,18 +214,30 @@ export function buildNotification(
     title,
     body,
     subtitle: p.hostName ? clip(p.hostName, 64) : undefined,
-    data: { cc: 'push', kind: p.kind, tag, chatId: p.chatId || undefined }
+    data: {
+      cc: 'push',
+      kind: p.kind,
+      tag,
+      chatId: p.chatId || undefined,
+      ...(p.hostDeviceId || fromDeviceId ? { host: p.hostDeviceId || fromDeviceId } : {}),
+      ...(p.hostName ? { hostName: p.hostName } : {}),
+      ...(p.live ? { live: true as const } : {})
+    }
   }
 }
 
 /** Aviso sem a DEK: título do app e o texto genérico do tipo. */
-export function genericNotification(tag: string, kind: ContentKind): ShownNotification {
+export function genericNotification(
+  tag: string,
+  kind: ContentKind,
+  fromDeviceId?: string
+): ShownNotification {
   return {
     id: tag,
     channel: CHANNELS[CATEGORY_OF[kind]].id,
     title: APP_TITLE,
     body: GENERIC_TEXT[kind],
-    data: { cc: 'push', kind, tag }
+    data: { cc: 'push', kind, tag, ...(fromDeviceId ? { host: fromDeviceId } : {}) }
   }
 }
 
@@ -267,6 +300,10 @@ export interface FcmData {
   sent_at?: string
   chat_id?: string
   device_name?: string
+  /** Desde 1.8.0: quem fez o `POST /push` (o host), posto pelo servidor. */
+  from_device_id?: string
+  /** Desde 1.8.0, no `host_offline`: o host que caiu. */
+  device_id?: string
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
@@ -280,7 +317,9 @@ function asFcmData(o: Record<string, unknown>): FcmData | null {
     env: str(o.env),
     sent_at: str(o.sent_at),
     chat_id: str(o.chat_id),
-    device_name: str(o.device_name)
+    device_name: str(o.device_name),
+    from_device_id: str(o.from_device_id),
+    device_id: str(o.device_id)
   }
 }
 
@@ -342,6 +381,10 @@ function validPayload(o: Record<string, unknown>): PushPayload | null {
     text: str(o.text) ?? '',
     requestId: str(o.requestId),
     hostName: str(o.hostName) ?? '',
+    ...(typeof o.hostDeviceId === 'string' && o.hostDeviceId
+      ? { hostDeviceId: o.hostDeviceId }
+      : {}),
+    ...(o.live === true ? { live: true as const } : {}),
     ts: o.ts
   }
 }
@@ -386,7 +429,11 @@ export async function decidePush(data: FcmData, ctx: PushContext): Promise<PushD
   if (!key) {
     // DEK indisponível sem interação: texto genérico pelo tipo (sem chat: tocar abre a lista)
     if (tooOld(parseIso(data.sent_at), ctx.now)) return drop('old')
-    return { action: 'show', notification: genericNotification(tag, kind), decrypted: false }
+    return {
+      action: 'show',
+      notification: genericNotification(tag, kind, data.from_device_id || undefined),
+      decrypted: false
+    }
   }
   let plain: Record<string, unknown>
   try {
@@ -399,7 +446,48 @@ export async function decidePush(data: FcmData, ctx: PushContext): Promise<PushD
   if (!p) return drop('payload')
   if (tooOld(p.ts, ctx.now)) return drop('old')
   if (ctx.chatOpen(p.chatId)) return drop('chat-open')
-  return { action: 'show', notification: buildNotification(tag, p, ctx.prefs), decrypted: true }
+  return {
+    action: 'show',
+    notification: buildNotification(tag, p, ctx.prefs, false, data.from_device_id || undefined),
+    decrypted: true
+  }
+}
+
+// ---------------- host caiu → limpar pendências (§22.7, desde 1.8.0) ----------------
+
+/** Qual host o `host_offline` aponta (null = não é um host_offline válido). */
+export function hostOfflineTarget(
+  data: FcmData
+): { deviceId?: string; deviceName?: string } | null {
+  if (data.kind !== 'host_offline') return null
+  if (data.v !== undefined && data.v !== '1') return null
+  const deviceId = data.device_id || undefined
+  const deviceName = data.device_name || undefined
+  if (!deviceId && !deviceName) return null
+  return { ...(deviceId ? { deviceId } : {}), ...(deviceName ? { deviceName } : {}) }
+}
+
+const PENDING_KINDS: ReadonlySet<string> = new Set(['approval', 'question', 'retry'])
+
+/**
+ * Avisos de pendência (aprovação/pergunta/retry) do host que caiu, a apagar da bandeja: casa pelo
+ * host gravado no aviso (`hostDeviceId`, senão `from_device_id`); servidor < 1.8.0 (sem
+ * `device_id`): pelo nome — só os decifrados com `hostName` igual ao `device_name` (os genéricos
+ * ficam). `reply`/`error` nunca.
+ */
+export function pendingToClear(
+  shown: { id: string; data: unknown }[],
+  target: { deviceId?: string; deviceName?: string }
+): string[] {
+  const out: string[] = []
+  for (const n of shown) {
+    const d = n.data as Partial<NotificationData> | null
+    if (!d || d.cc !== 'push' || !d.kind || !PENDING_KINDS.has(d.kind)) continue
+    if (target.deviceId) {
+      if (d.host === target.deviceId) out.push(n.id)
+    } else if (target.deviceName && d.hostName && d.hostName === target.deviceName) out.push(n.id)
+  }
+  return out
 }
 
 /** 32 hex minúsculos aleatórios (tags dos avisos locais). */

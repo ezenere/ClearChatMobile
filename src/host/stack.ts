@@ -112,6 +112,8 @@ export interface HostStack {
    */
   renameChatLocal: (chatId: string, title: string) => void
   deleteChatLocal: (chatId: string) => Promise<void>
+  /** "Salvar online" de um chat só deste aparelho (§23.8). */
+  saveOnline: (chatId: string) => number
 }
 
 export function createHostStack(d: HostStackDeps): HostStack {
@@ -311,6 +313,22 @@ export function createHostStack(d: HostStackDeps): HostStack {
       await runner.stopChat(chatId, true, 'interrupted').catch(() => undefined)
     writer.deleteChat(chatId)
   }
+  /**
+   * "Salvar online" de um chat só deste aparelho (§23.8, ao vivo → online): vira um chat comum
+   * criado offline — tudo na outbox e o envio pelas regras normais (blobs antes, `chat` no primeiro
+   * lote, conteúdo em replay com `chat_bases = 0`; o aparelho vira o host). Sem conexão, espera na
+   * outbox. Devolve quantos registros vão subir.
+   */
+  const saveOnline = (chatId: string): number => {
+    if (d.localOnly?.()) throw new Error('Entre numa conta para salvar chats online.')
+    if (!d.store.isLocalOnly(chatId)) return 0
+    if (runner.busyChats().has(chatId))
+      throw new Error('Espere o agente terminar para salvar o chat online.')
+    const n = d.store.convertToOnline(chatId)
+    d.engine.notifyLocal([chatId])
+    writer.schedule(chatId, 0)
+    return n
+  }
   return {
     repo,
     writer,
@@ -320,6 +338,7 @@ export function createHostStack(d: HostStackDeps): HostStack {
     divergence,
     providers,
     renameChatLocal,
-    deleteChatLocal
+    deleteChatLocal,
+    saveOnline
   }
 }

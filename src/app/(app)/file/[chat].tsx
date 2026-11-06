@@ -3,6 +3,7 @@
 // pedaço), imagens inteiras com progresso, e os demais tipos com "Baixar e abrir". Somente leitura.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { File, Paths } from 'expo-file-system'
+import { live, liveTempFile } from '@/live/native'
 import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as Sharing from 'expo-sharing'
@@ -71,6 +72,22 @@ export default function HostFile() {
     [chat, path]
   )
 
+  /**
+   * Cópia temporária para exibir. Chat só ao vivo (§23.5): na pasta temporária que some ao sair do
+   * chat / bloquear — nada do chat fica no aparelho.
+   */
+  const tempFile = useCallback(
+    (bytes: Uint8Array): File => {
+      const n = `host-${Date.now()}-${safeFileName(name)}`
+      if (live.entry(chat)) return liveTempFile(n, bytes)
+      const f = new File(Paths.cache, n)
+      f.create({ overwrite: true })
+      f.write(bytes)
+      return f
+    },
+    [chat, name]
+  )
+
   const fail = (e: unknown) =>
     setError(e instanceof RemoteFileError ? e.failure : e instanceof Error ? e.message : String(e))
 
@@ -83,13 +100,11 @@ export default function HostFile() {
         onProgress: (d, t) => setProgress(t ? d / t : 1),
         signal: alive.current
       })
-      const f = new File(Paths.cache, `host-${Date.now()}-${safeFileName(name)}`)
-      f.create({ overwrite: true })
-      f.write(r.bytes)
+      const f = tempFile(r.bytes)
       setProgress(null)
       return f
     },
-    [read, name]
+    [read, tempFile]
   )
 
   useEffect(() => {
@@ -107,10 +122,7 @@ export default function HostFile() {
           if (a.aborted) return
           if (f) setImageUri(f.uri)
           else {
-            const tmp = new File(Paths.cache, `host-${Date.now()}-${safeFileName(name)}`)
-            tmp.create({ overwrite: true })
-            tmp.write(first.bytes)
-            setImageUri(tmp.uri)
+            setImageUri(tempFile(first.bytes).uri)
           }
           return
         }
@@ -131,7 +143,7 @@ export default function HostFile() {
     return () => {
       a.aborted = true
     }
-  }, [read, name, downloadFull])
+  }, [read, name, downloadFull, tempFile])
 
   const more = async () => {
     if (!text || !info || loadingMore) return
@@ -240,6 +252,7 @@ export default function HostFile() {
               source={{ uri: imageUri }}
               style={st.image}
               contentFit="contain"
+              cachePolicy={live.entry(chat) ? 'memory' : undefined}
               testID="file-image"
             />
           ) : info.size > FULL_MAX ? (

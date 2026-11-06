@@ -203,12 +203,15 @@ export function ChatActionsSheet({
   title,
   onClose,
   onRename,
-  onDelete
+  onDelete,
+  onSaveOnline
 }: {
   title: string
   onClose: () => void
   onRename: () => void
   onDelete: () => void
+  /** Chat "Só neste aparelho" (§23.8): oferece salvar online. */
+  onSaveOnline?: () => void
 }) {
   const item = (
     icon: IconName,
@@ -244,6 +247,15 @@ export function ChatActionsSheet({
     >
       <View style={{ marginHorizontal: -8, marginTop: -4 }}>
         {item('create-outline', 'Renomear', onRename, false, 'chat-action-rename')}
+        {onSaveOnline
+          ? item(
+              'cloud-upload-outline',
+              'Salvar online',
+              onSaveOnline,
+              false,
+              'chat-action-save-online'
+            )
+          : null}
         {item('trash-outline', 'Apagar chat', onDelete, true, 'chat-action-delete')}
       </View>
     </Dialog>

@@ -47,6 +47,7 @@ import { normalizeMemoryConfig } from '@shared/memory'
 import { autoTitleEnabled, normalizeAutoTitleSettings } from '@shared/autoTitle'
 import { ConfirmDialog } from '@/ui/Dialog'
 import { setOpenChat } from '@/push/task'
+import { live as liveChats, useLiveVersion } from '@/live/react'
 import { normalizeVoiceCallConfig } from '@shared/voice'
 import { callReadiness } from '@/voice/call'
 import { readVoiceSettings } from '@/voice/endpoints'
@@ -413,6 +414,22 @@ export default function ChatScreen() {
     Object.values(memCfg.writeTo).some((x) => !!x) &&
     memCfg.collections.length > 0
   const titleOn = autoTitleEnabled(normalizeAutoTitleSettings(store.setting('autoTitle')))
+  // "Só neste aparelho" (§23.10): `loaded` é o gatilho de releitura depois de salvar online
+  const localOnlyChat = useMemo(() => !!loaded && store.isLocalOnly(id), [loaded, id])
+  const [savingOnline, setSavingOnline] = useState(false)
+
+  // §23.8.6: o host tirou o chat do servidor (tombstone) e o anuncia ao vivo com o mesmo id → abre
+  // o visualizador ("Este chat agora é só ao vivo em <host>")
+  const liveVersion = useLiveVersion()
+  const nowLive = useMemo(
+    () => (loaded === null ? liveChats.entry(id) : null),
+    [loaded, id, liveVersion] // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  useEffect(() => {
+    if (!nowLive) return
+    toast(`Este chat agora é só ao vivo em ${nowLive.host.name}.`, 'info')
+    router.replace({ pathname: '/live/[id]', params: { id } })
+  }, [nowLive, id, router, toast])
 
   const header = (
     <View style={[st.header, { paddingTop: insets.top + 4 }]}>
@@ -440,7 +457,8 @@ export default function ChatScreen() {
             ) : null}
             <Ionicons name="phone-portrait-outline" size={11} color={colors.accentStrong} />
             <Text style={st.localBadge} numberOfLines={1}>
-              Executando neste celular{busy ? ' · rodando' : ''}
+              {localOnlyChat ? 'Só neste aparelho' : 'Executando neste celular'}
+              {busy ? ' · rodando' : ''}
             </Text>
           </View>
         ) : state?.host ? (
@@ -787,6 +805,18 @@ export default function ChatScreen() {
           }}
           testID="chat-action-rename"
         />
+        {localOnlyChat && !host.localOnly ? (
+          <SheetItem
+            icon="cloud-upload-outline"
+            label="Salvar online"
+            detail="Sobe o histórico cifrado e passa a sincronizar com os seus dispositivos."
+            onPress={() => {
+              setMenu(false)
+              setSavingOnline(true)
+            }}
+            testID="chat-action-save-online"
+          />
+        ) : null}
         {state?.host ? (
           <SheetItem
             icon={state.pinned ? 'lock-open-outline' : 'lock-closed-outline'}
@@ -1059,6 +1089,22 @@ export default function ChatScreen() {
             })
         }}
       />
+      <ConfirmDialog
+        visible={savingOnline}
+        title="Salvar online?"
+        message={`O histórico inteiro (${store.messageCount(id)} mensagens e os anexos) vai para o servidor, cifrado, e o chat passa a sincronizar com os seus dispositivos.`}
+        confirmLabel="Salvar online"
+        onClose={() => setSavingOnline(false)}
+        onConfirm={() => {
+          setSavingOnline(false)
+          try {
+            hostStack.saveOnline(id)
+            toast(connected ? 'Salvando online…' : 'Vai subir quando a conexão voltar.')
+          } catch (e) {
+            toast(describeError(e), 'danger')
+          }
+        }}
+      />
       {renaming ? (
         <RenameDialog
           initial={loaded.chat.title}
@@ -1070,7 +1116,7 @@ export default function ChatScreen() {
         visible={deleting}
         title="Apagar chat?"
         message={
-          host.localOnly
+          host.localOnlyChat(id)
             ? `“${title}” será apagado deste celular, com todas as mensagens. Não dá para desfazer.`
             : `“${title}” será apagado em todos os seus dispositivos, com todas as mensagens. Não dá para desfazer.`
         }
