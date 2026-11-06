@@ -1,5 +1,6 @@
 # dependências
 node_modules/
+secrets/
 
 # Expo
 .expo/
