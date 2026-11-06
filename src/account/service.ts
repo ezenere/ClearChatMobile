@@ -29,6 +29,7 @@ import {
   unlockWithPassword,
   unlockWithRecovery
 } from '@/crypto'
+import { pushKey } from '@/push/crypto'
 import { UserError, retryAfterSeconds } from './errors'
 import {
   type AccountInfo,
@@ -117,6 +118,8 @@ export interface DeviceRow {
   last_seen_at: string | null
   online: boolean
   current: boolean
+  /** Tem token de push válido (§6.6, desde 1.7.0; ausente em servidores antigos). */
+  push?: boolean
 }
 
 interface AuthResult {
@@ -160,6 +163,8 @@ export class AccountService {
   private tokens: Tokens | null = null
   private dek: Bytes | null = null
   private sk: Subkeys | null = null
+  /** K_push (§22.4): decifra os avisos com o cofre aberto, inclusive com a DEK sob biometria. */
+  private kPush: Bytes | null = null
   private recoveryDek: Bytes | null = null
   private info: SyncServerInfo | null = null
   private foreground = true
@@ -258,6 +263,11 @@ export class AccountService {
   /** Subchaves em memória (null quando bloqueado). */
   get subkeys(): Subkeys | null {
     return this.sk
+  }
+
+  /** K_push em memória (null quando bloqueado). */
+  get pushKey(): Bytes | null {
+    return this.kPush
   }
 
   get canUseBiometrics(): boolean {
@@ -559,8 +569,10 @@ export class AccountService {
   /** DEK → subchaves em memória e, se pedido, no Keystore. */
   private async openVault(dek: Bytes, opts?: RememberOptions): Promise<void> {
     const sk = await deriveSubkeys(dek)
+    const kPush = await pushKey(dek)
     this.dek = dek
     this.sk = sk
+    this.kPush = kPush
     if (!opts) return
     const { kv, secrets } = this.deps
     let biometric = !!opts.biometric && opts.remember && secrets.canUseBiometrics()
@@ -587,7 +599,8 @@ export class AccountService {
   private forgetKeysInMemory(): void {
     this.dek?.fill(0)
     this.recoveryDek?.fill(0)
-    this.dek = this.sk = this.recoveryDek = null
+    this.kPush?.fill(0)
+    this.dek = this.sk = this.recoveryDek = this.kPush = null
   }
 
   /** Senha de criptografia → DEK (Argon2id fora da thread do JS). Senha errada → AuthError. */

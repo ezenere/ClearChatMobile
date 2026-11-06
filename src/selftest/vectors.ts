@@ -50,6 +50,8 @@ import keysJson from '@vendor/protocol/test-vectors/keys.json'
 import realtimeJson from '@vendor/protocol/test-vectors/realtime.json'
 import recordsJson from '@vendor/protocol/test-vectors/records.json'
 import recoveryJson from '@vendor/protocol/test-vectors/recovery.json'
+import pushJson from '@vendor/protocol/test-vectors/push.json'
+import { aadPush, openPush, pushKey, sealPush } from '@/push/crypto'
 import { deepEq, eq, ok, rejects, throws } from './assert'
 
 export interface VectorCase {
@@ -155,6 +157,20 @@ const ids = idsJson as unknown as {
   blobs: { plaintext_utf8: string; plaintext_sha256_hex: string; blob_id: string }[]
 }
 const branches = branchesJson as unknown as { cases: BranchCase[] }
+const push = pushJson as unknown as {
+  user_id: string
+  push_key_hex: string
+  cases: {
+    name: string
+    kind: string
+    tag: string
+    aad_utf8: string
+    json: string
+    frame_hex: string
+    nonce_hex: string
+    envelope: Envelope
+  }[]
+}
 
 const pattern = (len: number): Uint8Array => {
   const b = new Uint8Array(len)
@@ -377,6 +393,28 @@ export function vectorCases(): VectorCase[] {
       const sha = await sha256(utf8(b.plaintext_utf8))
       eq(hex(sha), b.plaintext_sha256_hex, 'SHA-256')
       eq(await blobIdFromSha256(idSk, sha), b.blob_id, 'blob_id')
+    })
+
+  // ---------------- push.json (notificações, §22) ----------------
+  add('push.json', 'K_push = HKDF(DEK, "clearchat/v1/push")', async () => {
+    eq(hex(await pushKey(fromHex(keys.dek_hex))), push.push_key_hex, 'K_push')
+  })
+  const pk = fromHex(push.push_key_hex)
+  for (const c of push.cases)
+    add('push.json', c.name, async () => {
+      eq(fromUtf8(aadPush(push.user_id, c.kind, c.tag)), c.aad_utf8, 'AAD')
+      const frame = await frameJson(c.json, false)
+      eq(hex(frame), c.frame_hex, 'moldura')
+      const payload = JSON.parse(c.json) as Record<string, unknown>
+      const env = await sealPush(pk, push.user_id, c.kind, c.tag, payload, fromHex(c.nonce_hex))
+      deepEq(env, c.envelope, 'envelope')
+      const back = await openPush(pk, push.user_id, c.kind, c.tag, c.envelope)
+      eq(JSON.stringify(back), c.json, 'JSON')
+      // AAD amarra kind e tag: trocar qualquer um falha a autenticação
+      const other = c.kind === 'reply' ? 'approval' : 'reply'
+      await rejects(openPush(pk, push.user_id, other, c.tag, c.envelope), 'kind trocado')
+      await rejects(openPush(pk, push.user_id, c.kind, '0'.repeat(32), c.envelope), 'tag trocada')
+      await rejects(openPush(pk, 'outro-usuario', c.kind, c.tag, c.envelope), 'usuário trocado')
     })
 
   // ---------------- branches.json (árvore de versões, §4.3.8) ----------------

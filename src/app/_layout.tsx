@@ -13,6 +13,7 @@ import { startRemote } from '@/remote/native'
 import { startHost } from '@/host/native'
 import { startSettings } from '@/settings/native'
 import { startVoice } from '@/voice/native'
+import { startPush } from '@/push/native'
 import { ToastProvider } from '@/ui/Toast'
 import { colors } from '@/ui/theme'
 
@@ -39,6 +40,8 @@ export default function RootLayout() {
     startHost()
     startSettings()
     startVoice()
+    // antes da conta: o aviso de "turno interrompido" precisa ver os turnos antes de pararem
+    startPush()
     void startAccount()
       .catch(() => undefined)
       .finally(() => void SplashScreen.hideAsync().catch(() => undefined))
@@ -88,6 +91,10 @@ export default function RootLayout() {
               />
               <Stack.Screen
                 name="dev/fakemic"
+                options={{ presentation: 'transparentModal', animation: 'none' }}
+              />
+              <Stack.Screen
+                name="dev/push"
                 options={{ presentation: 'transparentModal', animation: 'none' }}
               />
             </Stack>

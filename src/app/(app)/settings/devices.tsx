@@ -122,7 +122,7 @@ export default function Devices() {
                   }
                   title={d.name}
                   badge={d.current ? 'este aparelho' : null}
-                  subtitle={`${d.platform} · ${CLIENT[d.client] ?? d.client}${d.app_version ? ` ${d.app_version}` : ''} · ${seen(d)}`}
+                  subtitle={`${d.platform} · ${CLIENT[d.client] ?? d.client}${d.app_version ? ` ${d.app_version}` : ''} · ${seen(d)}${d.push ? ' · notificações ativas' : ''}`}
                   onPress={() => setRenaming(d)}
                   right={
                     d.current ? null : (

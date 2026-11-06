@@ -7,7 +7,7 @@
 // composer; "Chamada de voz…" no menu edita a voz do chat) e ditado no composer.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { FlashList, type FlashListRef } from '@shopify/flash-list'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
@@ -46,6 +46,7 @@ import { divergedOf, handoverOf } from '@/remote/types'
 import { normalizeMemoryConfig } from '@shared/memory'
 import { autoTitleEnabled, normalizeAutoTitleSettings } from '@shared/autoTitle'
 import { ConfirmDialog } from '@/ui/Dialog'
+import { setOpenChat } from '@/push/task'
 import { normalizeVoiceCallConfig } from '@shared/voice'
 import { callReadiness } from '@/voice/call'
 import { readVoiceSettings } from '@/voice/endpoints'
@@ -67,6 +68,14 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets()
   const toast = useToast()
   const { loaded: cached, state } = useChat(id)
+  // notificações (§22.7): com o chat aberto na tela, os avisos dele não aparecem (e os já
+  // mostrados somem)
+  useFocusEffect(
+    useCallback(() => {
+      setOpenChat(id)
+      return () => setOpenChat(null)
+    }, [id])
+  )
   const [showOnline, setShowOnline] = useState(false)
   const [divDetails, setDivDetails] = useState<DivergenceDetails | null>(null)
   const [memorySheet, setMemorySheet] = useState(false)

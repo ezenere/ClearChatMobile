@@ -13,6 +13,7 @@ import { useSession } from '@/account/react'
 import type { Connection } from '@/account/session'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { SettingsScreen } from '@/settings/ui'
+import { usePushPrefs } from '@/push/react'
 import { Banner, Card, Divider, ListItem, SectionLabel, StatusPill } from '@/ui/Card'
 import type { IconName } from '@/ui/Button'
 import { colors, spacing } from '@/ui/theme'
@@ -81,6 +82,10 @@ export default function SettingsHome() {
   const version = useSettingsVersion()
   const sum = readAt(version, summary)
   const conn = CONNECTION[s.connection]
+  const push = usePushPrefs()
+  const notifSummary = push.enabled
+    ? `Neste aparelho: ${[push.pending && 'pendências', push.reply && 'respostas', push.error && 'erros', push.hostOffline && 'host offline'].filter(Boolean).join(', ') || 'nenhum tipo'}`
+    : 'Desligadas neste aparelho'
   const go = (href: Href) => () => router.push(href)
   const item = (
     href: Href,
@@ -132,7 +137,15 @@ export default function SettingsHome() {
           'settings-defaults'
         )}
         {item('/settings/personas', 'people-outline', 'Personas', sum.presets, 'settings-personas')}
-        {item('/settings/voice', 'mic-outline', 'Voz', sum.voice, 'settings-voice', true)}
+        {item('/settings/voice', 'mic-outline', 'Voz', sum.voice, 'settings-voice')}
+        {item(
+          '/settings/notifications',
+          'notifications-outline',
+          'Notificações',
+          notifSummary,
+          'settings-notifications',
+          true
+        )}
       </Card>
 
       <SectionLabel>Agente</SectionLabel>
@@ -175,7 +188,7 @@ export default function SettingsHome() {
       </Card>
       <Text style={st.foot}>
         As configurações sincronizam com o computador e o site (cifradas). Ficam só aqui: este
-        aparelho lembrado e a biometria.
+        aparelho lembrado, a biometria e as notificações.
       </Text>
     </SettingsScreen>
   )

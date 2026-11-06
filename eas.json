@@ -5,11 +5,13 @@
   },
   "build": {
     "production": {
+      "environment": "production",
       "autoIncrement": true,
       "credentialsSource": "local",
       "android": { "buildType": "app-bundle" }
     },
     "apk": {
+      "environment": "preview",
       "credentialsSource": "local",
       "android": { "buildType": "apk" }
     }

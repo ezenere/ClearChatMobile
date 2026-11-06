@@ -1,7 +1,7 @@
 # ClearChat Mobile — plano
 
 App Android (iOS depois) em **Expo SDK 58 / React Native 0.88**, com dev build (`expo prebuild`) —
-precisamos de módulos nativos. Implementa o protocolo de sync v1.6.0.
+precisamos de módulos nativos. Implementa o protocolo de sync v1.7.0.
 
 ## Escopo
 
@@ -18,7 +18,7 @@ precisamos de módulos nativos. Implementa o protocolo de sync v1.6.0.
    o chat o traz com "Executar neste dispositivo" (§8.8) e continua lá.
 3. Configurações sincronizadas: provedores, personas, memórias, pesquisa na web, novos chats, conta,
    dispositivos.
-4. Depois: voz (ditado e chamada), notificações, iOS.
+4. Depois: voz (ditado e chamada), notificações push (1.7.0), iOS.
 
 ## Arquitetura
 
@@ -373,3 +373,28 @@ Pendências / TODO:
 - O nível do microfone re-renderiza o dock a ~30 Hz: o `uiautomator dump` fica lento durante a
   chamada (para o E2E, screenshots + log do Metro).
 - Clipes não são aparados (o desktop apara o silêncio das pontas).
+
+## Notificações push (1.7.0) — estado (2026-11-06)
+
+Feito: `src/push/` (decisão §22.7 pura com `K_push`/AAD e os vetores de `push.json`; tarefa do
+expo-notifications que roda com o app fechado; registro do token nativo do FCM com `PUT`/`DELETE
+/devices/current/push`; permissão do Android 13+ com convite e explicação ao negar; toque → chat, a
+frio também; canais pendências/respostas/erros/host offline com visibilidade privada; chat aberto não
+avisa; avisos locais dos chats executados aqui), Configurações → Notificações, "notificações ativas"
+nos Dispositivos, Firebase por `app.config.js` (+ variável de arquivo `GOOGLE_SERVICES_JSON` no EAS).
+Detalhes: README § "Notificações push".
+Verificado: `npm test` (30 em `tests/push.test.ts` + os casos de `push.json` no self-test),
+`tests/integration/push.test.ts` contra o servidor real (com conta de serviço falsa), e no AVD: token
+real do FCM registrado; convite → negar → "bloqueadas" → configurações do sistema → "Ativas";
+avisos pela rota `/dev/push` (decifrado, genérico, descartes, dismiss, chat aberto, toque a quente e
+a frio) e a cadeia **desktop real → servidor → FCM falso local → app**: aprovação com trecho (turno
+do celular), dismiss ao aprovar no PC, resposta, PC ausente → resposta, cofre bloqueado → genérico,
+desktop morto → host offline. Screenshots em `scratchpad/mobile/push/`.
+
+Pendências / TODO:
+- **Entrega real pelo FCM não testada** (nem a tarefa num processo sem tela): o servidor com a conta
+  de serviço real foi bloqueado pelo controle de permissões desta sessão. Roteiro no README.
+- Tela bloqueada: o Android esconde o conteúdo (visibilidade privada) e mostra "Conteúdo oculto",
+  não o texto genérico do protocolo (o expo-notifications não monta `publicVersion`).
+- Dismiss do "host offline" ao religar não exercitado (o desktop religado entrou como dispositivo novo).
+- Aprovar/negar pela notificação: fase seguinte. iOS (APNs pelo FCM): depois.

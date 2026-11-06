@@ -76,6 +76,15 @@
           "enableBackgroundRecording": false
         }
       ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#6a4be0",
+          "enableRemoteNotifications": false
+        }
+      ],
+      "expo-task-manager",
       "./plugins/withReleaseSigning",
       "expo-font",
       "expo-asset"

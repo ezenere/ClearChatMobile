@@ -80,6 +80,19 @@ export class NativeSecretStore implements SecretStore {
   }
 }
 
+/**
+ * DEK lembrada SEM prompt (avisos push em segundo plano, §22.7): só a entrada sem biometria e só
+ * com "Lembrar" ligado. Com biometria, sem lembrar ou bloqueado → null (o aviso sai genérico).
+ */
+export async function readDekWithoutPrompt(kv: KeyValueStore): Promise<string | null> {
+  if (kv.get(KV.remember) === '0' || kv.get(KV.biometric) === '1') return null
+  try {
+    return await SecureStore.getItemAsync(DEK, baseOptions)
+  } catch {
+    return null
+  }
+}
+
 export class NativeKeyValueStore implements KeyValueStore {
   get(key: string): string | null {
     return Storage.getItemSync(key)
@@ -101,7 +114,7 @@ function deviceProfile(): DeviceProfile {
 
 export const captchaBroker = new CaptchaBroker()
 
-const kv = new NativeKeyValueStore()
+export const kv = new NativeKeyValueStore()
 
 export const account = new AccountService({
   secrets: new NativeSecretStore(kv),

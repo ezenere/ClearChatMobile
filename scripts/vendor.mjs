@@ -35,7 +35,8 @@ const GROUPS = {
       'test-vectors/blobs.json',
       'test-vectors/realtime.json',
       'test-vectors/ids.json',
-      'test-vectors/branches.json'
+      'test-vectors/branches.json',
+      'test-vectors/push.json'
     ]
   },
   site: {
@@ -84,7 +85,10 @@ const GROUPS = {
       'contextCapture.ts',
       // fase 6: voz (turno adaptativo, política de interjeições/preâmbulos/frases de demora)
       'voiceTurn.ts',
-      'voicePolicy.ts'
+      'voicePolicy.ts',
+      // 1.7.0: textos dos avisos push (trecho sem Markdown, aprovação/pergunta/retry) — os avisos
+      // locais dos chats executados no celular usam os mesmos do host do desktop
+      'push.ts'
     ]
   },
   desktop: {

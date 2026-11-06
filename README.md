@@ -518,6 +518,59 @@ inteira — turno, `meta.voice`, `end_call`, marcadores codificados, custos —,
 Interromper), `tests/capture.test.ts` e `tests/integration/voice.test.ts` (servidor real: settings do
 "desktop" → ditado e chamada no celular → o desktop decifra marcadores/falas/`end_call`/persona).
 
+## Notificações push (protocolo 1.7.0)
+
+Avisos do host (§22) no celular, também com o app fechado. Código em `src/push/`:
+
+- `model.ts` (puro): decisão para cada mensagem de dados do FCM — `dismiss` apaga a tag (sempre);
+  `host_offline` usa os campos em claro; os demais decifram com `K_push` (`crypto.ts`, vetores de
+  `push.json`) e descartam por falha de autenticação, `kind` interno ≠ externo, `ts` > 24 h (sem DEK:
+  `sent_at`), tipo desligado ou chat aberto na tela. Sem a DEK disponível sem interação → texto
+  genérico pelo tipo (título "ClearChat", sem chat). Canais `pending` (alta), `replies`, `errors`,
+  `host-offline`, todos com visibilidade privada na tela bloqueada; identificador = tag.
+- `task.ts`: a tarefa do expo-notifications/expo-task-manager (definida no escopo do módulo, importada
+  pelo `index.ts`) recebe **toda** mensagem de dados — primeiro plano, segundo plano e app morto (JS
+  sem tela). A chave vem do cofre aberto (`account.pushKey`) ou da DEK lembrada **sem biometria** no
+  Keystore (`readDekWithoutPrompt`); com biometria, "não lembrar" ou bloqueado → genérico.
+- `registration.ts`: `PUT`/`DELETE /devices/current/push` com o token **nativo** do FCM
+  (`getDevicePushTokenAsync`, nada do serviço de push da Expo): na abertura/login/desbloqueio, a
+  cada hora em primeiro plano, quando o token muda (só se mudou — o expo avisa o token a cada
+  leitura) e nas Configurações; `features.push` nulo → nada; permissão negada ou desligado → `DELETE`.
+- `native.ts`: permissão do Android 13+ (convite na primeira entrada na conta, antes do diálogo do
+  sistema; negada → aviso e atalho para as configurações do sistema), toque → abre o chat (também a
+  frio, pelo `getLastNotificationResponse`), handler de primeiro plano e os **avisos locais dos chats
+  executados neste celular** (`localHost.ts`, mesmos textos do host do desktop — `@shared/push`
+  vendorado): o host do celular para o turno ao sair da tela, então o aviso real é "O turno parou
+  porque o app saiu da tela…" (com a pendência que havia); aprovação/pergunta/retry/resposta/erro
+  com o app fora da tela também passam pelo mesmo código.
+- Configurações → **Notificações** (`settings/notifications.tsx`): interruptor geral, tipos,
+  "Mostrar trecho", estado (permissão, servidor sem push, build sem Firebase, registrado) e
+  notificação de teste. Dispositivos mostram "notificações ativas" (`push` do `GET /devices`).
+
+**Firebase.** `app.config.js` estende o `app.json` com `android.googleServicesFile`: variável de
+ambiente `GOOGLE_SERVICES_JSON` (no EAS, variável do tipo arquivo, ambientes production e preview,
+visibilidade sensitive — `eas.json` fixa o ambiente de cada perfil) ou `secrets/google-services.json`
+se existir (fora do git). Sem nenhum dos dois o app compila e roda com o push desligado (status
+"Push indisponível"). iOS: `enableRemoteNotifications: false` por enquanto (só avisos locais).
+
+**Teste sem FCM** (build de desenvolvimento): `clearchat://dev/push?kind=approval&chat=<id>` monta a
+mensagem (cifrada com o `K_push` do cofre aberto) e a entrega à mesma função da tarefa;
+`mode=badkey|old|mismatch`, `nokey=1`, `delay=3` (testar com o chat aberto) e `raw=<JSON do
+message.data>` (entrega uma mensagem real capturada). Para a cadeia desktop → servidor sem o Google,
+suba o servidor com uma conta de serviço FALSA (`FCM_SERVICE_ACCOUNT_FILE` com uma chave RSA gerada na
+hora e `token_uri` local) e `FCM_BASE_URL` apontando para um FCM falso que grava cada
+`messages:send`; o `raw=` entrega essas mensagens ao app. `tests/integration/push.test.ts` precisa da
+instância com push (com a conta falsa basta).
+
+**E2E real (FCM de verdade, só para o emulador):** AVD com Play Store, build com
+`secrets/google-services.json`, servidor local com a conta de serviço real do projeto Firebase
+(`FCM_SERVICE_ACCOUNT_FILE`, nunca impressa) e `HOST_DROP_GRACE_S=5 HOST_OFFLINE_PUSH_DELAY_S=15`;
+desktop com pasta de dados descartável, `CLEARCHAT_PUSH_GRACE_MS` curto e `CLEARCHAT_FORCE_AWAY=0|1`.
+Roteiro: o celular manda `/search …` num chat do PC → aprovação chega com o app em segundo plano e
+**morto** (`am kill`) → aprovar no PC → some (dismiss) → resposta chega; PC ausente + turno local →
+resposta para todos; cofre bloqueado/biometria → genérico; matar o desktop com chat rodando →
+"Host offline" → religar o mesmo dispositivo → some.
+
 ## Build iOS no Mac
 
 O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem

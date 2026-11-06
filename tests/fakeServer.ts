@@ -1,5 +1,6 @@
 // Servidor de sync de mentira (fetch falso) para os testes da conta: só o que a fase 1 usa —
-// /api/info, código por e-mail, refresh rotativo (reuso revoga), logout, chaves, dispositivos.
+// /api/info, código por e-mail, refresh rotativo (reuso revoga), logout, chaves, dispositivos e o
+// token de push (§22.2: `features.push`, PUT/DELETE /devices/current/push, `push` na lista).
 import type { KeysResponse } from '../src/crypto'
 import { bytesEqual, fromB64u, sha256 } from '../src/crypto'
 
@@ -9,6 +10,8 @@ interface Device {
   client: string
   platform: string
   revoked: boolean
+  /** Token de push (§22.2). */
+  pushToken?: string | null
 }
 
 export interface Call {
@@ -29,7 +32,9 @@ export class FakeServer {
   base = 'https://sync.fake.test'
   name = 'Instância de Teste'
   captcha = false
-  protocol = { min: 1, max: 1, version: '1.5.0' }
+  protocol = { min: 1, max: 1, version: '1.7.0' }
+  /** `features.push` (§6.2): false = `null` (instância sem push). */
+  push = true
   email = 'ana@example.test'
   userId = 'user-1'
   code = '123456'
@@ -57,7 +62,10 @@ export class FakeServer {
 
   revoke(deviceId: string): void {
     const d = this.devices.get(deviceId)
-    if (d) d.revoked = true
+    if (d) {
+      d.revoked = true
+      d.pushToken = null
+    }
     for (const [t, dev] of this.access) if (dev === deviceId) this.access.delete(t)
     for (const [t, r] of this.refresh) if (r.device === deviceId) this.refresh.delete(t)
   }
@@ -89,7 +97,8 @@ export class FakeServer {
           protocol: this.protocol,
           features: {
             signupOpen: true,
-            captcha: this.captcha ? { provider: 'turnstile', siteKey: 'x' } : null
+            captcha: this.captcha ? { provider: 'turnstile', siteKey: 'x' } : null,
+            push: this.push ? { providers: ['fcm'] } : null
           },
           links: { signup: `${this.base}/signup` }
         }
@@ -178,8 +187,27 @@ export class FakeServer {
             created_at: null,
             last_seen_at: null,
             online: d.id === me.id,
-            current: d.id === me.id
+            current: d.id === me.id,
+            push: !!d.pushToken
           }))
+      }
+    }
+    if (c.path === '/api/v1/devices/current/push') {
+      if (c.method === 'PUT') {
+        if (!this.push) return err(404, 'not_found')
+        if (
+          b.provider !== 'fcm' ||
+          typeof b.token !== 'string' ||
+          !b.token ||
+          b.token.length > 4096
+        )
+          return err(400, 'invalid_request')
+        dev.pushToken = b.token
+        return { status: 204 }
+      }
+      if (c.method === 'DELETE') {
+        dev.pushToken = null
+        return { status: 204 }
       }
     }
     const m = /^\/api\/v1\/devices\/([^/]+)$/.exec(c.path)
