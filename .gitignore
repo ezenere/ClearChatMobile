@@ -44,3 +44,6 @@ coverage/
 
 # typescript
 *.tsbuildinfo
+
+# EAS credentialsSource local (gerado e apagado por scripts/eas.sh)
+credentials.json

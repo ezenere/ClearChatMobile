@@ -31,7 +31,8 @@ Node ≥ 22 e `npm install`.
 | `npm run prebuild:ios`                    | gera `ios/` (`expo prebuild --platform ios`) — no Mac, ver abaixo     |
 | `npm start`                               | Metro (bundler)                                                       |
 | `npm run android`                         | `expo run:android`: compila, instala no aparelho/emulador e abre      |
-| `npm run build:apk`                       | APK release assinado em `dist/` (local, sem conta Expo) — ver abaixo  |
+| `npm run build:apk` / `build:aab`         | APK / AAB release assinados em `dist/` (Gradle local) — ver abaixo    |
+| `npm run publish:android`                 | build no EAS + envio à Play (teste interno) — ver abaixo              |
 
 ### Build e emulador
 
@@ -51,28 +52,55 @@ e continuam com o código velho): se o app não refletir uma mudança, reinicie 
 `app.json`, de plugins e do módulo local `modules/argon2`; `npx expo prebuild --clean` regenera. Se um
 ajuste nativo não couber num config plugin, reavaliar.
 
-### APK para instalar (release, sem conta Expo)
+### APK e AAB (release)
 
-O build é 100% local (Gradle) — não precisa de conta Expo/EAS nem de Play Store. O APK release traz o
-JS embutido (não usa Metro) e não tem as rotas `clearchat://dev/*`.
+Uma chave de assinatura só, criada uma vez e guardada **fora** do repo; ela assina o APK local, o AAB
+local e os builds do EAS (que recebem a chave só durante o build — `credentialsSource: "local"`).
 
 ```sh
 npm run build:apk -- --init      # UMA VEZ: cria ~/.android/clearchat-release.jks + .properties (pede senha)
-npm run build:apk                # → dist/ClearChat-<versão>.apk (arm64-v8a, celulares atuais)
+npm run build:apk                # → dist/ClearChat-<versão>-<code>.apk (arm64-v8a, celulares atuais)
 npm run build:apk -- --install   # idem + adb install -r no aparelho conectado por USB
 ABIS=arm64-v8a,armeabi-v7a npm run build:apk   # celulares 32-bit antigos também
+npm run build:aab                # sobe android.versionCode no app.json e gera dist/….aab (Play, todas as ABIs)
 ```
 
 - A assinatura entra pelo plugin `plugins/withReleaseSigning.js`, que lê o `.properties` fora do repo
   (`CLEARCHAT_SIGNING_PROPS` troca o caminho). Chave e senha **nunca** vão para o repositório.
-- **Faça backup da chave e da senha.** O Android só aceita atualizar um app com a mesma assinatura:
-  sem a chave, a única saída é desinstalar (apaga os dados locais do app; os chats voltam do servidor
-  depois do login, mas o que só existia no aparelho se perde).
-- Pelo mesmo motivo, um app de debug (assinado com a chave de debug) não é atualizado por um release:
-  desinstale o de debug antes de instalar o primeiro release.
-- Para atualizar: suba `version` no `app.json` (o `versionCode` vem do prebuild) e gere de novo; o
-  `adb install -r` ou abrir o APK no celular mantém os dados.
+- **Faça backup da chave e da senha.** Para o APK instalado à mão, o Android só aceita atualização com a
+  mesma assinatura (sem a chave: desinstalar, o que apaga os dados locais). Na Play, com o Play App
+  Signing, ela é só a _chave de upload_ — se perder, o Google consegue trocar.
+- APK de debug, APK local e app vindo da Play têm assinaturas diferentes: um não atualiza o outro.
+  Escolha um canal por aparelho (troca = desinstalar).
+- `versionCode` (app.json `android.versionCode`) é a fonte única: o `build:aab` e o EAS
+  (`autoIncrement`) sobem o número e alteram o `app.json` — **faça commit** depois de cada envio.
 - Sem cabo: copie o APK para o celular e abra (permita "instalar apps desconhecidos" para o app usado).
+
+### Publicar na Play pelo Expo (EAS)
+
+Projeto EAS: `@ezenere/clearchat-mobile` (`extra.eas.projectId` no app.json). O EAS CLI roda pela
+versão fixa em `scripts/eas.sh` (`npm run eas -- <comando>`).
+
+```sh
+npm run publish:android          # build na nuvem do EAS (AAB) + envio automático à faixa "internal"
+# ou, sem fila da nuvem:
+npm run build:aab && npm run submit:android    # AAB local + envio pelo EAS Submit
+```
+
+Uma vez só, antes do primeiro envio automático:
+
+1. Play Console → criar o app (`com.ezenere.clearchat`) e preencher o mínimo pedido para teste interno
+   (acesso ao app, anúncios, classificação, público-alvo, segurança dos dados e **política de
+   privacidade** — exigida porque o app pede microfone).
+2. **O primeiro AAB precisa ser enviado à mão** (limitação da API do Google): `npm run build:aab` e
+   suba o arquivo em Testes → Teste interno. Aceite o Play App Signing.
+3. Conta de serviço para o EAS Submit: no Google Cloud (pode ser o projeto do Firebase) crie uma conta
+   de serviço com chave JSON, salve em `secrets/play-service-account.json` (ignorado pelo git) e, na
+   Play Console → Usuários e permissões, convide o e-mail dela com permissão de lançar em testes.
+4. Testadores: Teste interno → lista de e-mails → mande o link de participação.
+
+O `eas.json` envia com `releaseStatus: "completed"`; enquanto o app estiver em rascunho na Play (antes
+do primeiro lançamento manual), o Google só aceita `draft`.
 
 ### Self-test da cripto no aparelho
 

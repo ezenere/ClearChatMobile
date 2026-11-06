@@ -22,6 +22,7 @@
     },
     "android": {
       "package": "com.ezenere.clearchat",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#6a4be0"
@@ -75,11 +76,19 @@
           "enableBackgroundRecording": false
         }
       ],
-      "./plugins/withReleaseSigning"
+      "./plugins/withReleaseSigning",
+      "expo-font",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c5c6641f-8015-4029-b9ae-7e3328f8dcba"
+      }
+    },
+    "owner": "ezenere"
   }
 }

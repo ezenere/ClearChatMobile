@@ -1,0 +1,26 @@
+{
+  "cli": {
+    "version": ">= 27.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "production": {
+      "autoIncrement": true,
+      "credentialsSource": "local",
+      "android": { "buildType": "app-bundle" }
+    },
+    "apk": {
+      "credentialsSource": "local",
+      "android": { "buildType": "apk" }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./secrets/play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "completed"
+      }
+    }
+  }
+}
