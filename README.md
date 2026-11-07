@@ -33,6 +33,7 @@ Node ≥ 22 e `npm install`.
 | `npm run android`                         | `expo run:android`: compila, instala no aparelho/emulador e abre      |
 | `npm run build:apk` / `build:aab`         | APK / AAB release assinados em `dist/` (Gradle local) — ver abaixo    |
 | `npm run publish:android`                 | build no EAS + envio à Play (teste interno) — ver abaixo              |
+| `scripts/make-icons.sh`                   | ícones do app e imagens da loja a partir de `assets/brand/*.svg`      |
 
 ### Build e emulador
 
