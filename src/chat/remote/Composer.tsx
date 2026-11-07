@@ -45,7 +45,7 @@ import {
 import type { IconName } from '@/ui/Button'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
-import { colors, radius } from '@/ui/theme'
+import { colors } from '@/ui/theme'
 import { Image } from 'expo-image'
 
 interface Pending {
@@ -877,14 +877,12 @@ const c = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.04)'
   },
+  // o pé da tela inteiro é o campo (ui/BottomBar.tsx): sem caixa, sem borda — a superfície é a do
+  // rodapé da conversa, que desce até a borda da tela
   box: {
-    marginHorizontal: 10,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.elevated,
-    paddingTop: 6,
-    paddingBottom: 6
+    paddingTop: 2,
+    paddingBottom: 2,
+    paddingHorizontal: 4
   },
   atts: { gap: 8, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 6 },
   att: {

@@ -7,7 +7,7 @@ import { useState } from 'react'
 import { account } from '@/account/native'
 import { useAction, useSession } from '@/account/react'
 import { SettingsScreen, Note } from '@/settings/ui'
-import { Button } from '@/ui/Button'
+import { BottomBarButton } from '@/ui/BottomBar'
 import { Banner } from '@/ui/Card'
 import { NewPasswordFields, useNewPassword } from '@/ui/NewPasswordFields'
 import { useSecureScreen } from '@/ui/secure'
@@ -59,7 +59,7 @@ function ChangePassword() {
       title="Trocar senha"
       testID="screen-password"
       footer={
-        <Button
+        <BottomBarButton
           testID="password-save"
           title={busy ? 'Trocando… (pode levar alguns segundos)' : 'Trocar senha'}
           icon="lock-closed-outline"

@@ -9,6 +9,7 @@ import { hostOf, useAction, useSession } from '@/account/react'
 import { OFFICIAL_SYNC_LABEL, type SyncServerInfo, type SyncServerKind } from '@shared/sync'
 import { normalizeBaseUrl, SyncNetworkError } from '@vendor/desktop/sync/http'
 import { UserError } from '@/account/errors'
+import { BottomBarButton } from '@/ui/BottomBar'
 import { Button } from '@/ui/Button'
 import { Banner, Card } from '@/ui/Card'
 import { Hero, Screen, ScreenHeader } from '@/ui/Screen'
@@ -106,7 +107,7 @@ export default function Server() {
       testID="screen-server"
       header={<ScreenHeader title="Servidor" onBack={() => router.back()} />}
       footer={
-        <Button
+        <BottomBarButton
           testID="server-save"
           title="Usar este servidor"
           icon="checkmark"

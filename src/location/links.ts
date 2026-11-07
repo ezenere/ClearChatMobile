@@ -28,7 +28,10 @@ export function mapLinks(
   const app =
     platform === 'ios'
       ? `maps://?q=${encodeURIComponent(label)}&ll=${ll}`
-      : `geo:${ll}?q=${ll}(${encodeURIComponent(label)})`
+      : // o rótulo do geo: vai entre parênteses (`q=lat,lon(Nome)`), codificados como %28/%29: um
+        // link sem `(`/`)` não quebra no Markdown nem quando alguém (um modelo, um regex) o recorta
+        // no primeiro `)` — o Android decodifica a query (o Google Maps mostra o nome)
+        `geo:${ll}?q=${ll}%28${encodeURIComponent(label)}%29`
   const web = `https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=18/${p.lat}/${p.lon}`
   return { app, web }
 }

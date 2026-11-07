@@ -46,6 +46,7 @@ import { setOpenChat } from '@/push/task'
 import { ModelPicker, useModels } from '@/settings/ModelPicker'
 import { Button } from '@/ui/Button'
 import { ConfirmDialog } from '@/ui/Dialog'
+import { BottomInset } from '@/ui/BottomBar'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
 import { colors, radius } from '@/ui/theme'
@@ -624,7 +625,7 @@ export default function LiveChatScreen() {
               <Ionicons name="arrow-down" size={18} color={colors.muted} />
             </Pressable>
           ) : null}
-          <View style={[st.footer, { paddingBottom: insets.bottom + 8 }]}>
+          <View style={st.footer}>
             {stillLoading ? (
               <Strip icon="sync-outline" tone="muted" testID="strip-live-loading">
                 Carregando o resto do histórico de {hostName}…
@@ -731,6 +732,7 @@ export default function LiveChatScreen() {
                   : `${loaded.broken} itens do histórico não vieram do host e não aparecem.`}
               </Text>
             ) : null}
+            <BottomInset />
           </View>
         </KeyboardAvoidingView>
         <MessageActionsSheet

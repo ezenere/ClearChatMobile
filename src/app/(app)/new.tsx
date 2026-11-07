@@ -38,6 +38,7 @@ import {
 import { ModelPicker, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { Button } from '@/ui/Button'
+import { BottomBarButton } from '@/ui/BottomBar'
 import { Banner, ToggleRow } from '@/ui/Card'
 import { useToast } from '@/ui/Toast'
 import { colors, radius } from '@/ui/theme'
@@ -318,16 +319,14 @@ export default function NewChatScreen() {
           ) : null}
         </View>
       </ScrollView>
-      <View style={[st.footer, { paddingBottom: insets.bottom + 10 }]}>
-        <Button
-          title="Começar conversa"
-          icon="chatbubble-ellipses-outline"
-          loading={creating}
-          disabled={!provider || !model.trim()}
-          onPress={() => void create()}
-          testID="new-create"
-        />
-      </View>
+      <BottomBarButton
+        title="Começar conversa"
+        icon="chatbubble-ellipses-outline"
+        loading={creating}
+        disabled={!provider || !model.trim()}
+        onPress={() => void create()}
+        testID="new-create"
+      />
       <ModelPicker
         visible={picker}
         onClose={() => setPicker(false)}
@@ -421,12 +420,5 @@ const st = StyleSheet.create({
     backgroundColor: colors.surface,
     padding: 12,
     gap: 10
-  },
-  footer: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    backgroundColor: colors.surface
   }
 })

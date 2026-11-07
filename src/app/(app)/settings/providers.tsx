@@ -8,7 +8,7 @@ import { KIND_SHORT, maskApiKey } from '@/settings/records'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { useSession } from '@/account/react'
 import { Note, Row, SettingsScreen } from '@/settings/ui'
-import { Button } from '@/ui/Button'
+import { BottomBarButton } from '@/ui/BottomBar'
 import { Card, Divider } from '@/ui/Card'
 import { colors } from '@/ui/theme'
 
@@ -25,7 +25,7 @@ export default function Providers() {
       title="Provedores"
       testID="screen-providers"
       footer={
-        <Button
+        <BottomBarButton
           title="Adicionar provedor"
           icon="add"
           onPress={() =>

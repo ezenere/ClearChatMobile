@@ -25,7 +25,8 @@ import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { resolvePresetConfig } from '@/settings/records'
 import { settings } from '@/settings/react'
 import { FieldLabel, IconPicker, Multiline, Note, Segmented, SettingsScreen } from '@/settings/ui'
-import { Button, TextButton } from '@/ui/Button'
+import { BottomBarButton } from '@/ui/BottomBar'
+import { TextButton } from '@/ui/Button'
 import { Banner, Card, Divider, ToggleRow } from '@/ui/Card'
 import { TextField } from '@/ui/TextField'
 import { useToast } from '@/ui/Toast'
@@ -133,7 +134,7 @@ export default function PersonaEditor() {
       title={isNew ? 'Nova persona' : 'Persona'}
       testID="screen-persona"
       footer={
-        <Button
+        <BottomBarButton
           title={isNew ? 'Criar persona' : 'Salvar persona'}
           icon="checkmark"
           disabled={!name.trim()}

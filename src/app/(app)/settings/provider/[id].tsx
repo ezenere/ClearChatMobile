@@ -22,6 +22,7 @@ import {
 import { settings } from '@/settings/react'
 import { useSession } from '@/account/react'
 import { FieldLabel, Multiline, Note, SettingsScreen } from '@/settings/ui'
+import { BottomBarButton } from '@/ui/BottomBar'
 import { Button } from '@/ui/Button'
 import { Banner, Card } from '@/ui/Card'
 import { ConfirmDialog } from '@/ui/Dialog'
@@ -112,7 +113,7 @@ export default function ProviderEditor() {
       title={isNew ? 'Novo provedor' : 'Provedor'}
       testID="screen-provider"
       footer={
-        <Button
+        <BottomBarButton
           title={isNew ? 'Adicionar' : 'Salvar'}
           icon="checkmark"
           onPress={save}

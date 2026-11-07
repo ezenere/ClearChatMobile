@@ -244,7 +244,7 @@ describe('links de mapa', () => {
   it('Android geo:, iOS maps:, web do OSM; rótulo sem parênteses', () => {
     const p = { lat: -23.5609, lon: -46.6551, name: 'Cantina (do) Teste' }
     expect(mapLinks(p, 'android').app).toBe(
-      'geo:-23.5609,-46.6551?q=-23.5609,-46.6551(Cantina%20do%20Teste)'
+      'geo:-23.5609,-46.6551?q=-23.5609,-46.6551%28Cantina%20do%20Teste%29'
     )
     expect(mapLinks(p, 'ios').app).toBe('maps://?q=Cantina%20do%20Teste&ll=-23.5609,-46.6551')
     expect(mapLinks(p, 'ios').web).toBe(
@@ -271,6 +271,37 @@ describe('links de mapa', () => {
     }
     walk(tokens as unknown[])
     expect(links).toEqual([app, 'https://osm.org'])
+  })
+
+  it('link geo: sem parênteses: recortar no primeiro `)` (modelo/regex ingênuo) não o quebra', () => {
+    const app = mapLinks({ lat: -23.559634, lon: -46.6524598, name: 'Le (Jardin)' }, 'android').app
+    expect(app).not.toMatch(/[()]/)
+    // o que um extrator ingênuo faz com `[abrir no app de mapas](<link>)`
+    const cut = /\]\(([^)]+)\)/.exec(`[abrir no app de mapas](${app})`)?.[1]
+    expect(cut).toBe(app)
+    const hrefs = (md: string): string[] => {
+      const out: string[] = []
+      const walk = (ts: unknown[]): void => {
+        for (const t of ts as {
+          type: string
+          href?: string
+          tokens?: unknown[]
+          items?: unknown[]
+        }[]) {
+          if (t.type === 'link' && t.href) out.push(t.href)
+          if (t.tokens) walk(t.tokens)
+          if (t.items) walk(t.items)
+        }
+      }
+      walk(lexMarkdown(md) as unknown[])
+      return out
+    }
+    expect(hrefs(`1. [Le Jardin](${cut}) — 250 m\n   Rua Pamplona, 315`)).toEqual([app])
+    // links com parênteses balanceados continuam valendo (formato antigo, de outros apps)…
+    const old = 'geo:-23.55,-46.65?q=-23.55,-46.65(Le%20Jardin)'
+    expect(hrefs(`[Le Jardin](${old})`)).toEqual([old])
+    // …e o recorte desbalanceado (o sintoma visto na captura de tela) vira texto, como no CommonMark
+    expect(hrefs('[Le Jardin](geo:-23.55,-46.65?q=-23.55,-46.65(Le%20Jardin)')).toEqual([])
   })
 })
 
@@ -305,7 +336,7 @@ describe('get_location', () => {
     expect(r.content).not.toContain('-23.5614')
     expect(r.content).not.toContain('Avenida Paulista')
     expect(r.content).toContain('lugar: Bela Vista, São Paulo, Brasil (geocodificador do Android)')
-    expect(r.content).toContain('[abrir no app de mapas](geo:-23.56,-46.65?q=-23.56,-46.65(')
+    expect(r.content).toContain('[abrir no app de mapas](geo:-23.56,-46.65?q=-23.56,-46.65%28')
     expect(device.geocoded).toEqual([{ lat: -23.56, lon: -46.65 }])
     expect(device.positions).toEqual(['approximate'])
     expect(device.requests).toEqual([])

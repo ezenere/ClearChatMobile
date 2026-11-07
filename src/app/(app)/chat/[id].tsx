@@ -52,6 +52,7 @@ import { normalizeVoiceCallConfig } from '@shared/voice'
 import { callReadiness } from '@/voice/call'
 import { readVoiceSettings } from '@/voice/endpoints'
 import { useCallView, voice } from '@/voice/react'
+import { BottomInset } from '@/ui/BottomBar'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
 import { colors, radius } from '@/ui/theme'
@@ -633,7 +634,7 @@ export default function ChatScreen() {
             <Ionicons name="arrow-down" size={18} color={colors.muted} />
           </Pressable>
         ) : null}
-        <View style={[st.footer, { paddingBottom: insets.bottom + 8 }]}>
+        <View style={st.footer}>
           {view?.localOverride ? (
             <View style={st.footRow} testID="local-version-note">
               <Ionicons name="git-branch-outline" size={14} color={colors.accentStrong} />
@@ -773,6 +774,7 @@ export default function ChatScreen() {
               e não aparece{loaded.broken === 1 ? '' : 'm'}.
             </Text>
           ) : null}
+          <BottomInset />
         </View>
       </KeyboardAvoidingView>
       <ConfirmDialog

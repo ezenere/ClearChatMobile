@@ -3,7 +3,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
 import type { ReactNode } from 'react'
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native'
-import { KeyboardAwareScrollView } from 'react-native-keyboard-controller'
+import { KeyboardAwareScrollView, KeyboardStickyView } from 'react-native-keyboard-controller'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors, spacing } from './theme'
 
@@ -18,7 +18,10 @@ export function Screen({
 }: {
   children: ReactNode
   header?: ReactNode
-  /** Fica fora da rolagem, colado embaixo (acima do teclado quando aberto). */
+  /**
+   * Fica fora da rolagem, colado embaixo (acima do teclado quando aberto) e de ponta a ponta: é o
+   * próprio elemento (ex.: `BottomBarButton`) que cobre o recuo inferior (ver ui/BottomBar.tsx).
+   */
   footer?: ReactNode
   scroll?: boolean
   /** Centraliza o conteúdo na vertical quando sobra espaço. */
@@ -60,9 +63,8 @@ export function Screen({
         </View>
       )}
       {footer ? (
-        <View style={[styles.footer, pad, { paddingBottom: insets.bottom + spacing.lg }]}>
-          {footer}
-        </View>
+        // sobe com o teclado (sem faixa vazia: o recuo inferior do botão some junto, BottomBar.tsx)
+        <KeyboardStickyView style={styles.footer}>{footer}</KeyboardStickyView>
       ) : null}
     </View>
   )
@@ -136,13 +138,7 @@ const styles = StyleSheet.create({
   scroll: { flexGrow: 1, paddingTop: spacing.lg },
   content: { flexGrow: 1, gap: spacing.lg, width: '100%', maxWidth: 520, alignSelf: 'center' },
   center: { justifyContent: 'center' },
-  footer: {
-    paddingTop: spacing.md,
-    gap: spacing.sm,
-    backgroundColor: colors.bg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border
-  },
+  footer: { alignSelf: 'stretch' },
   header: {
     height: 56,
     flexDirection: 'row',

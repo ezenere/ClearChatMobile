@@ -392,8 +392,7 @@ export default function Chats() {
           accessibilityRole="button"
           testID="fab-new-chat"
         >
-          <Ionicons name="add" size={22} color={colors.onAccent} />
-          <Text style={st.fabText}>Novo chat</Text>
+          <Ionicons name="create-outline" size={26} color={colors.onAccent} />
         </Pressable>
       )}
       {menu ? (
@@ -557,18 +556,16 @@ const st = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: 18,
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 18,
-    height: 50,
-    borderRadius: 25,
+    justifyContent: 'center',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: colors.accent,
     elevation: 6,
     shadowColor: '#000',
     shadowOpacity: 0.3,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 }
-  },
-  fabText: { color: colors.onAccent, fontSize: 15, fontWeight: '600' }
+  }
 })

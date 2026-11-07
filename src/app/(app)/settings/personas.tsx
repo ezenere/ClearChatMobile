@@ -10,7 +10,7 @@ import { ChatAvatar } from '@/chat/ChatBits'
 import { resolvePresetConfig } from '@/settings/records'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { Note, Row, SettingsScreen } from '@/settings/ui'
-import { Button } from '@/ui/Button'
+import { BottomBarButton } from '@/ui/BottomBar'
 import { Card, Divider } from '@/ui/Card'
 import { ConfirmDialog } from '@/ui/Dialog'
 import { Sheet, SheetItem } from '@/ui/Sheet'
@@ -73,7 +73,12 @@ export default function Personas() {
       title="Personas"
       testID="screen-personas"
       footer={
-        <Button title="Nova persona" icon="add" onPress={() => open('new')} testID="persona-add" />
+        <BottomBarButton
+          title="Nova persona"
+          icon="add"
+          onPress={() => open('new')}
+          testID="persona-add"
+        />
       }
     >
       <Note>
