@@ -6,6 +6,7 @@
 // novo com espera crescente. Sem React Native.
 import { SyncApiError, SyncNetworkError } from '@vendor/desktop/sync/http'
 import { openRecord, sealRecord, type Subkeys } from '@/crypto'
+import { outgoingPlain } from './legacy'
 import type { LocalStore, LwwRow } from './store'
 import type { Change, Plain, PushConflict, PushItem, PushResult } from './types'
 
@@ -196,7 +197,7 @@ export class LwwWriter {
           keys.sk.record,
           keys.userId,
           { type: row.type, id: row.id, scope: row.scope, rev },
-          row.plain
+          outgoingPlain(row.type, row.id, row.plain)
         )
       try {
         const res = await this.post({

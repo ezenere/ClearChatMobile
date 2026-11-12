@@ -13,6 +13,7 @@ import {
   type BranchSel
 } from '@shared/branches'
 import { DEFAULT_CHAT_CONFIG } from '@shared/defaults'
+import { normalizeVoiceCallConfig } from '@shared/voice'
 import type {
   ApiMessage,
   Chat,
@@ -89,10 +90,20 @@ export class ChatRepo {
     if (!p) return null
     const c = chatFromPlain(chatId, p)
     const fallback = DEFAULT_CHAT_CONFIG('')
+    const cfg = c.config as Partial<ChatConfig>
     return {
       id: chatId,
       title: c.title,
-      config: { ...fallback, ...(c.config as Partial<ChatConfig>), cwd: '' } as ChatConfig,
+      config: {
+        ...fallback,
+        ...cfg,
+        // normalizada como na persona (`sanitizePresetConfig`): campos legados de registros antigos
+        // (`interjections` — §4.3.6) somem aqui (= `toChat` do desktop)
+        ...(cfg.voice && typeof cfg.voice === 'object'
+          ? { voice: normalizeVoiceCallConfig(cfg.voice) }
+          : {}),
+        cwd: ''
+      } as ChatConfig,
       mainSessionId: c.mainSessionId,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt

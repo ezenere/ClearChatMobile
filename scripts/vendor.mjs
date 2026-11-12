@@ -84,7 +84,8 @@ const GROUPS = {
       'remoteFs.ts',
       'smartApprove.ts',
       'contextCapture.ts',
-      // fase 6: voz (turno adaptativo, política de interjeições/preâmbulos/frases de demora)
+      // fase 6: voz (turno adaptativo, política dos preâmbulos/frases de demora/ducking; o portão
+      // de ativação `speechGate`, `heardText` e `audioTags` vêm pelo fecho dos imports)
       'voiceTurn.ts',
       'voicePolicy.ts',
       // 1.7.0: textos dos avisos push (trecho sem Markdown, aprovação/pergunta/retry) — os avisos
@@ -181,10 +182,10 @@ const SHIMS = {
   'desktop:memory/service.ts': 'src/memory/service.ts',
   // read_history em outros chats: consultas sobre o cache local (FTS própria)
   'desktop:historyStore.ts': 'src/agent/historyStore.ts',
-  // fase 6 (voz): clipes de interjeição/preâmbulo — o desktop guarda em disco com node:fs e
+  // fase 6 (voz): clipes dos preâmbulos — o desktop guarda em disco com node:fs e
   // hash-wasm; o celular tem o mesmo conjunto de frases e um cache próprio (expo-file-system)
   'desktop:voice/clips.ts': 'src/voice/clips.ts',
-  // log de avaliação do modo sombra (JSONL em disco no desktop): no celular só o tipo
+  // log de diagnóstico dos preâmbulos (JSONL em disco no desktop): no celular só o tipo
   'desktop:voice/evalLog.ts': 'src/voice/evalLog.ts',
   // WebSocket multi-contexto da ElevenLabs (Buffer + headers no construtor do WebSocket do Node):
   // no celular a fala vai por HTTP por frase; a chamada só importa o tipo do gancho

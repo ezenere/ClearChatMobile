@@ -1,14 +1,15 @@
-// Clipes de interjeição/preâmbulo da chamada de voz no celular — adaptação de
+// Clipes dos preâmbulos (fillers) da chamada de voz no celular — adaptação de
 // ClearChatDesktop/src/main/voice/clips.ts (shim gerado em src/vendor/desktop/voice/clips.ts: o
-// `VoiceCallManager` vendorado importa daqui `CLIP_PHRASES`/`ClipClass`). O desktop grava os clipes
-// em `<userData>/voice-clips/<voz>` com node:fs + hash-wasm; aqui a MESMA definição (frases, pool de
+// `VoiceCallManager` vendorado importa daqui o tipo `ClipClass`). O desktop grava os clipes em
+// `<userData>/voice-clips/<voz>` com node:fs + hash-wasm; aqui a MESMA definição (o pool de
 // preâmbulos, voz, modelo, parâmetros) vira um hash e os bytes ficam num `ClipStore` injetado (no
 // aparelho: `Documents/voice-clips/`, `src/voice/native.ts`). Clipe ausente ou de definição velha →
-// null (a chamada não toca nada no lugar — igual ao desktop). Sem React Native (testável no Node).
+// null (a chamada não toca nada no lugar — igual ao desktop). Só a classe `FILLER` (as interjeições
+// "Uhum/Aham" saíram em 2026-11-12): caches antigos com outras classes contam como velhos e somem na
+// próxima geração. Sem React Native (testável no Node).
 //
-// As frases e o hash espelham o desktop byte a byte (testado contra a origem quando o repositório
-// irmão está ao lado); mudança sugerida no desktop: mover a parte pura de clips.ts para um módulo sem
-// node:fs (ex.: `clipsCore.ts`) para o celular vendorar em vez de copiar.
+// Mudança sugerida no desktop: mover a parte pura de clips.ts para um módulo sem node:fs (ex.:
+// `clipsCore.ts`) para o celular vendorar em vez de copiar.
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import {
@@ -19,33 +20,18 @@ import {
 } from '@shared/voice'
 import { resolveGpuParams } from '@shared/gpuVoice'
 
-/** Classes de clipes (= desktop). */
-export type ClipClass = 'ACK' | 'AGREEMENT' | 'ENCOURAGEMENT' | 'THINKING' | 'FILLER'
-export const CLIP_CLASSES: readonly ClipClass[] = [
-  'ACK',
-  'AGREEMENT',
-  'ENCOURAGEMENT',
-  'THINKING',
-  'FILLER'
-]
+/** Classes de clipes (= desktop): só o `FILLER` (preâmbulo pós-turno). */
+export type ClipClass = 'FILLER'
+export const CLIP_CLASSES: readonly ClipClass[] = ['FILLER']
 
-/** Teto do `<n>` de qualquer classe (= desktop: o pool de preâmbulos tem até `FILLER_POOL_MAX`). */
+/** Teto do `<n>` (= desktop: uma variante por frase do pool de preâmbulos, até `FILLER_POOL_MAX`). */
 export const CLIP_MAX_VARIANTS = FILLER_POOL_MAX
 
-/** Frases das interjeições, na ordem das variantes (= desktop, byte a byte). */
-export const CLIP_PHRASES: Readonly<Record<Exclude<ClipClass, 'FILLER'>, readonly string[]>> = {
-  ACK: ['Uhum.', 'Aham.'],
-  AGREEMENT: ['Sim.', 'Certo.', 'Isso.'],
-  ENCOURAGEMENT: ['Isso!', 'Boa!', 'Pode seguir.'],
-  THINKING: ['Hum, deixa eu ver.', 'Então, deixa eu ver.', 'Um instante.']
-}
-
-/** Conjunto completo por classe: as interjeições fixas + o `FILLER` = o pool de preâmbulos. */
+/** Conjunto completo por classe: o `FILLER` = o pool de preâmbulos (null = o padrão), na ordem. */
 export function clipPhraseSet(
   fillerPool?: readonly FillerPhrase[] | null
 ): Record<ClipClass, readonly string[]> {
   return {
-    ...CLIP_PHRASES,
     FILLER: resolveFillerPool(fillerPool ? [...fillerPool] : null).map((f) => f.text)
   }
 }

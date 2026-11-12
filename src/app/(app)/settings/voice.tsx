@@ -1,24 +1,34 @@
 // Configurações → Voz (= aba Áudio do desktop, sem o que é do computador): ditado (`audioInput`),
 // transcrição (`sttSettings`), fala (`ttsSettings`) e os padrões da chamada de voz
-// (`voiceCallDefaults`) — todos sincronizados (§4.3.2), gravados SEM as partes do dispositivo
-// (`audioSettingOut`). Motores locais/GPU aparecem como "só no computador" (a escolha sincroniza,
-// mas o celular não transcreve/fala com eles). "Neste aparelho": opções locais (§4.4).
+// (`voiceCallDefaults` — turnos, "Falar por cima da resposta", preâmbulos, frases de demora, tags
+// de voz) — todos sincronizados (§4.3.2), gravados SEM as partes do dispositivo
+// (`audioSettingOut`). O "Nível de ativação" do microfone é deste aparelho (kv local, nunca vai no
+// registro). Motores locais/GPU aparecem como "só no computador" (a escolha sincroniza, mas o
+// celular não transcreve/fala com eles). "Neste aparelho": opções locais (§4.4).
 import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import {
+  BARGE_IN_RANGES,
+  DEFAULT_BARGE_IN,
+  DEFAULT_DELAY_PHRASES,
   DEFAULT_VOICE_BASE_PROMPT,
+  resolveBargeIn,
   type AudioInputSettings,
   type SttSettings,
   type TtsSettings,
   type VoiceCallDefaults
 } from '@shared/voice'
+import { DEFAULT_AUDIO_TAGS_PROMPT } from '@shared/audioTags'
+import { DELAY_MIN_GAP_MS, KEEPALIVE_COOLDOWN_MS } from '@shared/voicePolicy'
+import { fishVoiceIdFrom, isFishAudioModel, supportsAudioTags } from '@shared/voiceCatalog'
 import { apiParamSpecs, setVoiceApiParam } from '@shared/voiceParams'
 import { describeError } from '@/account/errors'
 import { store } from '@/data/native'
 import { ModelField } from '@/settings/ModelPicker'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { FieldLabel, Multiline, Note, NumberField, Segmented, SettingsScreen } from '@/settings/ui'
-import { InterjectionFields } from '@/settings/VoiceConfigEditor'
+import { AudioTagsField } from '@/settings/AudioTagsField'
+import { MicActivationLevel } from '@/settings/MicActivationLevel'
 import {
   CatalogField,
   VoiceParamsEditor,
@@ -29,12 +39,21 @@ import { Button } from '@/ui/Button'
 import { Banner, Card, Divider, ToggleRow } from '@/ui/Card'
 import { useToast } from '@/ui/Toast'
 import { colors, spacing } from '@/ui/theme'
-import { audioSettingOut, readVoiceSettings, resolveTts, voiceFamily } from '@/voice/endpoints'
+import {
+  audioSettingOut,
+  callTtsTagsSupport,
+  readVoiceSettings,
+  resolveTts,
+  voiceFamily
+} from '@/voice/endpoints'
 import { expoPlayback } from '@/voice/nativeAudio'
 import { playableAudio } from '@/voice/player'
 import {
+  activationDb,
   bargeInEnabled,
   fakeMicEnabled,
+  openMeterMic,
+  setActivationDb,
   setBargeInEnabled,
   setFakeMicEnabled,
   voice
@@ -65,6 +84,7 @@ export default function VoiceSettings() {
   const toast = useToast()
   const callView = useCallView()
   const [barge, setBarge] = useState(bargeInEnabled)
+  const [activation, setActivation] = useState(activationDb)
   const [fake, setFake] = useState(fakeMicEnabled)
   const [testing, setTesting] = useState(false)
 
@@ -90,13 +110,21 @@ export default function VoiceSettings() {
   const ttsSpecs = apiParamSpecs('tts', ttsFamily, v.tts.api.model)
   const d = v.voiceCallDefaults
   const turn = d.turn
-  const delay = d.delayPhrases ?? {
-    enabled: true,
-    keepAliveAfterMs: 3000,
-    apologyAfterMs: 5000,
-    keepAlivePool: null,
-    apologyPool: null
-  }
+  const bargeIn = resolveBargeIn(turn)
+  const delay = d.delayPhrases ?? { ...DEFAULT_DELAY_PHRASES }
+  // vozes do modelo escolhido (OpenRouter: `supported_voices`); lista vazia = o modelo não lista
+  // vozes (Fish Audio pelo OpenRouter) — cola-se o id ou o link da biblioteca
+  const ttsModelInfo = ttsCat.view?.models.find((m) => m.id === v.tts.api.model) ?? null
+  const modelVoices = ttsModelInfo?.voiceIds ?? null
+  const noVoiceList = !!modelVoices && modelVoices.length === 0
+  const fishModel = isFishAudioModel(v.tts.api.model)
+  const voiceItems = (ttsCat.view?.voices ?? []).filter(
+    (x) => !modelVoices?.length || modelVoices.includes(x.id)
+  )
+  const tagsSupport = callTtsTagsSupport(
+    v.tts,
+    (id) => v.providers.find((p) => p.id === id) ?? null
+  )
 
   const testVoice = async () => {
     const r = resolveTts(v.tts, (id) => v.providers.find((p) => p.id === id) ?? null)
@@ -164,6 +192,17 @@ export default function VoiceSettings() {
             testID="voice-ptt"
           />
         </View>
+      </Card>
+      <Card>
+        <MicActivationLevel
+          value={activation}
+          onChange={(db) => {
+            setActivationDb(db)
+            setActivation(activationDb())
+          }}
+          openMic={openMeterMic}
+          disabledReason={callView.call.active ? 'Microfone em uso pela chamada de voz.' : null}
+        />
       </Card>
 
       {/* ---------------- transcrição ---------------- */}
@@ -296,18 +335,40 @@ export default function VoiceSettings() {
           title="Voz"
           icon="person-outline"
           value={v.tts.api.voice ?? ''}
-          items={(ttsCat.view?.voices ?? []).map((x) => ({
+          items={voiceItems.map((x) => ({
             id: x.id,
             name: x.label,
             detail: [x.language, x.recommended ? 'recomendada' : null].filter(Boolean).join(' · ')
           }))}
           loading={ttsCat.loading}
-          onChange={(id) => setTts({ api: { ...v.tts.api, voice: id || null } })}
+          hint={
+            noVoiceList
+              ? fishModel
+                ? 'Este modelo não lista vozes: cole o id (ou o link fish.audio/m/…) de uma voz do Fish Audio, ou use a voz padrão.'
+                : 'Este modelo não lista vozes: digite o id de uma voz que o provedor aceite, ou use a voz padrão.'
+              : null
+          }
+          // Fish Audio: o link colado da biblioteca (fish.audio/m/<id>) vira o id da voz
+          onChange={(id) =>
+            setTts({
+              api: {
+                ...v.tts.api,
+                voice: id && fishModel ? (fishVoiceIdFrom(id) ?? id) : id || null
+              }
+            })
+          }
           emptyLabel="Voz padrão da API"
           allowEmpty
           testID="voice-tts-voice"
         />
       </Card>
+      {v.tts.backend === 'api' && ttsProvider && v.tts.api.model ? (
+        <Note>
+          {supportsAudioTags(ttsFamily, v.tts.api.model)
+            ? 'Este modelo interpreta tags de voz ([risos], [sussurra]…) — ative em Chamada de voz → Tags de voz.'
+            : 'Tags de voz como [risos] funcionam com ElevenLabs v3/v4 e Fish Audio Drama 3/S2 — com este modelo elas são tiradas da fala.'}
+        </Note>
+      ) : null}
       {ttsFamily && ttsSpecs.length ? (
         <Card>
           <VoiceParamsEditor
@@ -417,27 +478,110 @@ export default function VoiceSettings() {
             <NumberField
               label="“Manter viva” depois de"
               value={delay.keepAliveAfterMs}
-              onChange={(n) => setCall({ delayPhrases: { ...delay, keepAliveAfterMs: n ?? 3000 } })}
+              onChange={(n) =>
+                setCall({
+                  delayPhrases: {
+                    ...delay,
+                    keepAliveAfterMs: n ?? DEFAULT_DELAY_PHRASES.keepAliveAfterMs
+                  }
+                })
+              }
               min={1000}
               max={60000}
               suffix="ms"
+              placeholder={String(DEFAULT_DELAY_PHRASES.keepAliveAfterMs)}
+              testID="voice-call-keepalive-ms"
             />
             <NumberField
               label="Desculpa depois de"
               value={delay.apologyAfterMs}
-              onChange={(n) => setCall({ delayPhrases: { ...delay, apologyAfterMs: n ?? 5000 } })}
+              onChange={(n) =>
+                setCall({
+                  delayPhrases: {
+                    ...delay,
+                    apologyAfterMs: n ?? DEFAULT_DELAY_PHRASES.apologyAfterMs
+                  }
+                })
+              }
               min={1000}
               max={60000}
               suffix="ms"
+              placeholder={String(DEFAULT_DELAY_PHRASES.apologyAfterMs)}
+              testID="voice-call-apology-ms"
             />
           </>
         ) : null}
       </Card>
-      <Text style={st.sub}>Interjeições</Text>
-      <InterjectionFields
-        value={d.interjections}
-        onChange={(interjections) => setCall({ interjections })}
-        testID="voice-call-interjections"
+      {delay.enabled ? (
+        <Note>
+          {`“Manter viva” (padrão ${DEFAULT_DELAY_PHRASES.keepAliveAfterMs / 1000} s de silêncio esperando a resposta; no máximo 2 por turno, ${KEEPALIVE_COOLDOWN_MS / 1000} s entre o fim de uma e o início da outra) e desculpa (padrão ${DEFAULT_DELAY_PHRASES.apologyAfterMs / 1000} s desde a sua fala — só para demoras longas; a resposta nunca espera por ela). Espaçadas: sempre pelo menos ${DELAY_MIN_GAP_MS / 1000} s de silêncio entre o fim de uma frase curta (preâmbulo, “manter viva”, desculpa) e a próxima.`}
+        </Note>
+      ) : null}
+      <Text style={st.sub}>Falar por cima da resposta</Text>
+      <Card>
+        <NumberField
+          label="Volume ao falar por cima"
+          value={Math.round(bargeIn.duckGain * 100)}
+          onChange={(n) =>
+            setCall({
+              turn: {
+                ...turn,
+                duckGain: (n ?? Math.round(DEFAULT_BARGE_IN.duckGain * 100)) / 100
+              }
+            })
+          }
+          min={0}
+          max={100}
+          suffix="%"
+          testID="voice-call-duck-gain"
+        />
+        <NumberField
+          label="Interromper depois de falar"
+          value={bargeIn.voicedMs}
+          onChange={(n) =>
+            setCall({ turn: { ...turn, bargeInVoicedMs: n ?? DEFAULT_BARGE_IN.voicedMs } })
+          }
+          min={BARGE_IN_RANGES.voicedMs.min}
+          max={BARGE_IN_RANGES.voicedMs.max}
+          suffix="ms"
+          testID="voice-call-barge-in-voiced"
+        />
+        <NumberField
+          label="Interromper com palavras"
+          value={bargeIn.words}
+          onChange={(n) =>
+            setCall({ turn: { ...turn, bargeInWords: n ?? DEFAULT_BARGE_IN.words } })
+          }
+          min={BARGE_IN_RANGES.words.min}
+          max={BARGE_IN_RANGES.words.max}
+          testID="voice-call-barge-in-words"
+        />
+        <NumberField
+          label="Volume volta depois de"
+          value={bargeIn.restoreMs}
+          onChange={(n) =>
+            setCall({ turn: { ...turn, duckRestoreMs: n ?? DEFAULT_BARGE_IN.restoreMs } })
+          }
+          min={BARGE_IN_RANGES.restoreMs.min}
+          max={BARGE_IN_RANGES.restoreMs.max}
+          suffix="ms"
+          testID="voice-call-duck-restore"
+        />
+      </Card>
+      <Note>
+        {`Falar enquanto o assistente responde não para a resposta na hora: a voz dele ABAIXA para o volume acima (e continua) — uma tosse, um “uhum” ou um barulho não interrompem nada; o volume volta depois do silêncio acima e o som curto é descartado. Se você insistir (o tempo com voz acima, ${DEFAULT_BARGE_IN.words}+ palavras reais na transcrição ao vivo ou um pedido curto como “para”, “espera”, “chega”), ele para e a sua fala vira o próximo turno — no histórico fica só o que você ouviu. Neste celular vale com “Falar por cima da resposta” ligado em Neste aparelho (use fone); sem ele, use o botão Interromper.`}
+      </Note>
+      <AudioTagsField
+        global
+        value={d.audioTags}
+        inherited={d.audioTags}
+        inheritedFrom="Padrão do app"
+        prompt={d.audioTagsPrompt}
+        inheritedPrompt={DEFAULT_AUDIO_TAGS_PROMPT}
+        onChange={(t) => setCall({ audioTags: t ?? false })}
+        onPromptChange={(audioTagsPrompt) => setCall({ audioTagsPrompt })}
+        support={tagsSupport}
+        testID="voice-call-audio-tags"
       />
       <Text style={st.sub}>Fim do turno</Text>
       <Card>
@@ -493,8 +637,8 @@ export default function VoiceSettings() {
       <FieldLabel>Neste aparelho</FieldLabel>
       <Card>
         <ToggleRow
-          title="Interromper falando (use fone de ouvido)"
-          subtitle="Sem fone, o microfone fica mudo enquanto o assistente fala (o celular não cancela o eco) — use o botão Interromper."
+          title="Falar por cima da resposta (use fone de ouvido)"
+          subtitle="Ligado: falar enquanto o assistente responde abaixa a voz dele e, se você insistir, interrompe. Sem fone, deixe desligado — o microfone fica mudo enquanto o assistente fala (o celular não cancela o eco) — e use o botão Interromper."
           value={barge}
           onChange={(on) => {
             setBargeInEnabled(on)
@@ -519,7 +663,7 @@ export default function VoiceSettings() {
         title={
           callView.clips.state === 'generating'
             ? `Gerando clipes… ${callView.clips.done ?? 0}/${callView.clips.total ?? 0}`
-            : 'Gerar clipes de interjeição e preâmbulo'
+            : 'Gerar clipes dos preâmbulos'
         }
         icon="musical-notes-outline"
         variant="secondary"
@@ -533,8 +677,9 @@ export default function VoiceSettings() {
         testID="voice-gen-clips"
       />
       <Note>
-        Os clipes são gerados com a voz atual e ficam só neste aparelho (sem eles a chamada não toca
-        interjeições nem preâmbulos).
+        Os clipes (os preâmbulos — “Hum, deixa eu ver aqui.”) são gerados com a voz atual e ficam só
+        neste aparelho. Ao trocar a voz ou as frases, gere de novo — sem clipes, os preâmbulos não
+        tocam.
       </Note>
     </SettingsScreen>
   )

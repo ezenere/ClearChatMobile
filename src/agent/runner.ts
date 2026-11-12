@@ -1933,7 +1933,9 @@ export class Runner {
    * Chamada de voz: para o turno em andamento (se rodando) e ajusta o histórico ao que o usuário
    * OUVIU (= desktop `amendVoiceTurn`): `dropUser` (turno continuado, sem tools) apaga a mensagem do
    * usuário e tudo depois dela; senão cada assistente depois dela fica só com o prefixo falado
-   * (`interrupted: true`), sem nada falado e sem tool_calls sai. Idempotente.
+   * (`interrupted: true`; cortado no meio da frase ganha "…") e o resto NÃO ouvido vai para
+   * `meta.voice.unheard` (só exibição — nunca ao modelo); sem nada falado e sem tool_calls sai.
+   * Idempotente.
    */
   async amendVoiceTurn(
     sessionId: string,
@@ -1971,13 +1973,25 @@ export class Runner {
         continue
       }
       if (spoken === content) continue
-      const voice = m.meta.voice
-        ? { voice: { ...m.meta.voice, ...(spoken.trim() ? { spoken: 'partial' as const } : {}) } }
-        : {}
+      // cortada no meio (barge-in em palavras): "…" no fim do que foi ouvido — é o que o modelo vê
+      const heard = spoken.trim() && !/[.!?…]["'”»)\]]*$/.test(spoken) ? `${spoken}…` : spoken
+      if (m.meta.interrupted && content === heard) continue // idempotente (já ajustada)
+      // o resto NÃO ouvido fica só para exibição (`meta.voice.unheard` — nunca vai ao modelo)
+      const unheard = content.startsWith(spoken) ? content.slice(spoken.length).trim() : ''
+      const voice =
+        m.meta.voice || unheard
+          ? {
+              voice: {
+                ...(m.meta.voice ?? { source: 'call' as const }),
+                ...(spoken.trim() ? { spoken: 'partial' as const } : {}),
+                ...(unheard ? { unheard } : {})
+              }
+            }
+          : {}
       if (voice.voice && !spoken.trim()) delete voice.voice.spoken
       const updated = this.repo.update(
         m.id,
-        { ...m.message, content: hasCalls && !spoken ? null : spoken },
+        { ...m.message, content: hasCalls && !spoken ? null : heard },
         { ...m.meta, interrupted: true, ...voice }
       )
       this.emit({ type: 'message-updated', message: updated })

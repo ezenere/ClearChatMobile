@@ -21,11 +21,13 @@ import {
 import { expoPlayback, fileClipStore, NativeMicSource, requestMicPermission } from './nativeAudio'
 import { createVoiceStack } from './stack'
 import { resampleMono } from '@vendor/renderer/audio/pcm'
+import { normalizeActivationDb } from '@shared/speechGate'
 import { systemDialogOpen } from '@/platform/systemDialog'
 
 const FAKE_KEY = 'dev.fakeMic'
 const POLL_KEY = 'dev.fakeMicPoll'
 const BARGE_KEY = 'voice.bargeIn'
+const ACTIVATION_KEY = 'voice.activationDb'
 
 /** Microfone de teste ligado (só em desenvolvimento). */
 export function fakeMicEnabled(): boolean {
@@ -60,7 +62,7 @@ const fakeMicPoll = (): string => {
   }
 }
 
-/** "Interromper falando" (com fone): opção deste aparelho (§4.4 — não sincroniza). */
+/** "Falar por cima da resposta" (com fone): opção deste aparelho (§4.4 — não sincroniza). */
 export function bargeInEnabled(): boolean {
   try {
     return Storage.getItemSync(BARGE_KEY) === '1'
@@ -70,6 +72,23 @@ export function bargeInEnabled(): boolean {
 }
 export function setBargeInEnabled(on: boolean): void {
   Storage.setItemSync(BARGE_KEY, on ? '1' : '0')
+}
+
+/**
+ * Nível de ativação do microfone DESTE aparelho (`audioInput.activationDb`, dBFS — padrão −45,
+ * faixa −70…−20): parte do dispositivo (§4.3.2) — fica no kv local, nunca no registro sincronizado,
+ * e um registro recebido não o troca.
+ */
+export function activationDb(): number {
+  try {
+    const raw = Storage.getItemSync(ACTIVATION_KEY)
+    return normalizeActivationDb(raw == null || raw === '' ? undefined : Number(raw))
+  } catch {
+    return normalizeActivationDb(undefined)
+  }
+}
+export function setActivationDb(db: number): void {
+  Storage.setItemSync(ACTIVATION_KEY, String(normalizeActivationDb(db)))
 }
 
 /** Microfone de teste: silêncio contínuo + os clipes injetados, em tempo real. */
@@ -149,25 +168,39 @@ const log = (msg: string): void => {
   if (__DEV__) console.log(`[clearchat:voice] ${msg}`)
 }
 
+/** Fonte do microfone: a nativa, ou a de teste no modo de desenvolvimento. */
+const micSource = (): MicSource => (fakeMicEnabled() ? devFakeMic : new NativeMicSource())
+
+/** Permissão do microfone (microfone de teste: sem pedir — nada é aberto). */
+async function requestMic(): Promise<boolean> {
+  if (fakeMicEnabled()) return true
+  // o diálogo do sistema pausa a Activity (AppState vira "background"): não é segundo plano
+  permissionPending++
+  try {
+    return await requestMicPermission()
+  } finally {
+    // o "active" da volta chega logo depois da resposta
+    setTimeout(() => permissionPending--, 1500)
+  }
+}
+
+/**
+ * Microfone do medidor "Nível de ativação" (Configurações → Voz): só abre quando o usuário toca em
+ * "Testar" (nunca sozinho). null = permissão negada.
+ */
+export async function openMeterMic(): Promise<MicSource | null> {
+  return (await requestMic()) ? micSource() : null
+}
+
 export const voice = createVoiceStack({
   stack: hostStack,
   store,
-  mic: () => (fakeMicEnabled() ? devFakeMic : new NativeMicSource()),
+  mic: micSource,
   playback: expoPlayback,
   clips: fileClipStore(),
-  // microfone de teste: sem pedir a permissão (nada é aberto)
-  requestMic: async () => {
-    if (fakeMicEnabled()) return true
-    // o diálogo do sistema pausa a Activity (AppState vira "background"): não é segundo plano
-    permissionPending++
-    try {
-      return await requestMicPermission()
-    } finally {
-      // o "active" da volta chega logo depois da resposta
-      setTimeout(() => permissionPending--, 1500)
-    }
-  },
+  requestMic,
   bargeIn: bargeInEnabled,
+  activationDb,
   log
 })
 

@@ -6,12 +6,34 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { Provider } from '@shared/types'
+import type { VoiceCallDefaults } from '@shared/voice'
 import type { VoiceCatalogView } from '@shared/voiceCatalog'
 import { listVoiceCatalog } from '@vendor/desktop/voice/voiceCatalog'
-import { voiceProviders } from '@/voice/endpoints'
+import { store } from '@/data/native'
+import { callTtsTagsSupport, readVoiceSettings, voiceProviders } from '@/voice/endpoints'
+import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { Multiline, NumberField, Segmented } from '@/settings/ui'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { colors, radius, spacing } from '@/ui/theme'
+
+/**
+ * Padrões globais da chamada (`voiceCallDefaults` — o que o ★ herda) e se a voz da chamada
+ * interpreta tags de voz (o aviso do campo "Tags de voz"), relidos quando as Configurações mudam.
+ */
+export function useVoiceCallInheritance(): {
+  defaults: VoiceCallDefaults
+  tagsSupport: { supported: boolean; model: string | null }
+} {
+  const version = useSettingsVersion()
+  return readAt(version, () => {
+    const v = readVoiceSettings((id) => store.setting(id))
+    const providers = settings.providers()
+    return {
+      defaults: v.voiceCallDefaults,
+      tagsSupport: callTtsTagsSupport(v.tts, (id) => providers.find((p) => p.id === id) ?? null)
+    }
+  })
+}
 
 /** Catálogo de modelos/vozes do provedor (cache de 10 min no módulo vendorado). */
 export function useVoiceCatalog(

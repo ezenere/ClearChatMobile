@@ -11,6 +11,7 @@
 import type { Session, StoredMessage } from '@shared/types'
 import { openRecord, sealRecord, type Subkeys } from '@/crypto'
 import { messageFromPlain, sessionFromPlain } from '@/data/decode'
+import { outgoingPlain } from '@/data/legacy'
 import { RecordState, type LocalStore } from '@/data/store'
 import type { Change, ChatState, Plain, PushItem } from '@/data/types'
 import { divergedOf } from '@/remote/types'
@@ -257,7 +258,7 @@ export class DivergenceService {
           keys.sk.record,
           keys.userId,
           { type, id, scope: chatId, rev },
-          plain
+          outgoingPlain(type, id, plain)
         )
       items.push({ item, plain, type, id })
     }

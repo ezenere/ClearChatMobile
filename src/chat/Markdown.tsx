@@ -2,6 +2,8 @@
 // do `.md` do desktop: blocos de código com linguagem, cópia e rolagem horizontal; tabelas roláveis;
 // listas, citações, títulos, código inline. Sem HTML cru e sem imagens remotas (vazariam o IP, como
 // no site): imagem externa vira link; `clearchat-attachment://` vira o anexo (baixado e decifrado).
+// Mensagens da chamada de voz (`voiceTags`/`dimFrom`): tags de voz em opacidade 0,65 e o trecho
+// ainda não falado em 0,5, fora de código (`voiceText.ts`).
 import { memo, type ReactNode } from 'react'
 import { Linking, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native'
 import type { Token, Tokens } from 'marked'
@@ -12,6 +14,44 @@ import { colors, font } from '@/ui/theme'
 import { InlineAttachmentImage } from './Attachments'
 import { lexMarkdown, tableColumnChars, tokensText } from './markdownTokens'
 import { CopyButton } from './ui'
+import {
+  segmentAlpha,
+  takeDimMark,
+  UNHEARD_ALPHA,
+  voiceSegments,
+  withAlpha,
+  withDimMark,
+  type VoiceTextState
+} from './voiceText'
+
+/** Estado da passada de uma mensagem da chamada (null = mensagem comum). */
+type Voice = VoiceTextState | null
+
+/** Folha de texto: com voz, cortada em tags (0,65) e o "ainda não falado" (0,5). */
+function leaf(text: string, key: string, color: string, voice: Voice): ReactNode {
+  if (!voice) return text
+  const segs = voiceSegments(text, voice)
+  if (segs.length === 1 && segmentAlpha(segs[0]) === 1) return segs[0].text
+  return segs.map((s, i) => {
+    const a = segmentAlpha(s)
+    return a === 1 ? (
+      s.text
+    ) : (
+      <Text key={`${key}~${i}`} style={{ color: withAlpha(color, a) }}>
+        {s.text}
+      </Text>
+    )
+  })
+}
+
+/** Texto de código (sem tags): tira o marcador; esmaecido se já passou dele. */
+function codeText(text: string, voice: Voice): { text: string; dim: boolean } {
+  if (!voice) return { text, dim: false }
+  const dim = voice.dim
+  const t = takeDimMark(text)
+  if (t.found) voice.dim = true
+  return { text: t.text, dim }
+}
 
 function openLink(href: string) {
   if (!SAFE_LINK.test(href)) return
@@ -22,48 +62,66 @@ function openLink(href: string) {
   })
 }
 
-function inline(tokens: Token[] | undefined, k: string): ReactNode[] {
+function inline(
+  tokens: Token[] | undefined,
+  k: string,
+  color: string = colors.fg,
+  voice: Voice = null
+): ReactNode[] {
   if (!tokens) return []
   return tokens.map((t, i) => {
     const key = `${k}.${i}`
     switch (t.type) {
       case 'text': {
         const x = t as Tokens.Text
-        return x.tokens ? <Text key={key}>{inline(x.tokens, key)}</Text> : x.text
+        return x.tokens ? (
+          <Text key={key}>{inline(x.tokens, key, color, voice)}</Text>
+        ) : (
+          leaf(x.text, key, color, voice)
+        )
       }
       case 'escape':
-        return (t as Tokens.Escape).text
+        return leaf((t as Tokens.Escape).text, key, color, voice)
       case 'strong':
         return (
           <Text key={key} style={st.strong}>
-            {inline((t as Tokens.Strong).tokens, key)}
+            {inline((t as Tokens.Strong).tokens, key, colors.strong, voice)}
           </Text>
         )
       case 'em':
         return (
           <Text key={key} style={st.em}>
-            {inline((t as Tokens.Em).tokens, key)}
+            {inline((t as Tokens.Em).tokens, key, color, voice)}
           </Text>
         )
       case 'del':
         return (
           <Text key={key} style={st.del}>
-            {inline((t as Tokens.Del).tokens, key)}
+            {inline((t as Tokens.Del).tokens, key, color, voice)}
           </Text>
         )
-      case 'codespan':
+      case 'codespan': {
+        const c = codeText((t as Tokens.Codespan).text, voice)
         return (
-          <Text key={key} style={st.codespan}>
-            {` ${(t as Tokens.Codespan).text} `}
+          <Text
+            key={key}
+            style={[st.codespan, c.dim && { color: withAlpha(colors.codeInline, UNHEARD_ALPHA) }]}
+          >
+            {` ${c.text} `}
           </Text>
         )
+      }
       case 'br':
         return '\n'
       case 'link': {
         const l = t as Tokens.Link
+        // o marcador do "ainda não falado" nunca vai para o endereço
+        const href = voice ? takeDimMark(l.href) : { text: l.href, found: false }
+        const body = inline(l.tokens, key, colors.accentStrong, voice)
+        if (href.found && voice) voice.dim = true
         return (
-          <Text key={key} style={st.link} onPress={() => openLink(l.href)} suppressHighlighting>
-            {inline(l.tokens, key)}
+          <Text key={key} style={st.link} onPress={() => openLink(href.text)} suppressHighlighting>
+            {body}
           </Text>
         )
       }
@@ -82,16 +140,21 @@ function inline(tokens: Token[] | undefined, k: string): ReactNode[] {
           </Text>
         )
       }
-      case 'inlineMath':
+      case 'inlineMath': {
+        const c = codeText((t as unknown as { text: string }).text, voice)
         return (
-          <Text key={key} style={st.math}>
-            {(t as unknown as { text: string }).text}
+          <Text
+            key={key}
+            style={[st.math, c.dim && { color: withAlpha(colors.codeInline, UNHEARD_ALPHA) }]}
+          >
+            {c.text}
           </Text>
         )
+      }
       case 'html':
-        return (t as Tokens.HTML).text
+        return leaf((t as Tokens.HTML).text, key, color, voice)
       default:
-        return (t as { raw?: string }).raw ?? ''
+        return leaf((t as { raw?: string }).raw ?? '', key, color, voice)
     }
   })
 }
@@ -112,7 +175,17 @@ function CodeBlock({ text, lang, sel }: { text: string; lang?: string; sel: bool
   )
 }
 
-function Table({ t, k, base }: { t: Tokens.Table; k: string; base: TextStyle }) {
+function Table({
+  t,
+  k,
+  base,
+  voice
+}: {
+  t: Tokens.Table
+  k: string
+  base: TextStyle
+  voice: Voice
+}) {
   const chars = tableColumnChars(
     t.header.map((h) => ({ text: tokensText(h.tokens) })),
     t.rows.map((r) => r.map((c) => ({ text: tokensText(c.tokens) })))
@@ -129,7 +202,7 @@ function Table({ t, k, base }: { t: Tokens.Table; k: string; base: TextStyle }) 
           c.align === 'right' && { textAlign: 'right' }
         ]}
       >
-        {inline(c.tokens, key)}
+        {inline(c.tokens, key, header ? colors.fg : String(base.color ?? colors.fg), voice)}
       </Text>
     </View>
   )
@@ -153,9 +226,20 @@ function blocks(
   k: string,
   base: TextStyle,
   tight = false,
-  sel = true
+  sel = true,
+  voice: Voice = null
 ): ReactNode[] {
   const out: ReactNode[] = []
+  const color = String(base.color ?? colors.fg)
+  /** Bloco (código/fórmula/imagem) inteiro depois do ponto "ainda não falado". */
+  const dimBlock = (node: ReactNode, key: string): ReactNode =>
+    voice?.dim ? (
+      <View key={key} style={{ opacity: UNHEARD_ALPHA }}>
+        {node}
+      </View>
+    ) : (
+      node
+    )
   tokens.forEach((t, i) => {
     const key = `${k}.${i}`
     switch (t.type) {
@@ -170,14 +254,21 @@ function blocks(
           const file = attachmentFile((only[0] as Tokens.Image).href)
           if (file) {
             out.push(
-              <InlineAttachmentImage key={key} file={file} name={(only[0] as Tokens.Image).text} />
+              dimBlock(
+                <InlineAttachmentImage
+                  key={key}
+                  file={file}
+                  name={(only[0] as Tokens.Image).text}
+                />,
+                key
+              )
             )
             return
           }
         }
         out.push(
           <Text key={key} style={[base, !tight && st.p]} selectable={sel}>
-            {inline(p.tokens, key)}
+            {inline(p.tokens, key, color, voice)}
           </Text>
         )
         return
@@ -186,7 +277,7 @@ function blocks(
         const x = t as Tokens.Text
         out.push(
           <Text key={key} style={base} selectable={sel}>
-            {x.tokens ? inline(x.tokens, key) : x.text}
+            {x.tokens ? inline(x.tokens, key, color, voice) : leaf(x.text, key, color, voice)}
           </Text>
         )
         return
@@ -201,27 +292,40 @@ function blocks(
             style={[base, st.heading, { fontSize: fs, lineHeight: Math.round(fs * 1.35) }]}
             accessibilityRole="header"
           >
-            {inline(h.tokens, key)}
+            {inline(h.tokens, key, color, voice)}
           </Text>
         )
         return
       }
       case 'code': {
         const c = t as Tokens.Code
-        out.push(<CodeBlock key={key} text={c.text.replace(/\n$/, '')} lang={c.lang} sel={sel} />)
+        const dimmed = !!voice?.dim
+        const code = codeText(c.text, voice)
+        out.push(
+          dimmed ? (
+            <View key={key} style={{ opacity: UNHEARD_ALPHA }}>
+              <CodeBlock text={code.text.replace(/\n$/, '')} lang={c.lang} sel={sel} />
+            </View>
+          ) : (
+            <CodeBlock key={key} text={code.text.replace(/\n$/, '')} lang={c.lang} sel={sel} />
+          )
+        )
         return
       }
-      case 'blockMath':
+      case 'blockMath': {
+        const dimmed = !!voice?.dim
+        const math = codeText((t as unknown as { text: string }).text, voice)
         out.push(
-          <View key={key} style={st.mathBlock}>
+          <View key={key} style={[st.mathBlock, dimmed && { opacity: UNHEARD_ALPHA }]}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <Text style={st.mathText} selectable={sel}>
-                {(t as unknown as { text: string }).text}
+                {math.text}
               </Text>
             </ScrollView>
           </View>
         )
         return
+      }
       case 'blockquote':
         out.push(
           <View key={key} style={st.quote}>
@@ -230,7 +334,8 @@ function blocks(
               key,
               { ...base, color: colors.muted },
               false,
-              sel
+              sel,
+              voice
             )}
           </View>
         )
@@ -242,7 +347,13 @@ function blocks(
           <View key={key} style={st.list}>
             {l.items.map((it, n) => (
               <View key={`${key}.${n}`} style={st.li}>
-                <Text style={[base, st.marker]}>
+                <Text
+                  style={[
+                    base,
+                    st.marker,
+                    voice?.dim && { color: withAlpha(colors.subtle, UNHEARD_ALPHA) }
+                  ]}
+                >
                   {it.task ? (it.checked ? '☑' : '☐') : l.ordered ? `${start + n}.` : '•'}
                 </Text>
                 <View style={st.liBody}>
@@ -251,7 +362,8 @@ function blocks(
                     `${key}.${n}`,
                     base,
                     !l.loose,
-                    sel
+                    sel,
+                    voice
                   )}
                 </View>
               </View>
@@ -261,7 +373,7 @@ function blocks(
         return
       }
       case 'table':
-        out.push(<Table key={key} t={t as Tokens.Table} k={key} base={base} />)
+        out.push(<Table key={key} t={t as Tokens.Table} k={key} base={base} voice={voice} />)
         return
       case 'hr':
         out.push(<View key={key} style={st.hr} />)
@@ -269,7 +381,7 @@ function blocks(
       case 'html':
         out.push(
           <Text key={key} style={[base, st.p]}>
-            {(t as Tokens.HTML).text}
+            {leaf((t as Tokens.HTML).text, key, color, voice)}
           </Text>
         )
         return
@@ -278,7 +390,7 @@ function blocks(
         if (raw?.trim())
           out.push(
             <Text key={key} style={[base, st.p]}>
-              {raw}
+              {leaf(raw, key, color, voice)}
             </Text>
           )
       }
@@ -287,19 +399,27 @@ function blocks(
   return out
 }
 
-/** Markdown de uma mensagem. `size` ajusta a fonte base (cartões usam menor). */
+/**
+ * Markdown de uma mensagem. `size` ajusta a fonte base (cartões usam menor). Mensagem da chamada de
+ * voz: `voiceTags` esmaece as tags de voz (0,65) e `dimFrom` (offset em `text`) esmaece o trecho
+ * ainda não falado (0,5) — leitura ao vivo e o resto não ouvido depois de um barge-in.
+ */
 export const Markdown = memo(function Markdown({
   text,
   italic,
   size = 15,
   color = colors.fg,
-  selectable = true
+  selectable = true,
+  voiceTags,
+  dimFrom
 }: {
   text: string
   italic?: boolean
   size?: number
   color?: string
   selectable?: boolean
+  voiceTags?: boolean
+  dimFrom?: number | null
 }) {
   const base: TextStyle = {
     color,
@@ -307,7 +427,13 @@ export const Markdown = memo(function Markdown({
     lineHeight: Math.round(size * 1.55),
     ...(italic ? { fontStyle: 'italic' } : {})
   }
-  return <View style={st.root}>{blocks(lexMarkdown(text), 'md', base, false, selectable)}</View>
+  const voiced = !!voiceTags || dimFrom != null
+  const src = voiced ? withDimMark(text, dimFrom) : text
+  // estado da passada (na ordem do texto): novo a cada render
+  const voice: Voice = voiced ? { tags: !!voiceTags, dim: false } : null
+  return (
+    <View style={st.root}>{blocks(lexMarkdown(src), 'md', base, false, selectable, voice)}</View>
+  )
 })
 
 const st = StyleSheet.create({

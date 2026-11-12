@@ -1,18 +1,21 @@
 // Chamada de voz na conversa (chats executados neste celular): o "dock" no lugar do composer —
 // fase do turno (Ouvindo/Transcrevendo/Pensando/Falando), relógio, nível do microfone, o texto da
-// fala (especulativo/final), mudo, Interromper (barge-in pelo botão — o microfone fica surdo
-// enquanto o assistente fala, sem cancelamento de eco), desligar, erro e o "Gerar clipes" quando
-// faltam os de interjeição/preâmbulo. E a folha "Chamada de voz…" do menu (config de voz do chat).
+// fala (parcial/especulativo/final), "falando por cima" (a voz do assistente abaixada — ducking),
+// mudo, Interromper (barge-in pelo botão — sem fone o microfone fica surdo enquanto o assistente
+// fala, sem cancelamento de eco), desligar, erro e o "Gerar clipes" quando faltam os dos
+// preâmbulos. E a folha "Chamada de voz…" do menu (config de voz do chat, ★ = herdado).
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { formatCallClock } from '@shared/voiceCallMarks'
-import type { VoiceCallConfig } from '@shared/voice'
+import { normalizeVoiceCallConfig, type VoiceCallConfig } from '@shared/voice'
+import type { ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { store } from '@/data/native'
 import { hostStack } from '@/host/native'
 import { settings } from '@/settings/react'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
+import { useVoiceCallInheritance } from '@/settings/voiceUi'
 import { Sheet } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
 import { colors, radius } from '@/ui/theme'
@@ -46,7 +49,11 @@ export function CallDock() {
           {phase}
         </Text>
         <Text style={s.clock}>{formatCallClock(elapsed)}</Text>
-        {v.deaf ? (
+        {v.ducked ? (
+          <Text style={s.ducked} testID="voice-call-ducked">
+            falando por cima · voz baixa
+          </Text>
+        ) : v.deaf ? (
           <Text style={s.deaf} testID="voice-call-deaf">
             mic em pausa
           </Text>
@@ -92,7 +99,7 @@ export function CallDock() {
           <Text style={s.clipsText}>
             {v.clips.state === 'generating'
               ? `Gerando clipes… ${v.clips.done ?? 0}/${v.clips.total ?? 0}`
-              : 'Sem clipes de interjeição e preâmbulo — gerar com a voz atual'}
+              : 'Sem clipes dos preâmbulos — gerar com a voz atual'}
           </Text>
         </Pressable>
       ) : null}
@@ -152,9 +159,21 @@ export function ChatVoiceSheet({
 
 function ChatVoiceBody({ chatId }: { chatId: string }) {
   const [providers] = useState(() => settings.providers())
-  const [value, setValue] = useState<VoiceCallConfig | null>(() => {
-    const cfg = store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined
-    return (cfg?.voice as VoiceCallConfig | undefined) ?? null
+  const inherit = useVoiceCallInheritance()
+  const [cfg] = useState(
+    () => store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined
+  )
+  const [value, setValue] = useState<VoiceCallConfig | null>(
+    () => (cfg?.voice as VoiceCallConfig | undefined) ?? null
+  )
+  // a persona de origem (camada do meio: chat > persona > global), lida ao vivo
+  const [persona] = useState(() => {
+    const presetId = typeof cfg?.presetId === 'string' ? cfg.presetId : null
+    const p = presetId ? settings.preset(presetId) : null
+    const pv = (p?.config as Record<string, unknown> | undefined)?.voice
+    return p
+      ? { name: p.name, voice: pv && typeof pv === 'object' ? normalizeVoiceCallConfig(pv) : null }
+      : null
   })
   return (
     <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
@@ -162,6 +181,10 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
         scope="chat"
         value={value}
         providers={providers}
+        defaults={inherit.defaults}
+        tagsSupport={inherit.tagsSupport}
+        persona={persona}
+        chatTools={Array.isArray(cfg?.enabledTools) ? (cfg.enabledTools as ToolName[]) : null}
         onChange={(voiceCfg) => {
           setValue(voiceCfg)
           hostStack.repo.updateChat(chatId, { config: { voice: voiceCfg } })
@@ -187,6 +210,7 @@ const s = StyleSheet.create({
   phase: { color: colors.fg, fontSize: 15, fontWeight: '600', flex: 1 },
   clock: { color: colors.muted, fontSize: 13, fontVariant: ['tabular-nums'] },
   deaf: { color: colors.subtle, fontSize: 11 },
+  ducked: { color: colors.warning, fontSize: 11 },
   meter: { height: 4, borderRadius: 2, backgroundColor: colors.active, overflow: 'hidden' },
   meterFill: { height: 4, borderRadius: 2, backgroundColor: colors.accentStrong },
   liveText: { color: colors.fg, fontSize: 14, fontStyle: 'italic', lineHeight: 19 },

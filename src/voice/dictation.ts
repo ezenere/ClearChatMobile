@@ -32,6 +32,8 @@ export interface DictationDeps {
   provider(id: string): Provider | null
   requestMic(): Promise<boolean>
   mic(): MicSource
+  /** Nível de ativação do microfone DESTE aparelho (dBFS; ausente = −45) — o portão do STT. */
+  activationDb?(): number
   fetch?: typeof fetch
   now?: () => number
 }
@@ -107,6 +109,8 @@ export class DictationController {
     const session = new TranscribeSession({
       settings: r.settings,
       language: v.audioInput.language,
+      // portão de ativação de fala: silêncio/ruído nunca vai ao STT (= desktop, toda via)
+      activationDb: this.d.activationDb?.(),
       partials: v.stt.livePartials,
       onPartial: (e: VoicePartialEvent) => {
         if (this.session !== session) return

@@ -18,8 +18,10 @@ export interface VoiceStackDeps {
   playback: PlaybackBackend
   clips: ClipStore
   requestMic(): Promise<boolean>
-  /** "Interromper falando" (opção deste aparelho). */
+  /** "Falar por cima da resposta" (opção deste aparelho — com fone). */
   bargeIn(): boolean
+  /** Nível de ativação do microfone deste aparelho (dBFS; §4.3.2 — local, nunca sincroniza). */
+  activationDb?(): number
   fetch?: typeof fetch
   log?: (msg: string) => void
 }
@@ -67,6 +69,7 @@ export function createVoiceStack(d: VoiceStackDeps): VoiceStack {
     playback: d.playback,
     clips: d.clips,
     bargeIn: d.bargeIn,
+    ...(d.activationDb ? { activationDb: d.activationDb } : {}),
     setVoiceCallSource,
     ...(d.fetch ? { fetch: d.fetch } : {}),
     ...(d.log ? { log: d.log } : {})
@@ -76,6 +79,7 @@ export function createVoiceStack(d: VoiceStackDeps): VoiceStack {
     provider,
     requestMic: d.requestMic,
     mic: d.mic,
+    ...(d.activationDb ? { activationDb: d.activationDb } : {}),
     ...(d.fetch ? { fetch: d.fetch } : {})
   })
   return { call, dictation }

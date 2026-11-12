@@ -436,26 +436,42 @@ Ditado no composer (chats deste celular e controle remoto) e **chamada de voz** 
 neste celular — com a semântica do desktop, cujo código é **vendorado**:
 
 - **Vendorado** (`npm run vendor`): `desktop/voice/call.ts` (o `VoiceCallManager` inteiro: turno,
-  fila/turno continuado, preâmbulo, frases de demora, interjeições, TTS por frase, barge-in,
-  histórico só com o ouvido, `end_call`, marcadores e custos), `turnMachine`, `sentences`,
-  `callErrors`, `stt.ts` (erros/nome do arquivo/idioma/custo), `tts.ts` + `elevenlabs.ts` (REST
-  `/audio/speech` e ElevenLabs, PCM progressivo juntado), `wav.ts`, `voiceCatalog.ts` (modelos e
-  vozes do provedor), `shared/voiceTurn` (`AdaptiveTurnGate`, `classifyUtteranceEnd`) e
-  `shared/voicePolicy` (`InterjectionWatcher`, `PlaybackHold`, `VoicedSpan`), e do renderer
-  `voice/dictation.ts` (ponto de inserção, prévia, desfecho, erros de captura) e
-  `audio/{silence,pcm}.ts`. **Shims**: `voice/clips.ts` → `src/voice/clips.ts` (mesmas frases e o
-  mesmo hash da definição; bytes num cache próprio), `voice/evalLog.ts` e
-  `voice/elevenlabsStream.ts` → só os tipos (`src/voice/evalLog.ts`, `src/voice/ttsFeed.ts`).
+  fila/turno continuado, preâmbulo, frases de demora espaçadas — contadas do FIM da reprodução —,
+  TTS por frase, tags de voz tiradas da síntese quando a voz não as interpreta, barge-in com o
+  histórico só com as PALAVRAS ouvidas, `end_call`, marcadores e custos), `turnMachine`,
+  `sentences` (nunca parte uma tag de voz), `callErrors`, `stt.ts` (erros/nome do arquivo/idioma/
+  custo), `tts.ts` + `elevenlabs.ts` (REST `/audio/speech` e ElevenLabs, PCM progressivo juntado),
+  `wav.ts`, `voiceCatalog.ts` (modelos e vozes do provedor, `supportsAudioTags`, `fishVoiceIdFrom`),
+  `shared/voiceTurn` (`AdaptiveTurnGate`, `classifyUtteranceEnd`), `shared/voicePolicy`
+  (`PlaybackDuck`, `VoicedSpan`, frases de demora), `shared/speechGate` (`LevelGate`, `SpeechGate`,
+  pós-filtro de alucinações), `shared/heardText` (`heardChars`/`heardPrefix`/`liveDimFrom`),
+  `shared/audioTags`, e do renderer `voice/dictation.ts` (ponto de inserção, prévia, desfecho,
+  erros de captura) e `audio/{silence,pcm}.ts`. **Shims**: `voice/clips.ts` → `src/voice/clips.ts`
+  (só a classe `FILLER` = o pool de preâmbulos, o mesmo hash da definição; bytes num cache
+  próprio — clipes de interjeição de versões antigas ficam velhos e somem na próxima geração),
+  `voice/evalLog.ts` e `voice/elevenlabsStream.ts` → só os tipos (`src/voice/evalLog.ts` — uma
+  decisão de preâmbulo por linha, sem disco —, `src/voice/ttsFeed.ts`).
 - **Escrito para o celular** (`src/voice/`, sem React Native exceto `native*.ts`/`react.ts`):
   `endpoints.ts` (settings normalizadas, provedor resolvido pelo id — chave só em memória —, forma
   gravada sem as partes do dispositivo, "só no computador" para Local/GPU), `stt.ts`
   (`transcribeAudio` do desktop com o multipart montado em bytes — o `Blob` do RN não aceita bytes),
   `session.ts` (o subconjunto API da sessão do desktop: parciais melhor-esforço, especulação na
-  pausa, final reaproveitada, uma nova tentativa na falha transitória), `mic.ts` (quadros PCM16 de
-  32 ms a 16 kHz; `FakeMicSource`), `player.ts` (fila de reprodução: ordem, sem sobreposição,
-  drop/cancel com fade, ganho, PCM → WAV), `call.ts` (o "sensor" do `useVoiceCall` do desktop +
-  o `VoiceCallManager` + a pré-checagem), `dictation.ts`, `stack.ts`, `nativeAudio.ts` (expo-audio)
-  e `native.ts` (instância, microfone de teste, segundo plano).
+  pausa, final reaproveitada, uma nova tentativa na falha transitória e o **portão de ativação de
+  fala** na frente de TODA via — parcial, especulação e final, ditado e chamada: trecho com menos de
+  280 ms de voz não chama o STT, o que vai é aparado, o texto passa pelo pós-filtro de alucinações e
+  o piso de ruído atravessa as sessões), `mic.ts` (quadros PCM16 de 32 ms a 16 kHz;
+  `FakeMicSource`), `player.ts` (fila de reprodução: ordem, sem sobreposição, drop/cancel com fade,
+  **ducking** — `setDuck`, rampa de ganho de ~80 ms em passos de 16 ms no volume do `AudioPlayer` —,
+  `currentPosition` pela posição do player, PCM → WAV), `call.ts` (o "sensor" do `useVoiceCall` do
+  desktop — `LevelGate`, `PlaybackDuck`, barge-in com a posição da frase — + o `VoiceCallManager` +
+  a pré-checagem), `follow.ts` (leitura ao vivo: frases ouvidas + caracteres da atual, ~10×/s),
+  `dictation.ts`, `stack.ts`, `nativeAudio.ts` (expo-audio; `position()` = `currentTime`/
+  `duration`) e `native.ts` (instância, microfone de teste, nível de ativação no kv, segundo plano).
+- **Escritores do sync**: `interjections` é legado (§4.3.6) — `src/data/legacy.ts` tira o campo de
+  `config.voice` (chat/persona) e de `voiceCallDefaults` em todo plaintext antes de cifrar (inclusive
+  registros antigos do cache que o celular regrava); `repo.chat()` normaliza `voice` como o `toChat`
+  do desktop. `audioInput.activationDb` é parte do dispositivo: fica no kv (`voice.activationDb`),
+  `audioSettingOut` nunca o grava e o valor de um registro recebido é ignorado.
 - **Runner** (`src/agent/runner.ts`/`request.ts`): overrides da chamada no turno
   (`applyVoiceCallChat` — modelo/params/raciocínio, tools, prompt), `end_call` (sem aprovação,
   encerra o turno), `meta.voice` nas respostas, `appendDisplayMessage` (marcadores — no registro com
@@ -468,8 +484,13 @@ pedidos — o emulador e os aparelhos testados entregam 16 kHz; outra taxa é re
 
 - **Sem cancelamento de eco**: o `AudioStream` abre a fonte MIC do Android (não a de chamada).
   Por padrão o microfone fica **surdo enquanto o assistente fala** (+ 350 ms de rabo de eco) e o
-  botão **Interromper** faz o barge-in; "Interromper falando (use fone de ouvido)" (opção deste
-  aparelho, §4.4) liga o barge-in por voz do desktop.
+  botão **Interromper** faz o barge-in (o histórico fica só com as palavras que tocaram); "Falar
+  por cima da resposta (use fone de ouvido)" (opção deste aparelho, §4.4) liga o comportamento do
+  desktop: falar por cima **abaixa** a voz do assistente para `turn.duckGain` (rampa no volume do
+  player) e ela continua; insistir (`bargeInVoicedMs` de voz, `bargeInWords` palavras reais na
+  parcial ao vivo ou "para"/"espera") vira barge-in; parar antes (tosse, "uhum") devolve o volume
+  depois de `duckRestoreMs` e o som é descartado. A fala é detectada pelo `LevelGate` (nível de
+  ativação + piso de ruído), a mesma regra do portão do STT.
 - **TTS por frase, bytes completos**: o expo-audio não toca PCM progressivo; cada frase toca quando a
   síntese termina (a 1ª frase corta na vírgula, como no desktop sem feed). O WebSocket multi-contexto
   da ElevenLabs é só do desktop (depende de `Buffer` e de headers no construtor do WebSocket).
@@ -490,12 +511,29 @@ silêncio, erro com "Inserir o texto parcial"; no controle remoto o texto entra 
 do §8.6 não leva `meta.voice` (sugestão de protocolo no PLAN). O ponto de status do composer agora
 segue a conexão (verde/amarelo "Reconectando"/vermelho "Sem conexão"). Conversa: telefone no
 cabeçalho (chats executados aqui) → pré-checagem com o motivo e "Abrir Configurações → Voz" →
-**dock** no lugar do composer (fase, relógio, nível, texto da fala, mudo, Interromper, desligar,
-"Gerar clipes"); menu → "Chamada de voz…" (config de voz do chat). Configurações → **Voz**: ditado,
-transcrição, fala (provedor/modelo/voz pela listagem do provedor, parâmetros do modelo pelos specs do
-desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, prompt-base, modelo, preâmbulos,
-frases de demora, interjeições, fim de turno) e "Neste aparelho" (barge-in, microfone de teste em
-dev, "Gerar clipes"). Persona → aba **Voz** (`src/settings/VoiceConfigEditor.tsx`).
+**dock** no lugar do composer (fase, relógio, nível, texto da fala — parcial/especulativo/final —,
+"falando por cima · voz baixa" durante o ducking, mudo, Interromper, desligar, "Gerar clipes");
+menu → "Chamada de voz…" (config de voz do chat). Configurações → **Voz**: ditado (com o **Nível de
+ativação** — `MicActivationLevel`: valor, medidor ao vivo com a linha do nível, arrastar/−/+, e
+"Testar", o único que abre o microfone), transcrição, fala (provedor/modelo/voz pela listagem do
+provedor — modelo sem lista de vozes, como o Fish Audio pelo OpenRouter, mostra a dica e aceita o
+link `fish.audio/m/<id>` colado —, a nota das tags de voz do modelo, parâmetros do modelo pelos specs
+do desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, prompt-base, modelo,
+preâmbulos, frases de demora — padrões 8 s/15 s, espaçadas —, "Falar por cima da resposta" — volume,
+interromper depois de falar/com palavras, volume volta depois de —, **Tags de voz** com a instrução
+editável, fim de turno) e "Neste aparelho" (falar por cima com fone, microfone de teste em dev,
+"Gerar clipes dos preâmbulos"). Persona → aba **Voz** (`src/settings/VoiceConfigEditor.tsx`): as
+escolhas com herança usam o `InheritChoice` (`src/settings/InheritChoice.tsx`, = desktop): só as
+opções reais, ★ na igual ao herdado (persona → global), sem override a ★ fica selecionada e tocar
+nela limpa o override — Disponível, Prompt na chamada, O agente pode encerrar, Preâmbulos e Tags de
+voz (com o texto da instrução, "Usar o padrão" e o aviso quando a voz atual não interpreta tags);
+"Tools próprias na chamada" virou um interruptor (desligado = as do chat, como no desktop).
+**Mensagens da chamada** (`src/chat/voiceText.ts` + `Markdown` `voiceTags`/`dimFrom`, nos chats
+deste celular, no controle remoto e no viewer ao vivo): tags de voz no lugar, com os colchetes, em
+opacidade 0,65 (cor com alfa — `opacity` não vale em `Text` aninhado), fora de código; enquanto uma
+resposta é falada aqui, o trecho ainda não falado fica em 0,5 e avança palavra por palavra (posição
+do player); depois de uma interrupção o resto não ouvido (`meta.voice.unheard`) aparece esmaecido
+depois do marcador "interrompido".
 
 **Microfone de teste (só desenvolvimento — testes nunca abrem o microfone real).**
 `clearchat://dev/fakemic?on=1` (ou `EXPO_PUBLIC_CLEARCHAT_FAKE_MIC=1`) troca o microfone por silêncio
@@ -515,10 +553,15 @@ de 20 s; Parar cancela; subagente herda a descrição do pai + a tarefa), seguin
 `smartApproveDefaults.capture` (Configurações → Aprovações).
 
 Testes: `tests/voice.test.ts` (paridade do multipart com o `transcribeAudio` vendorado, erros,
-sessão, TTS OpenAI/ElevenLabs, settings, clipes, fila, ditado com o microfone de teste e a chamada
-inteira — turno, `meta.voice`, `end_call`, marcadores codificados, custos —, meia-duplex +
-Interromper), `tests/capture.test.ts` e `tests/integration/voice.test.ts` (servidor real: settings do
-"desktop" → ditado e chamada no celular → o desktop decifra marcadores/falas/`end_call`/persona).
+sessão, portão de ativação — silêncio/ruído nunca chegam ao STT, fala aparada, "Obrigado." sobre um
+estalo vira vazio, nível de ativação do aparelho —, TTS OpenAI/ElevenLabs, settings — `activationDb`
+fora do registro, `interjections` nunca reenviado —, clipes só dos preâmbulos, fila com ducking e
+posição, ditado com o microfone de teste e a chamada inteira — turno, `meta.voice`, `end_call`,
+marcadores codificados, custos —, meia-duplex + Interromper, falar por cima com fone: tosse → volume
+de volta, insistir → barge-in em palavras com `meta.voice.unheard`, tags tiradas da síntese),
+`tests/voiceText.test.ts` (tags/esmaecimento do texto, ★ da herança), `tests/capture.test.ts` e
+`tests/integration/voice.test.ts` (servidor real: settings do "desktop" → ditado e chamada no
+celular → o desktop decifra marcadores/falas/`end_call`/persona sem `interjections`).
 
 ## Notificações push (protocolo 1.7.0)
 

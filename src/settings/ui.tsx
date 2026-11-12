@@ -106,7 +106,8 @@ export function Multiline({
   minHeight = 110,
   testID,
   onBlur,
-  mono
+  mono,
+  editable = true
 }: {
   value: string
   onChangeText: (v: string) => void
@@ -115,12 +116,15 @@ export function Multiline({
   testID?: string
   onBlur?: () => void
   mono?: boolean
+  /** false = só leitura (esmaecido). */
+  editable?: boolean
 }) {
   const [focused, setFocused] = useState(false)
   return (
     <TextInput
       testID={testID}
       value={value}
+      editable={editable}
       onChangeText={onChangeText}
       placeholder={placeholder}
       placeholderTextColor={colors.faint}
@@ -136,7 +140,8 @@ export function Multiline({
         st.multi,
         { minHeight },
         focused && { borderColor: colors.accent, backgroundColor: colors.elevated },
-        mono && { fontFamily: 'monospace', fontSize: 13 }
+        mono && { fontFamily: 'monospace', fontSize: 13 },
+        !editable && { opacity: 0.55 }
       ]}
     />
   )

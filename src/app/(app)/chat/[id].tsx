@@ -256,7 +256,9 @@ export default function ChatScreen() {
             onSelectBranch,
             onOpenSession,
             chatTitle: chatTitleOf,
-            live: rowLive
+            live: rowLive,
+            // chamada de voz neste aparelho: o chat esmaece o que ainda não foi falado
+            voiceFollow: voice.call.follow
           }
         : null,
     [view, now, onSelectBranch, onOpenSession, chatTitleOf, rowLive]
@@ -863,7 +865,7 @@ export default function ChatScreen() {
             <SheetItem
               icon="call-outline"
               label="Chamada de voz…"
-              detail="Modelo, prompt, interjeições e tools da chamada neste chat."
+              detail="Modelo, prompt, preâmbulos, tags de voz e tools da chamada neste chat."
               onPress={() => {
                 setMenu(false)
                 setVoiceSheet(true)

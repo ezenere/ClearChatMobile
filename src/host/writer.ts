@@ -5,6 +5,7 @@
 // tem e `host_epochs[X]` = epoch da janela aberta (sem janela = replay, §8.4 B). Sem React Native.
 import { SyncApiError, SyncNetworkError } from '@vendor/desktop/sync/http'
 import { blobIdFromSha256, fromHex, openRecord, sealRecord, type Subkeys } from '@/crypto'
+import { outgoingPlain } from '@/data/legacy'
 import type { LocalStore, OutboxRow } from '@/data/store'
 import type { Change, Plain, PushBody, PushConflict, PushItem, PushResult } from '@/data/types'
 
@@ -282,7 +283,7 @@ export class ContentWriter {
         keys.sk.record,
         keys.userId,
         { type: r.type, id: r.id, scope: r.scope, rev },
-        r.plain
+        outgoingPlain(r.type, r.id, r.plain)
       )
     return { item, blobs }
   }

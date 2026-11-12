@@ -19,6 +19,7 @@ import { LOCATION_TOOLS } from '@/location/service'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
+import { useVoiceCallInheritance } from '@/settings/voiceUi'
 import { ComputerOptions, ContextEditor, SignatureEditor } from '@/settings/PersonaAdvanced'
 import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
@@ -77,6 +78,7 @@ export default function PersonaEditor() {
   const [tab, setTab] = useState<Tab>('model')
   const [icons, setIcons] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const voiceInherit = useVoiceCallInheritance()
   const { cfg, missingProvider } = resolvePresetConfig(defaults, providers, draft)
   const patch = (p: Partial<ChatConfig>) => setDraft((d) => patchPresetConfig(d, p))
   const unset = (...keys: (keyof ChatConfig)[]) =>
@@ -325,6 +327,9 @@ export default function PersonaEditor() {
           value={cfg.voice}
           onChange={(voice) => patch({ voice })}
           providers={providers}
+          defaults={voiceInherit.defaults}
+          tagsSupport={voiceInherit.tagsSupport}
+          chatTools={cfg.enabledTools ?? null}
         />
       ) : null}
     </SettingsScreen>

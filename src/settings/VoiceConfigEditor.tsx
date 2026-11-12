@@ -1,18 +1,20 @@
 // Aba "Voz" da persona (e a mesma edição para um chat): a chamada de voz (`VoiceCallConfig`,
 // §4.3.3/§4.3.6) com os campos que HERDAM (null) — chat → persona → Configurações → Voz. Mesmos
-// campos do desktop (VoiceCallConfigSection): disponível, modelo da chamada, tools da chamada,
-// prompt do modo voz e como ele compõe, preâmbulos, interjeições e "o agente pode encerrar".
-// Tools da chamada que só rodam no computador aparecem marcadas e ficam como estão (a chamada no
-// celular só existe em chats sem ferramentas locais, §8.9).
+// campos do desktop (VoiceCallConfigSection): disponível, modelo da chamada, tools próprias, como o
+// prompt do modo voz compõe e o prompt, preâmbulos, tags de voz e "o agente pode encerrar". As
+// escolhas com herança seguem o `InheritChoice` (★ na opção igual ao herdado — nunca uma opção
+// "Padrão" duplicando o padrão). Tools da chamada que só rodam no computador aparecem marcadas e
+// ficam como estão (a chamada no celular só existe em chats sem ferramentas locais, §8.9).
 import {
-  DEFAULT_INTERJECTION_POLICY,
-  INTERJECTION_CLASSES,
+  DEFAULT_VOICE_CALL_DEFAULTS,
+  VOICE_CALL_PROMPT_MODES,
   normalizeVoiceCallConfig,
-  type InterjectionClass,
-  type InterjectionPolicy,
+  resolveVoiceCallConfig,
   type VoiceCallConfig,
+  type VoiceCallDefaults,
   type VoiceCallPromptMode
 } from '@shared/voice'
+import { DEFAULT_AUDIO_TAGS_PROMPT } from '@shared/audioTags'
 import { TOOL_NAMES } from '@shared/tools'
 import type { Provider, ToolName } from '@shared/types'
 import { Text, View } from 'react-native'
@@ -20,112 +22,28 @@ import { MOBILE_TOOLS } from '@/agent/request'
 import { toolLabel } from '@/agent/toolLabels'
 import { LOCATION_TOOLS } from '@/location/service'
 import { ModelField } from '@/settings/ModelPicker'
-import { FieldLabel, Multiline, Note, NumberField, Segmented } from '@/settings/ui'
-import { Card, Checkbox, Divider, ToggleRow } from '@/ui/Card'
+import { FieldLabel, Multiline, Note, NumberField } from '@/settings/ui'
+import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { colors, spacing } from '@/ui/theme'
+import { AudioTagsField } from './AudioTagsField'
+import { InheritChoice } from './InheritChoice'
 
-type Tri = 'inherit' | 'on' | 'off'
-const tri = (v: boolean | null | undefined): Tri => (v == null ? 'inherit' : v ? 'on' : 'off')
-const fromTri = (t: Tri): boolean | null => (t === 'inherit' ? null : t === 'on')
-
-export const INTERJECTION_LABEL: Record<InterjectionClass, string> = {
-  ACK: 'Uhum / Aham (no meio da fala)',
-  AGREEMENT: 'Concordância (Sim. / Certo.)',
-  ENCOURAGEMENT: 'Incentivo (Isso! / Boa!)',
-  THINKING: 'Pensando (Hum, deixa eu ver.)'
+const PROMPT_MODE_LABEL: Record<VoiceCallPromptMode, string> = {
+  append: 'Complementar',
+  replace: 'Substituto',
+  none: 'Nenhum'
+}
+const PROMPT_MODE_HELP: Record<VoiceCallPromptMode, string> = {
+  append: 'System prompt normal + prompt-base de voz + o prompt do modo voz no fim (padrão).',
+  replace:
+    'Na chamada, o prompt do modo voz (depois do prompt-base) SUBSTITUI o system prompt normal.',
+  none: 'Sem prompt de voz: só o system prompt normal (nem o prompt-base global de voz).'
 }
 
-/** Edição da política de interjeições (também usada nos padrões globais). */
-export function InterjectionFields({
-  value,
-  onChange,
-  testID
-}: {
-  value: InterjectionPolicy
-  onChange: (v: InterjectionPolicy) => void
-  testID?: string
-}) {
-  const set = (p: Partial<InterjectionPolicy>) => onChange({ ...value, ...p })
-  return (
-    <Card>
-      <View style={{ gap: spacing.sm }}>
-        <ToggleRow
-          title="Interjeições"
-          subtitle="“Uhum.”/“Aham.” curtos nas pausas da sua fala (clipes gerados com a voz)."
-          value={value.enabled}
-          onChange={(enabled) => set({ enabled })}
-          testID={testID ? `${testID}-enabled` : undefined}
-        />
-        {value.enabled ? (
-          <>
-            <ToggleRow
-              title="Modo sombra"
-              subtitle="Decide mas não toca (calibração)."
-              value={value.shadow}
-              onChange={(shadow) => set({ shadow })}
-            />
-            <NumberField
-              label="Probabilidade (0–1)"
-              value={value.fireProbability}
-              onChange={(v) =>
-                set({ fireProbability: v ?? DEFAULT_INTERJECTION_POLICY.fireProbability })
-              }
-              min={0}
-              max={1}
-              int={false}
-            />
-            <NumberField
-              label="Intervalo mínimo"
-              value={value.cooldownMs}
-              onChange={(v) => set({ cooldownMs: v ?? DEFAULT_INTERJECTION_POLICY.cooldownMs })}
-              min={0}
-              max={60000}
-              suffix="ms"
-            />
-            <NumberField
-              label="Fala mínima"
-              value={value.minSpeechMs}
-              onChange={(v) => set({ minSpeechMs: v ?? DEFAULT_INTERJECTION_POLICY.minSpeechMs })}
-              min={0}
-              max={10000}
-              suffix="ms"
-            />
-            <NumberField
-              label="Pausa"
-              value={value.minPauseMs}
-              onChange={(v) => set({ minPauseMs: v ?? DEFAULT_INTERJECTION_POLICY.minPauseMs })}
-              min={100}
-              max={5000}
-              suffix="ms"
-            />
-            <NumberField
-              label="Volume (0–1)"
-              value={value.volume}
-              onChange={(v) => set({ volume: v ?? DEFAULT_INTERJECTION_POLICY.volume })}
-              min={0}
-              max={1}
-              int={false}
-            />
-            {INTERJECTION_CLASSES.map((c) => (
-              <Checkbox
-                key={c}
-                label={INTERJECTION_LABEL[c]}
-                value={value.classes.includes(c)}
-                onChange={(on) =>
-                  set({
-                    classes: on
-                      ? [...value.classes.filter((x) => x !== c), c]
-                      : value.classes.filter((x) => x !== c)
-                  })
-                }
-                testID={testID ? `${testID}-class-${c}` : undefined}
-              />
-            ))}
-          </>
-        ) : null}
-      </View>
-    </Card>
-  )
+/** Camada herdada: no chat, a persona de origem (ao vivo); na persona, só o padrão global. */
+export interface VoicePersonaLayer {
+  name: string
+  voice: VoiceCallConfig | null
 }
 
 export function VoiceConfigEditor({
@@ -133,6 +51,10 @@ export function VoiceConfigEditor({
   onChange,
   providers,
   scope = 'persona',
+  defaults = DEFAULT_VOICE_CALL_DEFAULTS,
+  persona = null,
+  chatTools = null,
+  tagsSupport = { supported: false, model: null },
   testID = 'voice-config'
 }: {
   value: VoiceCallConfig | null | undefined
@@ -140,11 +62,26 @@ export function VoiceConfigEditor({
   providers: Provider[]
   /** De onde vem a herança (textos): persona → global; chat → persona → global. */
   scope?: 'persona' | 'chat'
+  /** Padrões globais (`voiceCallDefaults`). */
+  defaults?: VoiceCallDefaults
+  /** Chat: a persona de origem (camada do meio). */
+  persona?: VoicePersonaLayer | null
+  /** Tools do chat/persona (ponto de partida de "Tools próprias na chamada"). */
+  chatTools?: ToolName[] | null
+  /** A voz da chamada interpreta tags de voz? */
+  tagsSupport?: { supported: boolean; model: string | null }
   testID?: string
 }) {
+  // normalizado: campos legados de registros antigos (`interjections`) nunca são regravados
   const v = normalizeVoiceCallConfig(value ?? null)
   const set = (p: Partial<VoiceCallConfig>) => onChange({ ...v, ...p })
-  const from = scope === 'chat' ? 'a persona e Configurações → Voz' : 'Configurações → Voz'
+  const where = scope === 'chat' ? 'neste chat' : 'nesta persona'
+  const pv = scope === 'chat' ? (persona?.voice ?? null) : null
+  const personaLabel = `Padrão da persona${persona?.name ? ` “${persona.name}”` : ''}`
+  const GLOBAL = 'Padrão global (Configurações → Voz)'
+  /** De onde vem o herdado de um campo: a persona (quando ela fixa) ou o global. */
+  const from = (personaSets: boolean): string => (personaSets ? personaLabel : GLOBAL)
+  const resolved = resolveVoiceCallConfig(v, defaults, pv)
   const tools = v.tools?.enabledTools ?? null
   const portable = [...TOOL_NAMES, ...LOCATION_TOOLS].filter((t) => MOBILE_TOOLS.includes(t))
   const localOn = (tools ?? []).filter((t) => !MOBILE_TOOLS.includes(t))
@@ -157,25 +94,45 @@ export function VoiceConfigEditor({
       }
     })
   }
-  const promptMode: VoiceCallPromptMode | 'inherit' = v.promptMode ?? 'inherit'
+
+  const inheritedEnabled = pv?.enabled ?? defaults.enabled
+  const inheritedEndCall = pv?.endCall ?? defaults.endCall
+  const inheritedMode: VoiceCallPromptMode = pv?.promptMode ?? 'append'
+  const inheritedFillers = pv?.fillers ? pv.fillers.enabled : defaults.fillers.enabled
+  const inheritedTags = pv?.audioTags ?? defaults.audioTags
+  const inheritedTagsPrompt =
+    pv?.audioTagsPrompt ?? defaults.audioTagsPrompt ?? DEFAULT_AUDIO_TAGS_PROMPT
+  const mode = resolved.promptMode
 
   return (
     <View style={{ gap: spacing.md }} testID={testID}>
       <Note>
-        Conversa falada com o agente (botão de telefone nos chats executados neste aparelho). Campos
-        em “Padrão” seguem {from}.
+        Conversa falada com o agente (botão de telefone nos chats executados neste aparelho). A
+        opção com ★ é a herdada ({scope === 'chat' ? 'da persona ou ' : ''}de Configurações → Voz):
+        escolhida, segue o padrão; outra fixa o valor {where}.
       </Note>
-      <FieldLabel>Chamada de voz</FieldLabel>
-      <Segmented
+      <FieldLabel>{`Disponível ${where}`}</FieldLabel>
+      <InheritChoice
+        label={`Chamada de voz ${where}`}
         options={[
-          { value: 'inherit', label: 'Padrão' },
-          { value: 'on', label: 'Disponível' },
-          { value: 'off', label: 'Desligada' }
+          { value: true, label: 'Ligada' },
+          { value: false, label: 'Desligada' }
         ]}
-        value={tri(v.enabled)}
-        onChange={(t) => set({ enabled: fromTri(t) })}
+        value={v.enabled}
+        inherited={inheritedEnabled}
+        inheritedFrom={from(pv?.enabled != null)}
+        onChange={(enabled) => set({ enabled })}
         testID={`${testID}-enabled`}
       />
+      {!resolved.enabled ? (
+        <Text style={{ color: colors.warning, fontSize: 12.5, lineHeight: 17 }}>
+          {v.enabled === false
+            ? `O telefone fica desabilitado ${scope === 'chat' ? 'neste chat' : 'nos chats desta persona (um chat pode religar)'}.`
+            : pv?.enabled === false
+              ? `A persona “${persona?.name ?? ''}” desliga a chamada: escolha “Ligada” para usar neste chat.`
+              : 'Desligada em Configurações → Voz: o telefone some dos chats sem override.'}
+        </Text>
+      ) : null}
 
       <FieldLabel>Modelo da chamada</FieldLabel>
       <ModelField
@@ -199,101 +156,97 @@ export function VoiceConfigEditor({
       />
 
       <FieldLabel>Prompt na chamada</FieldLabel>
-      <Segmented
-        options={[
-          { value: 'inherit', label: 'Padrão' },
-          { value: 'append', label: 'Somar' },
-          { value: 'replace', label: 'Substituto' },
-          { value: 'none', label: 'Nenhum' }
-        ]}
-        value={promptMode}
-        onChange={(m) => set({ promptMode: m === 'inherit' ? null : m })}
+      <InheritChoice
+        label="Prompt na chamada"
+        options={VOICE_CALL_PROMPT_MODES.map((m) => ({ value: m, label: PROMPT_MODE_LABEL[m] }))}
+        value={v.promptMode ?? null}
+        inherited={inheritedMode}
+        inheritedFrom={from(!!pv?.promptMode)}
+        onChange={(promptMode) => set({ promptMode })}
         testID={`${testID}-prompt-mode`}
       />
-      <Multiline
-        value={v.voicePrompt ?? ''}
-        onChangeText={(t) => set({ voicePrompt: t.trim() ? t : null })}
-        placeholder="Prompt do modo voz — ex.: Responda em frases curtas e naturais, sem markdown nem listas."
-        minHeight={90}
-        testID={`${testID}-prompt`}
-      />
-      <Note>
-        {promptMode === 'replace'
-          ? 'Vai NO LUGAR do system prompt do chat (depois do prompt-base de voz).'
-          : promptMode === 'none'
-            ? 'Sem prompt de voz: só o system prompt normal (nem o prompt-base global).'
-            : 'Vai no fim do system prompt do chat, separado por uma linha em branco.'}
-      </Note>
+      <Note>{PROMPT_MODE_HELP[mode]}</Note>
+      {mode !== 'none' ? (
+        <Multiline
+          value={v.voicePrompt ?? ''}
+          onChangeText={(t) => set({ voicePrompt: t.trim() ? t : null })}
+          placeholder={
+            scope === 'chat' && pv?.voicePrompt
+              ? `Da persona: ${pv.voicePrompt}`
+              : 'Prompt do modo voz — ex.: Responda em frases curtas e naturais, sem markdown nem listas.'
+          }
+          minHeight={90}
+          testID={`${testID}-prompt`}
+        />
+      ) : null}
 
       <FieldLabel>O agente pode encerrar a chamada</FieldLabel>
-      <Segmented
+      <InheritChoice
+        label="O agente pode encerrar a chamada"
         options={[
-          { value: 'inherit', label: 'Padrão' },
-          { value: 'on', label: 'Sim' },
-          { value: 'off', label: 'Não' }
+          { value: true, label: 'Sim' },
+          { value: false, label: 'Não' }
         ]}
-        value={tri(v.endCall)}
-        onChange={(t) => set({ endCall: fromTri(t) })}
+        value={v.endCall ?? null}
+        inherited={inheritedEndCall}
+        inheritedFrom={from(pv?.endCall != null)}
+        onChange={(endCall) => set({ endCall })}
         testID={`${testID}-end-call`}
       />
-      <Note>Tool end_call: só nos turnos da chamada, sem aprovação.</Note>
+      <Note>
+        Tool end_call (só nos turnos da chamada, sem aprovação): quando você se despede, o agente
+        diz tchau e a chamada cai depois de a despedida tocar.
+      </Note>
 
       <FieldLabel>Preâmbulos (“Hum, deixa eu ver.”)</FieldLabel>
-      <Segmented
+      <InheritChoice
+        label="Preâmbulos"
         options={[
-          { value: 'inherit', label: 'Padrão' },
-          { value: 'on', label: 'Ligados' },
-          { value: 'off', label: 'Desligados' }
+          { value: true, label: 'Ligados' },
+          { value: false, label: 'Desligados' }
         ]}
-        value={v.fillers ? (v.fillers.enabled ? 'on' : 'off') : 'inherit'}
-        onChange={(t) =>
-          set({
-            fillers:
-              t === 'inherit' ? null : { enabled: t === 'on', prompt: v.fillers?.prompt ?? null }
-          })
+        value={v.fillers ? v.fillers.enabled : null}
+        inherited={inheritedFillers}
+        inheritedFrom={from(!!pv?.fillers)}
+        onChange={(on) =>
+          set({ fillers: on == null ? null : { enabled: on, prompt: v.fillers?.prompt ?? null } })
         }
         testID={`${testID}-fillers`}
       />
 
-      <FieldLabel>Interjeições</FieldLabel>
-      <Segmented
-        options={[
-          { value: 'inherit', label: 'Padrão' },
-          { value: 'custom', label: 'Personalizar' }
-        ]}
-        value={v.interjections ? 'custom' : 'inherit'}
-        onChange={(t) =>
-          set({ interjections: t === 'inherit' ? null : { ...DEFAULT_INTERJECTION_POLICY } })
-        }
-        testID={`${testID}-interjections`}
+      <AudioTagsField
+        value={v.audioTags ?? null}
+        inherited={inheritedTags}
+        inheritedFrom={from(pv?.audioTags != null)}
+        prompt={v.audioTagsPrompt ?? null}
+        inheritedPrompt={inheritedTagsPrompt}
+        onChange={(audioTags) => set({ audioTags })}
+        onPromptChange={(audioTagsPrompt) => set({ audioTagsPrompt })}
+        support={tagsSupport}
+        testID={`${testID}-audio-tags`}
       />
-      {v.interjections ? (
-        <InterjectionFields
-          value={v.interjections}
-          onChange={(interjections) => set({ interjections })}
-          testID={`${testID}-interjections`}
-        />
-      ) : null}
 
       <FieldLabel>Tools na chamada</FieldLabel>
-      <Segmented
-        options={[
-          { value: 'inherit', label: 'Iguais ao chat' },
-          { value: 'custom', label: 'Escolher' }
-        ]}
-        value={tools ? 'custom' : 'inherit'}
-        onChange={(t) =>
-          set({
-            tools:
-              t === 'inherit'
-                ? v.tools?.maxToolOutputChars != null
+      <Card>
+        <ToggleRow
+          title="Tools próprias na chamada"
+          subtitle="Desligado: as mesmas tools do chat. Ligado: só as marcadas abaixo valem nos turnos de voz (nenhuma = sem tools)."
+          value={!!tools}
+          onChange={(on) =>
+            set({
+              tools: on
+                ? {
+                    enabledTools: (chatTools ?? []).filter((t) => MOBILE_TOOLS.includes(t)),
+                    maxToolOutputChars: v.tools?.maxToolOutputChars ?? null
+                  }
+                : v.tools?.maxToolOutputChars != null
                   ? { enabledTools: null, maxToolOutputChars: v.tools.maxToolOutputChars }
                   : null
-                : { enabledTools: [], maxToolOutputChars: v.tools?.maxToolOutputChars ?? null }
-          })
-        }
-        testID={`${testID}-tools`}
-      />
+            })
+          }
+          testID={`${testID}-tools`}
+        />
+      </Card>
       {tools ? (
         <Card padded={false}>
           {portable.map((t, i) => (

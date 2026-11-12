@@ -304,8 +304,10 @@ describe.skipIf(!enabled)('voz contra o servidor real (LLM/STT/TTS falsos)', () 
           voicePrompt: 'Fale curto.',
           promptMode: 'append',
           fillers: null,
-          interjections: null,
-          endCall: false
+          endCall: false,
+          audioTags: true,
+          // `interjections` (legado, §4.3.6) de uma tela antiga: nunca chega ao servidor
+          ...({ interjections: { enabled: true, shadow: true } } as object)
         }
       }
     })
@@ -357,10 +359,9 @@ describe.skipIf(!enabled)('voz contra o servidor real (LLM/STT/TTS falsos)', () 
       15_000
     )
     const preset = (await serverRecords(desk, null, 'preset')).find((r) => r.id === p.id)!
-    expect((preset.plain.config as Record<string, unknown>).voice).toMatchObject({
-      voicePrompt: 'Fale curto.',
-      endCall: false
-    })
+    const pvoice = (preset.plain.config as Record<string, unknown>).voice
+    expect(pvoice).toMatchObject({ voicePrompt: 'Fale curto.', endCall: false, audioTags: true })
+    expect(pvoice).not.toHaveProperty('interjections')
   }, 120_000)
 })
 

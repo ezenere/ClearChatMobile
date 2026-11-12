@@ -309,7 +309,8 @@ Feito (Android): **ditado** no composer (chats deste celular e controle remoto: 
 API das settings sincronizadas → texto no ponto do cursor com as funções puras do desktop;
 `meta.voice = { source: 'dictation' }` no envio dos chats daqui; parada por silêncio e "segurar para
 falar"); **chamada de voz** nos chats executados aqui (`VoiceCallManager` do desktop vendorado inteiro
-+ o "sensor" do renderer portado: fim de turno adaptativo com especulação, interjeições, preâmbulos
++ o "sensor" do renderer portado: fim de turno adaptativo com especulação, ~~interjeições~~ (saíram
+em 2026-11-12 — ver "Voz: desktop 92005b8"), preâmbulos
 com clipes gerados no aparelho, frases de demora, TTS por frase, turno continuado, barge-in pelo botão
 Interromper, `end_call`, marcadores §4.3.8 com custos, histórico só com o ouvido); **Configurações →
 Voz** (`audioInput`/`sttSettings`/`ttsSettings`/`voiceCallDefaults`, gravados sem as partes do
@@ -360,7 +361,8 @@ recebe um sinal sintético do próprio emulador, nunca o microfone real). Screen
 - **Microfone real** e alto-falante de verdade (regra dos testes): eco, nível/limiar do
   `AdaptiveTurnGate` (0,01 RMS) com um microfone de celular, latência real dos provedores.
 - Provedores reais de STT/TTS (só os falsos; nada pago).
-- Barge-in por voz com fone ("Interromper falando") só nos unitários.
+- Barge-in por voz com fone ("Interromper falando" — hoje "Falar por cima da resposta") só nos
+  unitários.
 
 Pendências / TODO:
 - Protocolo: o `send` remoto (§8.6) não leva `meta.voice` — ditado no controle remoto chega como texto
@@ -373,6 +375,64 @@ Pendências / TODO:
 - O nível do microfone re-renderiza o dock a ~30 Hz: o `uiautomator dump` fica lento durante a
   chamada (para o E2E, screenshots + log do Metro).
 - Clipes não são aparados (o desktop apara o silêncio das pontas).
+
+## Voz: desktop 92005b8 — estado (2026-11-12)
+
+Feito (Android; o vendorado veio do desktop 92005b8 + protocolo 8d6e074, sem mudança de versão):
+- **Sem interjeições**: nada de "Uhum/Aham", `InterjectionWatcher`, modo sombra nem clipes de
+  interjeição (shim `clips.ts` só com `FILLER`; `evalLog.ts` com o `VoiceEvalEvent` novo). Os
+  escritores do celular nunca reenviam `interjections` (`src/data/legacy.ts` no plaintext antes de
+  cifrar, em chat/persona/`voiceCallDefaults`; `repo.chat()` normaliza).
+- **Frases de demora espaçadas** (vendorado): a fila do celular avisa o `playback-idle` quando
+  esvazia — o FIM de cada frase curta —, de onde o main conta os intervalos; padrões 8 s/15 s na tela.
+- **Falar por cima = ducking** (`PlaybackDuck` vendorado): rampa de ganho no `UtteranceQueue`
+  (`setDuck`, ~80 ms em passos de 16 ms no volume do `AudioPlayer`), restore depois do silêncio,
+  barge-in por voz/palavras (parciais ao vivo da chamada — `livePartials`)/ordem de parada; vale com
+  "Falar por cima da resposta (use fone de ouvido)" ligado (sem fone o microfone segue surdo durante a
+  fala). Tela: "Falar por cima da resposta" (os 4 limiares de `voiceCallDefaults.turn`).
+- **Portão de ativação de fala** (`speechGate` vendorado): `LevelGate` nos quadros do microfone da
+  chamada (início de fala, ducking, barge-in) e `SpeechGate` + pós-filtro em TODA via da sessão de
+  STT do celular (parciais, especulação, final; chamada e ditado), com o piso de ruído entre sessões.
+  `audioInput.activationDb` local (kv `voice.activationDb`), fora do registro; tela "Nível de
+  ativação" com medidor ao vivo, linha do nível, arrastar/−/+ e "Testar" (único que abre o microfone).
+- **Tags de voz**: toggle ★ + instrução editável + "Usar o padrão" + aviso de voz sem suporte na
+  persona/chat; interruptor + instrução no padrão global; nota das tags ao lado do modelo de fala.
+  No chat (local, controle remoto, ao vivo) as tags aparecem no lugar em 0,65 (fora de código).
+- **Ouvido em palavras + leitura ao vivo**: barge-in (voz ou botão Interromper) manda `current`
+  (`currentPosition` do player: `currentTime`/`duration` do expo-audio, ou a duração do WAV); o
+  runner do celular grava o prefixo ouvido + "…" e `meta.voice.unheard`. Enquanto a resposta é falada
+  aqui, o resto dela fica em 0,5 avançando palavra por palavra (`src/voice/follow.ts`); depois de uma
+  interrupção, o resto não ouvido aparece esmaecido depois de "interrompido" (também no controle
+  remoto e no viewer ao vivo).
+- **Herança sem opção duplicada**: `src/settings/InheritChoice.tsx` (+ regra pura em `inherit.ts`)
+  no editor de voz: Disponível, Prompt na chamada, O agente pode encerrar, Preâmbulos, Tags de voz.
+  "Tools na chamada" ("Iguais ao chat"/"Escolher") não é uma escolha de herança com opção duplicada —
+  virou o interruptor "Tools próprias na chamada", como no desktop.
+- Fala: modelos sem lista de vozes (Fish Audio pelo OpenRouter) mostram a dica e aceitam o link
+  `fish.audio/m/<id>` colado (`fishVoiceIdFrom` vendorado); a lista de vozes segue o modelo. O celular
+  nunca teve o atalho "Usar OpenRouter (ElevenLabs Flash)".
+
+Decisões:
+- O esmaecimento no React Native é pela COR com alfa (o `opacity` não vale em `Text` aninhado) e o
+  "ainda não falado" entra no Markdown como um marcador de uso privado no texto-fonte (o renderer
+  percorre os tokens do marked na ordem) — `src/chat/voiceText.ts`.
+- Parciais ao vivo na chamada seguem `sttSettings.livePartials` (como no desktop): mostram a fala no
+  dock e dão as palavras do barge-in; o portão de fala impede parciais de silêncio.
+
+Verificado: `npm run typecheck`, `npm run lint`, `npm test` (novos em `tests/voice.test.ts` — portão
+de fala, `activationDb` fora do registro, `interjections` nunca reenviado, fila com ducking/posição,
+chamada com fone: tosse → volume de volta, insistir → barge-in em palavras com `unheard`, tags tiradas
+da síntese — e `tests/voiceText.test.ts`) e E2E no AVD (`-no-audio`, microfone de teste por polling,
+LLM/STT/TTS falsos, chat "Só neste aparelho"): medidor do nível de ativação (ruído abaixo da linha,
+fala acima — "Fala detectada"), "Falar por cima da resposta", tags no padrão global com o aviso de voz
+sem suporte, chamada com a leitura ao vivo (o resto da frase esmaecido, avançando), tosse por cima →
+"falando por cima · voz baixa" → volume de volta, "Espera aí…" por cima → barge-in (`stop-word` pela
+parcial ao vivo) → mensagem "…ondas que batem na…" + "interrompido" + o resto esmaecido, tag `[risos]`
+em 0,65, e a aba Voz da persona/chat com as ★. Screenshots em `scratchpad/mobile/voice2/`.
+
+Notas para o desktop (vendorado, não corrigido aqui): `sentences.ts` trata "mar." como abreviação
+(março) — "…sobre o mar. Depois…" não corta a frase (o E2E trocou o texto). O `npm run vendor` da
+fatia seguinte (frases de ferramenta, desktop 1a68ecd/protocolo a92f548) ficou pendente.
 
 ## Notificações push (1.7.0) — estado (2026-11-06)
 

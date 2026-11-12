@@ -1,7 +1,8 @@
 // Settings de áudio no celular (§4.3.2): leitura normalizada dos registros sincronizados
 // (`audioInput`, `sttSettings`, `ttsSettings`, `voiceCallDefaults`), resolução do provedor pelo id
 // (endereço/chave/tipo só em memória — nunca gravados) e a forma gravada (sem as partes do
-// dispositivo — = `voiceSettingOut` do desktop). O celular não tem motores locais nem GPU: o modo
+// dispositivo — = `voiceSettingOut` do desktop: `audioInput.deviceId`/`activationDb` nunca saem; o
+// nível de ativação deste aparelho vive no kv local, `native.ts`). O celular não tem motores locais nem GPU: o modo
 // "local"/"híbrido" do STT e o backend "local" do TTS aparecem como "só no computador" e a voz
 // explica em vez de mandar o áudio para a API sem o usuário escolher. Sem React Native.
 import {
@@ -14,7 +15,12 @@ import {
   type TtsSettings,
   type VoiceCallDefaults
 } from '@shared/voice'
-import { providerSupportsVoice, voiceProviderSupport } from '@shared/voiceCatalog'
+import { normalizeActivationDb } from '@shared/speechGate'
+import {
+  providerSupportsVoice,
+  supportsAudioTags,
+  voiceProviderSupport
+} from '@shared/voiceCatalog'
 import { providerKind } from '@shared/providerKinds'
 import type { Provider } from '@shared/types'
 
@@ -25,10 +31,23 @@ export interface VoiceSettings {
   voiceCallDefaults: VoiceCallDefaults
 }
 
-/** Settings de áudio completas a partir do cache (`setting(id)` = `value` do registro). */
-export function readVoiceSettings(setting: (id: string) => unknown): VoiceSettings {
+/** Partes do dispositivo do `audioInput` (§4.3.2): nunca vão no registro; o recebido não as troca. */
+export const AUDIO_INPUT_DEVICE_FIELDS = ['deviceId', 'activationDb'] as const
+
+/**
+ * Settings de áudio completas a partir do cache (`setting(id)` = `value` do registro). O nível de
+ * ativação é o DESTE aparelho (`device.activationDb`, kv local) — um `activationDb` que viesse no
+ * registro é ignorado (parte do dispositivo, como o `deviceId`).
+ */
+export function readVoiceSettings(
+  setting: (id: string) => unknown,
+  device: { activationDb?: number | null } = {}
+): VoiceSettings {
   return {
-    audioInput: normalizeAudioInput(setting('audioInput')),
+    audioInput: {
+      ...normalizeAudioInput(setting('audioInput')),
+      activationDb: normalizeActivationDb(device.activationDb)
+    },
     stt: normalizeSttSettings(setting('sttSettings')),
     tts: normalizeTtsSettings(setting('ttsSettings')),
     voiceCallDefaults: normalizeVoiceCallDefaults(setting('voiceCallDefaults'))
@@ -42,14 +61,15 @@ const isObj = (v: unknown): v is Plain => !!v && typeof v === 'object' && !Array
 const ENDPOINT_RUNTIME = ['baseUrl', 'apiKey', 'providerKind', 'extraBody']
 
 /**
- * Valor a gravar no registro `setting` (§4.3.2): sem `audioInput.deviceId`, sem o bloco `gpu`, sem
- * `local.installed` e sem endereço/chave resolvidos; o modo `gpu` nunca sai (o celular não o tem —
- * por segurança vira o valor online ou o padrão). Objeto vazio → null.
+ * Valor a gravar no registro `setting` (§4.3.2): sem `audioInput.deviceId`/`activationDb` (partes
+ * do dispositivo), sem o bloco `gpu`, sem `local.installed` e sem endereço/chave resolvidos; o modo
+ * `gpu` nunca sai (o celular não o tem — por segurança vira o valor online ou o padrão). Objeto
+ * vazio → null.
  */
 export function audioSettingOut(id: string, value: unknown, online?: unknown): unknown {
   if (!isObj(value)) return value ?? null
   const out = JSON.parse(JSON.stringify(value)) as Plain
-  if (id === 'audioInput') delete out.deviceId
+  if (id === 'audioInput') for (const k of AUDIO_INPUT_DEVICE_FIELDS) delete out[k]
   const field = id === 'sttSettings' ? 'mode' : id === 'ttsSettings' ? 'backend' : null
   if (field) {
     delete out.gpu
@@ -166,4 +186,19 @@ export function resolveTts(
       api: { ...tts.api, baseUrl: p.baseUrl, apiKey: p.apiKey, providerKind: kind }
     }
   }
+}
+
+/**
+ * A voz da chamada (Configurações → Voz → Fala) interpreta tags de voz? (`supportsAudioTags` com a
+ * família do provedor escolhido — = `useCallTtsTagsSupport` do desktop): os editores avisam quando
+ * as tags pedidas seriam tiradas da fala.
+ */
+export function callTtsTagsSupport(
+  tts: TtsSettings,
+  provider: (id: string) => Provider | null
+): { supported: boolean; model: string | null } {
+  if (tts.backend !== 'api' || !tts.api.providerId) return { supported: false, model: null }
+  const p = provider(tts.api.providerId)
+  const family = p ? voiceFamily(p) : null
+  return { supported: supportsAudioTags(family, tts.api.model), model: tts.api.model || null }
 }

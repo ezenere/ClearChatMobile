@@ -5,6 +5,7 @@
 import { SyncApiError, SyncNetworkError } from '@vendor/desktop/sync/http'
 import { openRecord, sealRecord, type Subkeys, UnsupportedEnvelopeError } from '@/crypto'
 import { UserError } from '@/account/errors'
+import { outgoingPlain } from './legacy'
 import { RecordState, type LocalStore, type RecordStateCode } from './store'
 import {
   type Change,
@@ -598,7 +599,12 @@ export class SyncEngine {
     for (let attempt = 0; attempt < 5; attempt++) {
       const plain = mutate(current)
       const rev = baseRev + 1
-      const env = await sealRecord(sk.record, userId, { ...ref, rev }, plain)
+      const env = await sealRecord(
+        sk.record,
+        userId,
+        { ...ref, rev },
+        outgoingPlain(ref.type, ref.id, plain)
+      )
       const item: PushItem = { ...ref, base_rev: baseRev, rev, deleted: false, env, blobs }
       let res: PushResult
       try {

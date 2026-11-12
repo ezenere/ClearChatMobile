@@ -3,7 +3,14 @@
 // tools, rodapé com modelo/tokens/cache/custo/duração), resumo de compactação, erro, marcadores de
 // chamada, mensagens de outros chats/agente pai/irmãos, resultado de subagente, extração de memória.
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { createContext, memo, useContext, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  memo,
+  useContext,
+  useState,
+  useSyncExternalStore,
+  type ReactNode
+} from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import type { SiblingInfo } from '@shared/branches'
 import { contentText, messageAttachments, toolContentText } from '@shared/attachments'
@@ -11,6 +18,7 @@ import { splitInterChatText } from '@shared/interChat'
 import { isSiblingKind, splitSiblingText } from '@shared/siblings'
 import type { Session, StoredMessage, StreamDraft } from '@shared/types'
 import { callUsageLines, voiceBadgeText } from '@shared/voiceCallMarks'
+import { liveDimFrom } from '@shared/heardText'
 import { dayLabel } from '@vendor/renderer/dates'
 import { CHANGE_LABEL, extractionOf } from '@vendor/renderer/memory'
 import { reasoningHeader } from '@vendor/renderer/reasoning'
@@ -21,6 +29,7 @@ import { formatCost, formatDuration, formatTokens } from './format'
 import { Markdown } from './Markdown'
 import { EndCallLine, ToolCard, type ToolLive } from './ToolCard'
 import type { ToolRun } from '@/remote/mirror'
+import type { VoiceFollow } from '@/voice/follow'
 import type { Row } from './viewModel'
 import { BranchSwitcher, CopyButton, DayPill, MonoBlock, MsgTime } from './ui'
 
@@ -36,6 +45,11 @@ export interface RowContext {
   chatTitle: (chatId: string) => string | null
   /** Controle remoto (§8.6, §11): estado ao vivo e ações. Ausente = somente leitura. */
   live?: RowLive
+  /**
+   * Chamada de voz executada NESTE aparelho: a leitura ao vivo (o que ainda não foi falado da
+   * resposta fica esmaecido). Ausente = controle remoto/ao vivo (só as tags e o resto não ouvido).
+   */
+  voiceFollow?: VoiceFollow
 }
 
 export interface RowLive {
@@ -60,6 +74,36 @@ const useRow = (): RowContext => {
   const c = useContext(RowCtx)
   if (!c) throw new Error('RowCtx ausente')
   return c
+}
+
+const noSubscribe = () => () => undefined
+
+/**
+ * Leitura ao vivo de uma resposta da chamada: offset em `text` a partir do qual ainda não foi falado
+ * (null = não é ela que está sendo falada) — avança palavra por palavra pela posição do player.
+ */
+function useLiveDim(text: string, sessionId: string): number | null {
+  const f = useRow().voiceFollow
+  return useSyncExternalStore(f ? f.subscribe : noSubscribe, () => {
+    if (!f) return null
+    const s = f.get()
+    if (s.sessionId !== sessionId || !s.current) return null
+    return liveDimFrom(text, s.heard, s.current)
+  })
+}
+
+/** Resposta falada na chamada: itálico, tags de voz esmaecidas e a leitura ao vivo. */
+function VoiceMarkdown({
+  text,
+  sessionId,
+  selectable
+}: {
+  text: string
+  sessionId: string
+  selectable?: boolean
+}) {
+  const dimFrom = useLiveDim(text, sessionId)
+  return <Markdown text={text} italic voiceTags dimFrom={dimFrom} selectable={selectable} />
 }
 
 function Switcher({ msg }: { msg: StoredMessage }) {
@@ -267,13 +311,34 @@ function AssistantMessage({ msg }: { msg: StoredMessage }) {
     <View style={st.assistant} testID="msg-assistant">
       {m.reasoning ? <Reasoning msg={msg} text={m.reasoning} /> : null}
       {content ? (
-        <Markdown
-          text={content}
-          italic={msg.meta.voice?.source === 'call'}
-          selectable={!c.live?.onLongPress}
-        />
+        msg.meta.voice?.source === 'call' ? (
+          // resposta falada na chamada: itálico (o texto é o que foi dito), tags de voz esmaecidas
+          // e, enquanto é falada, o que ainda não tocou esmaecido (leitura ao vivo)
+          <VoiceMarkdown
+            text={content}
+            sessionId={msg.sessionId}
+            selectable={!c.live?.onLongPress}
+          />
+        ) : (
+          <Markdown text={content} selectable={!c.live?.onLongPress} />
+        )
       ) : null}
-      {msg.meta.interrupted ? (
+      {msg.meta.voice?.unheard ? (
+        // barge-in no meio: o resto que você não ouviu fica legível, esmaecido, depois do marcador
+        <View testID="voice-unheard">
+          <View style={[st.interrupted, { marginTop: 4, marginBottom: 2 }]}>
+            <Ionicons name="close" size={11} color={colors.subtle} />
+            <Text style={st.interruptedText}>interrompido</Text>
+          </View>
+          <Markdown
+            text={msg.meta.voice.unheard}
+            italic
+            voiceTags
+            dimFrom={0}
+            selectable={!c.live?.onLongPress}
+          />
+        </View>
+      ) : msg.meta.interrupted ? (
         <View style={st.interrupted}>
           <Ionicons name="close" size={11} color={colors.subtle} />
           <Text style={st.interruptedText}>Interrompida pelo usuário</Text>
@@ -567,16 +632,38 @@ function DraftReasoning({ text, thinking }: { text: string; thinking: boolean })
   )
 }
 
+/** A sessão está numa chamada de voz executada neste aparelho? (a resposta chegando é falada) */
+function useInCall(sessionId: string): boolean {
+  const f = useRow().voiceFollow
+  return useSyncExternalStore(f ? f.subscribe : noSubscribe, () =>
+    f ? f.get().sessionId === sessionId : false
+  )
+}
+
 /** Resposta ao vivo do host: raciocínio, texto e tool calls atualizando no lugar (§11). */
-export const DraftMessage = memo(function DraftMessage({ draft }: { draft: StreamDraft }) {
+export const DraftMessage = memo(function DraftMessage({
+  draft,
+  sessionId
+}: {
+  draft: StreamDraft
+  sessionId: string
+}) {
   const c = useRow()
+  const inCall = useInCall(sessionId)
   const content = draft.content
   const thinking = !!draft.reasoning && !content && !draft.toolCalls.length
   const empty = !content && !draft.reasoning && !draft.toolCalls.length
   return (
     <View style={st.assistant} testID="msg-draft">
       {draft.reasoning ? <DraftReasoning text={draft.reasoning} thinking={thinking} /> : null}
-      {content ? <Markdown text={content} selectable={false} /> : null}
+      {content ? (
+        inCall ? (
+          // resposta da chamada ainda chegando: itálico + tags + leitura ao vivo
+          <VoiceMarkdown text={content} sessionId={sessionId} selectable={false} />
+        ) : (
+          <Markdown text={content} selectable={false} />
+        )
+      ) : null}
       {draft.toolCalls.map((tc, i) => (
         <ToolCard
           key={tc.id || `i${i}`}
@@ -651,7 +738,7 @@ export const MessageRow = memo(function MessageRow({
   if (row.kind === 'draft')
     return (
       <View style={st.row}>
-        <DraftMessage draft={row.draft} />
+        <DraftMessage draft={row.draft} sessionId={row.sessionId} />
       </View>
     )
   if (row.kind === 'sending')

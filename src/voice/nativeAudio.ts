@@ -174,6 +174,16 @@ export const expoPlayback: PlaybackBackend = {
       setVolume: (v) => {
         if (!finished) player.volume = Math.min(1, Math.max(0, v))
       },
+      // posição do `AudioPlayer` (s): o "ouvido" em palavras do barge-in e a leitura ao vivo
+      position: () => {
+        if (finished) return { playedMs: 0, durationMs: null }
+        const t = player.currentTime
+        const d = player.duration
+        return {
+          playedMs: Number.isFinite(t) && t > 0 ? t * 1000 : 0,
+          durationMs: Number.isFinite(d) && d > 0 ? d * 1000 : null
+        }
+      },
       stop: (fadeMs = 0) => {
         if (finished) return
         if (fadeMs <= 0) {
@@ -202,7 +212,7 @@ export const expoPlayback: PlaybackBackend = {
   }
 }
 
-/** Cache dos clipes de interjeição/preâmbulo (derivado; regerado em cada aparelho — §4.4). */
+/** Cache dos clipes dos preâmbulos (derivado; regerado em cada aparelho — §4.4). */
 export function fileClipStore(): ClipStore {
   const dir = new Directory(Paths.document, 'voice-clips')
   const fileOf = (key: string) => new File(dir, `${key.replace(/[^A-Za-z0-9_-]/g, '_')}.bin`)
