@@ -106,6 +106,7 @@
       "./plugins/withForegroundOnlyLocation",
       "expo-task-manager",
       "./plugins/withReleaseSigning",
+      "./plugins/withTextBoundsForWidth",
       "expo-font",
       "expo-asset"
     ],

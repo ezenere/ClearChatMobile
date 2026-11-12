@@ -53,6 +53,13 @@ e continuam com o código velho): se o app não refletir uma mudança, reinicie 
 `app.json`, de plugins e do módulo local `modules/argon2`; `npx expo prebuild --clean` regenera. Se um
 ajuste nativo não couber num config plugin, reavaliar.
 
+**Texto cortado no Android 15+** (`plugins/withTextBoundsForWidth.js`): com targetSdk ≥ 35 o `TextView`
+mede a largura pelos LIMITES dos glifos (`useBoundsForWidth`), mas o React Native mede pelo AVANÇO —
+um `<Text>` encolhido ao conteúdo cujo glifo passa da caixa (o "/" em itálico no começo da bolha de
+uma fala da chamada) quebrava a linha no TextView e a 2ª linha sumia ("/chats" → "/"). O plugin põe
+`android:useBoundsForWidth=false` no estilo padrão dos TextView do tema (a regra da medição do RN);
+precisa de prebuild + build nativo (`tests/textBounds.test.ts`).
+
 ### APK e AAB (release)
 
 Uma chave de assinatura só, criada uma vez e guardada **fora** do repo; ela assina o APK local, o AAB

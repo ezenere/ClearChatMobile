@@ -483,6 +483,16 @@ da persona), seção "Frases de espera" (`DelayPhrasesSettings.tsx` — os dois 
 "Restaurar padrão"), aviso de clipes do dock sem o agradecimento. Testes: ruído na espera, ferramenta
 demorada → "manter viva" → agradecimento, resposta rápida → sem agradecimento, clipes `THANKS`.
 
+Correção: fala da chamada começando com "/" cortada na bolha ("/chats" → "/", "/sleep 16000 resposta
+demorada" → "/sleep 16000 resposta"). Causa: Android 15+ (targetSdk 36) — o `TextView` usa os limites dos
+glifos para a largura (`useBoundsForWidth`) e o RN mede pelo avanço; o "/" itálico no começo desce à
+esquerda da origem → o texto medido para uma linha quebra no TextView e a 2ª linha fica fora da bolha.
+Só texto encolhido ao conteúdo (a bolha do usuário — itálica só nas falas da chamada); digitado com "/"
+(reto), "[", "J" e itálico sem "/" no começo não quebravam. Plugin `withTextBoundsForWidth` (estilo
+padrão dos TextView com `useBoundsForWidth=false`); vale para chat local, controle remoto e ao vivo (o
+mesmo `MessageRow`). O desktop/site não têm o problema (HTML). Verificado no AVD com o APK debug
+refeito; o APK de `dist/` precisa ser refeito para levar a correção.
+
 ## Notificações push (1.7.0) — estado (2026-11-06)
 
 Feito: `src/push/` (decisão §22.7 pura com `K_push`/AAD e os vetores de `push.json`; tarefa do
