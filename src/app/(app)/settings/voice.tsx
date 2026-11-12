@@ -1,8 +1,8 @@
 // Configurações → Voz (= aba Áudio do desktop, sem o que é do computador): ditado (`audioInput`),
 // transcrição (`sttSettings`), fala (`ttsSettings`) e os padrões da chamada de voz
-// (`voiceCallDefaults` — turnos, "Falar por cima da resposta", preâmbulos, frases de demora, tags
-// de voz) — todos sincronizados (§4.3.2), gravados SEM as partes do dispositivo
-// (`audioSettingOut`). O "Nível de ativação" do microfone é deste aparelho (kv local, nunca vai no
+// (`voiceCallDefaults` — turnos, "Falar por cima da resposta", preâmbulos, frases de espera e de
+// ferramenta, tags de voz) — padrões DESTE aparelho desde o protocolo 1.9.0 (`device_settings`,
+// nunca sincronizam; cada persona/chat pode ter a própria voz). O "Nível de ativação" do microfone é deste aparelho (kv local, nunca vai no
 // registro). Motores locais/GPU aparecem como "só no computador" (a escolha sincroniza, mas o
 // celular não transcreve/fala com eles). "Neste aparelho": opções locais (§4.4).
 import { useState } from 'react'
@@ -21,7 +21,6 @@ import {
   type VoiceCallDefaults
 } from '@shared/voice'
 import { DEFAULT_AUDIO_TAGS_PROMPT } from '@shared/audioTags'
-import { DELAY_MIN_GAP_MS, KEEPALIVE_COOLDOWN_MS } from '@shared/voicePolicy'
 import { fishVoiceIdFrom, isFishAudioModel, supportsAudioTags } from '@shared/voiceCatalog'
 import { apiParamSpecs, setVoiceApiParam } from '@shared/voiceParams'
 import { describeError } from '@/account/errors'
@@ -30,6 +29,7 @@ import { ModelField } from '@/settings/ModelPicker'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { FieldLabel, Note, NumberField, Segmented, SettingsScreen } from '@/settings/ui'
 import { AudioTagsField } from '@/settings/AudioTagsField'
+import { DelayPhrasesSettings } from '@/settings/DelayPhrasesSettings'
 import { MicActivationLevel } from '@/settings/MicActivationLevel'
 import { ToolPhrasesSettings } from '@/settings/ToolPhrasesSettings'
 import { VoicePromptPreview } from '@/settings/VoicePromptPreview'
@@ -473,57 +473,9 @@ export default function VoiceSettings() {
             </Text>
           </>
         ) : null}
-        <ToggleRow
-          title="Frases de demora"
-          subtitle="“Só mais um instante…” quando a resposta demora; desculpa antes de uma resposta que atrasou."
-          value={delay.enabled}
-          onChange={(enabled) => setCall({ delayPhrases: { ...delay, enabled } })}
-          testID="voice-call-delay"
-        />
-        {delay.enabled ? (
-          <>
-            <NumberField
-              label="“Manter viva” depois de"
-              value={delay.keepAliveAfterMs}
-              onChange={(n) =>
-                setCall({
-                  delayPhrases: {
-                    ...delay,
-                    keepAliveAfterMs: n ?? DEFAULT_DELAY_PHRASES.keepAliveAfterMs
-                  }
-                })
-              }
-              min={1000}
-              max={60000}
-              suffix="ms"
-              placeholder={String(DEFAULT_DELAY_PHRASES.keepAliveAfterMs)}
-              testID="voice-call-keepalive-ms"
-            />
-            <NumberField
-              label="Desculpa depois de"
-              value={delay.apologyAfterMs}
-              onChange={(n) =>
-                setCall({
-                  delayPhrases: {
-                    ...delay,
-                    apologyAfterMs: n ?? DEFAULT_DELAY_PHRASES.apologyAfterMs
-                  }
-                })
-              }
-              min={1000}
-              max={60000}
-              suffix="ms"
-              placeholder={String(DEFAULT_DELAY_PHRASES.apologyAfterMs)}
-              testID="voice-call-apology-ms"
-            />
-          </>
-        ) : null}
       </Card>
-      {delay.enabled ? (
-        <Note>
-          {`“Manter viva” (padrão ${DEFAULT_DELAY_PHRASES.keepAliveAfterMs / 1000} s de silêncio esperando a resposta; no máximo 2 por turno, ${KEEPALIVE_COOLDOWN_MS / 1000} s entre o fim de uma e o início da outra) e desculpa (padrão ${DEFAULT_DELAY_PHRASES.apologyAfterMs / 1000} s desde a sua fala — só para demoras longas; a resposta nunca espera por ela). Espaçadas: sempre pelo menos ${DELAY_MIN_GAP_MS / 1000} s de silêncio entre o fim de uma frase curta (preâmbulo, “manter viva”, desculpa) e a próxima.`}
-        </Note>
-      ) : null}
+      <Text style={st.sub}>Frases de espera</Text>
+      <DelayPhrasesSettings value={delay} onChange={(delayPhrases) => setCall({ delayPhrases })} />
       <Text style={st.sub}>Frases de ferramenta</Text>
       <ToolPhrasesSettings
         value={d.toolPhrases}
@@ -686,7 +638,7 @@ export default function VoiceSettings() {
         title={
           callView.clips.state === 'generating'
             ? `Gerando clipes… ${callView.clips.done ?? 0}/${callView.clips.total ?? 0}`
-            : 'Gerar clipes (preâmbulos e frases de ferramenta)'
+            : 'Gerar clipes (preâmbulos, frases de ferramenta e agradecimentos)'
         }
         icon="musical-notes-outline"
         variant="secondary"
@@ -700,11 +652,11 @@ export default function VoiceSettings() {
         testID="voice-gen-clips"
       />
       <Note>
-        Os clipes (os preâmbulos — “Hum, deixa eu ver aqui.” — e as frases de ferramenta) são
-        gerados com a voz padrão deste aparelho e ficam só aqui; a voz de uma persona tem os clipes
-        dela (“Gerar clipes desta voz” na aba Voz da persona). Ao trocar a voz ou as frases, gere de
-        novo — sem clipes, os preâmbulos não tocam e as frases de ferramenta são sintetizadas na
-        hora.
+        Os clipes (os preâmbulos — “Hum, deixa eu ver aqui.” —, as frases de ferramenta e o
+        “Obrigado por aguardar.”) são gerados com a voz padrão deste aparelho e ficam só aqui; a voz
+        de uma persona tem os clipes dela (“Gerar clipes desta voz” na aba Voz da persona). Ao
+        trocar a voz ou as frases, gere de novo — sem clipes, os preâmbulos não tocam e as frases de
+        ferramenta e de agradecimento são sintetizadas na hora.
       </Note>
     </SettingsScreen>
   )

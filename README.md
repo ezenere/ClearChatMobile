@@ -438,19 +438,21 @@ Ditado no composer (chats deste celular e controle remoto) e **chamada de voz** 
 neste celular — com a semântica do desktop, cujo código é **vendorado**:
 
 - **Vendorado** (`npm run vendor`): `desktop/voice/call.ts` (o `VoiceCallManager` inteiro: turno,
-  fila/turno continuado, preâmbulo, frases de demora espaçadas — contadas do FIM da reprodução —,
+  fila/turno continuado, preâmbulo, frases de espera — "manter viva" após 8 s de silêncio desde o
+  FIM da última fala, no máx. 2 por turno, e "obrigado por aguardar" —,
   TTS por frase, tags de voz tiradas da síntese quando a voz não as interpreta, barge-in com o
   histórico só com as PALAVRAS ouvidas, `end_call`, marcadores e custos), `turnMachine`,
   `sentences` (nunca parte uma tag de voz), `callErrors`, `stt.ts` (erros/nome do arquivo/idioma/
   custo), `tts.ts` + `elevenlabs.ts` (REST `/audio/speech` e ElevenLabs, PCM progressivo juntado),
   `wav.ts`, `voiceCatalog.ts` (modelos e vozes do provedor, `supportsAudioTags`, `fishVoiceIdFrom`),
   `shared/voiceTurn` (`AdaptiveTurnGate`, `classifyUtteranceEnd`), `shared/voicePolicy`
-  (`PlaybackDuck`, `VoicedSpan`, frases de demora), `shared/speechGate` (`LevelGate`, `SpeechGate`,
+  (`PlaybackDuck`, `VoicedSpan`, frases de espera), `shared/speechGate` (`LevelGate`, `SpeechGate`,
   pós-filtro de alucinações), `shared/heardText` (`heardChars`/`heardPrefix`/`liveDimFrom`),
   `shared/audioTags`, e do renderer `voice/dictation.ts` (ponto de inserção, prévia, desfecho,
   erros de captura) e `audio/{silence,pcm}.ts`. **Shims**: `voice/clips.ts` → `src/voice/clips.ts`
-  (só a classe `FILLER` = o pool de preâmbulos, o mesmo hash da definição; bytes num cache
-  próprio — clipes de interjeição de versões antigas ficam velhos e somem na próxima geração),
+  (classes `FILLER`/`TOOL`/`THANKS` — preâmbulos, frases de ferramenta e "obrigado por aguardar" —
+  com hash por classe; bytes num cache próprio por voz — clipes de interjeição de versões antigas
+  ficam velhos e somem na próxima geração),
   `voice/evalLog.ts` e `voice/elevenlabsStream.ts` → só os tipos (`src/voice/evalLog.ts` — uma
   decisão de preâmbulo por linha, sem disco —, `src/voice/ttsFeed.ts`).
 - **Escrito para o celular** (`src/voice/`, sem React Native exceto `native*.ts`/`react.ts`):
@@ -522,7 +524,9 @@ provedor — modelo sem lista de vozes, como o Fish Audio pelo OpenRouter, mostr
 link `fish.audio/m/<id>` colado —, a nota das tags de voz do modelo, parâmetros do modelo pelos specs
 do desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, a prévia "O que a chamada
 muda no prompt", modelo, preâmbulos — "Espera do preâmbulo": só fala se a resposta passar de 2,5 s —,
-frases de demora — padrões 8 s/15 s, espaçadas —, "Falar por cima da resposta" — abaixar a voz depois
+**Frases de espera** (`src/settings/DelayPhrasesSettings.tsx` — "Manter viva após (silêncio)", 8 s;
+"Agradecer se a última frase foi há mais de", 4,5 s; os pools "manter viva — pensando", "— ferramenta
+rodando" e "obrigado por aguardar", cada um com "Restaurar padrão"), "Falar por cima da resposta" — abaixar a voz depois
 de 500 ms de fala seguida, volume, interromper depois de 1,2 s de fala/com palavras, volume volta
 depois de —, **Tags de voz** com a instrução
 editável, fim de turno) e "Neste aparelho" (falar por cima com fone, microfone de teste em dev,
@@ -540,6 +544,18 @@ opacidade 0,65 (cor com alfa — `opacity` não vale em `Text` aninhado), fora d
 resposta é falada aqui, o trecho ainda não falado fica em 0,5 e avança palavra por palavra (posição
 do player); depois de uma interrupção o resto não ouvido (`meta.voice.unheard`) aparece esmaecido
 depois do marcador "interrompido".
+
+**Frases de espera** (desktop 9d52737). A fala do usuário PAUSA a espera do turno (antes a zerava:
+depois de um ruído/tosse/eco/"uhum" nada mais tocava no turno) e o fim dela sem texto retoma a
+contagem — o sensor do celular já informa assim (fim de fala → `turn('')` quando a transcrição vem
+vazia ou é só "uhum"). "Manter viva" (`keepAliveAfterMs`, 8 s): silêncio desde o fim da última coisa
+ouvida; pool "ferramenta rodando" ou "pensando"; no máx. 2 faladas por turno; nunca com uma aprovação/
+`ask_user` esperando o usuário. "Obrigado por aguardar" no lugar da desculpa (`thanksAfterMs`, 4,5 s;
+`thanksPool`): só depois de uma "manter viva" falada, com a última frase de espera terminada há mais
+que isso e pronta na hora — clipe `THANKS_<n>` (carregado na 1ª "manter viva") ou síntese em paralelo;
+nunca atrasa a resposta. A migração vendorada descarta `apologyAfterMs` e leva um `apologyPool`
+personalizado para `thanksPool`. O dock só avisa de clipes faltando por preâmbulos/frases de
+ferramenta (o agradecimento sem clipe sai sintetizado).
 
 **Sem prompt oculto.** A chamada não acrescenta prompt do app: o prompt-base de voz saiu (desktop
 2f16271); o único texto a mais é o "Prompt do modo voz" da persona/chat (vazio por padrão) e, com as tags
@@ -607,7 +623,10 @@ de volta, insistir → barge-in em palavras com `meta.voice.unheard`, tags tirad
 recusa da chamada, Novo chat sem a voz da persona, categorias das frases de ferramenta), os casos
 1.9.0 de `tests/voice.test.ts` (settings de voz locais — o registro antigo é ignorado e nada sobe —,
 ditado e chamada com a voz/transcrição da persona e o fallback, frase de ferramenta "location" do
-clipe numa chamada com `nearby_places`; tosse curta sem abaixar, 700 ms → abaixa → volta), os padrões
+clipe numa chamada com `nearby_places`; tosse curta sem abaixar, 700 ms → abaixa → volta; frases de
+espera: um ruído durante a espera não mata a "manter viva", ferramenta demorada → "manter viva" do pool
+da ferramenta → "obrigado por aguardar" do clipe antes da resposta, resposta logo depois de uma
+"manter viva" → sem agradecimento; clipes `THANKS`), os padrões
 sem prompt-base/preâmbulo 2,5 s/onset em `tests/voicePersona.test.ts`, a descrição do `browse_url` do
 celular em `tests/agent.test.ts`, o merge em `tests/noAccount.test.ts`, `tests/capture.test.ts` e
 `tests/integration/voice.test.ts` (servidor real: settings do "desktop" → ditado e chamada no

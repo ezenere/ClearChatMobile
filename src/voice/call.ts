@@ -142,8 +142,9 @@ export interface CallView {
   error: string | null
   volume: number
   /**
-   * Clipes da voz da chamada (preâmbulos e frases de ferramenta): `missing` lista as classes sem
-   * clipe — preâmbulos sem clipe ficam mudos; frases de ferramenta sem clipe saem ao vivo.
+   * Clipes da voz da chamada (preâmbulos, frases de ferramenta e "obrigado por aguardar"):
+   * `missing` lista as classes sem clipe — preâmbulos sem clipe ficam mudos; frases de ferramenta e
+   * agradecimentos sem clipe saem ao vivo (o agradecimento é sintetizado enquanto o usuário espera).
    */
   clips: {
     state: 'unknown' | 'ok' | 'missing' | 'generating'
@@ -276,7 +277,8 @@ export class VoiceCallController {
           v.voiceCallDefaults.fillers.pool,
           cls,
           n,
-          v.voiceCallDefaults.toolPhrases.pool
+          v.voiceCallDefaults.toolPhrases.pool,
+          v.voiceCallDefaults.delayPhrases.thanksPool
         )
       },
       sessionInfo: (sessionId) => {
@@ -422,8 +424,8 @@ export class VoiceCallController {
     this.follow.set({ sessionId, heard: [], current: null })
     const queue = new UtteranceQueue({
       backend: this.d.playback,
-      // a fila esvaziou = o FIM da reprodução: o main conta daqui os intervalos das frases de
-      // demora (preâmbulo/"manter viva"/desculpa) e o desligamento armado pelo `end_call`
+      // a fila esvaziou = o FIM da reprodução: o main conta daqui o silêncio das frases de espera
+      // ("manter viva"/"obrigado por aguardar") e o desligamento armado pelo `end_call`
       onState: (st) => {
         this.set({ playing: st === 'playing' })
         if (st === 'idle') {
@@ -464,7 +466,7 @@ export class VoiceCallController {
           class: item.kind ?? 'sentence',
           reason
         })
-        // clipe (preâmbulo/frase de demora) não é essencial: pula com o registro; frase da
+        // clipe (preâmbulo/frase de espera/de ferramenta) não é essencial: pula com o registro; frase da
         // resposta que não toca encerra a chamada (nunca uma resposta muda)
         if (item.kind === 'filler' || item.kind === 'delay' || item.kind === 'tool') {
           const what =
@@ -472,7 +474,7 @@ export class VoiceCallController {
               ? 'o preâmbulo'
               : item.kind === 'tool'
                 ? 'a frase de ferramenta'
-                : 'a frase de demora'
+                : 'a frase de espera'
           this.set({ error: `Não foi possível tocar ${what}: ${reason}` })
           return
         }
@@ -638,7 +640,8 @@ export class VoiceCallController {
         this.d.clips,
         r.settings,
         v.voiceCallDefaults.fillers.pool,
-        v.voiceCallDefaults.toolPhrases.pool
+        v.voiceCallDefaults.toolPhrases.pool,
+        v.voiceCallDefaults.delayPhrases.thanksPool
       )
       const missing = (Object.keys(s.byClass) as ClipClass[]).filter(
         (c) => s.byClass[c].ready < s.byClass[c].total
@@ -659,8 +662,8 @@ export class VoiceCallController {
   }
 
   /**
-   * "Gerar clipes" (só com o clique — uma API paga): sintetiza os preâmbulos e as frases de
-   * ferramenta de uma voz — a da chamada/a daqui, ou a escolha de uma persona/chat (`tts` —
+   * "Gerar clipes" (só com o clique — uma API paga): sintetiza os preâmbulos, as frases de
+   * ferramenta e os agradecimentos de uma voz — a da chamada/a daqui, ou a escolha de uma persona/chat (`tts` —
    * "Gerar clipes desta voz"). Progresso em `onProgress` (e no `clips` da tela sem `tts`).
    */
   async generateClips(
@@ -678,6 +681,7 @@ export class VoiceCallController {
         settings: r.settings,
         fillerPool: v.voiceCallDefaults.fillers.pool,
         toolPool: v.voiceCallDefaults.toolPhrases.pool,
+        thanksPool: v.voiceCallDefaults.delayPhrases.thanksPool,
         synth: (text, signal) => synthesizeBlock({ text, settings: r.settings }, { signal }),
         onProgress: (done, total) => {
           onProgress?.(done, total)

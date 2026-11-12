@@ -18,6 +18,9 @@ import { SettingsService } from '../src/settings/service'
 import { FakeDevice, fakeFetch, osmRoutes } from './fakes/osm'
 import {
   DEFAULT_FILLER_POOL,
+  DEFAULT_KEEPALIVE_POOL,
+  DEFAULT_KEEPALIVE_TOOL_POOL,
+  DEFAULT_THANKS_POOL,
   DEFAULT_TOOL_PHRASE_POOL,
   DEFAULT_STT_SETTINGS,
   DEFAULT_TTS_SETTINGS,
@@ -563,11 +566,12 @@ describe('settings de áudio no celular (§4.3.2/§4.4)', () => {
 })
 
 describe('clipes e fila de reprodução', () => {
-  it('classes: preâmbulos e frases de ferramenta (as interjeições saíram); hash por classe', () => {
-    expect(CLIP_CLASSES).toEqual(['FILLER', 'TOOL'])
+  it('classes: preâmbulos, frases de ferramenta e "obrigado por aguardar" (as interjeições saíram); hash por classe', () => {
+    expect(CLIP_CLASSES).toEqual(['FILLER', 'TOOL', 'THANKS'])
     expect(clipPhraseSet(null)).toEqual({
       FILLER: DEFAULT_FILLER_POOL.map((f) => f.text),
-      TOOL: DEFAULT_TOOL_PHRASE_POOL.map((f) => f.text)
+      TOOL: DEFAULT_TOOL_PHRASE_POOL.map((f) => f.text),
+      THANKS: [...DEFAULT_THANKS_POOL]
     })
     const tts = {
       ...DEFAULT_TTS_SETTINGS,
@@ -579,6 +583,17 @@ describe('clipes e fila de reprodução', () => {
     expect(clipClassHash(tts, 'FILLER', null, tools)).toBe(clipClassHash(tts, 'FILLER', null, null))
     expect(clipClassHash(tts, 'TOOL', null, tools)).not.toBe(clipClassHash(tts, 'TOOL', null, null))
     expect(clipsHash(tts, null, tools)).not.toBe(clipsHash(tts))
+    // agradecimentos personalizados: só a classe THANKS muda
+    const thanks = ['Valeu pela paciência.']
+    expect(clipClassHash(tts, 'THANKS', null, null, thanks)).not.toBe(
+      clipClassHash(tts, 'THANKS', null, null, null)
+    )
+    expect(clipClassHash(tts, 'FILLER', null, null, thanks)).toBe(
+      clipClassHash(tts, 'FILLER', null, null, null)
+    )
+    expect(clipClassHash(tts, 'TOOL', null, null, thanks)).toBe(
+      clipClassHash(tts, 'TOOL', null, null, null)
+    )
   })
 
   it('gera os que faltam, carrega só da definição atual e apaga os velhos', async () => {
@@ -599,7 +614,9 @@ describe('clipes e fila de reprodução', () => {
     expect(st0.byClass.TOOL.total).toBe(DEFAULT_TOOL_PHRASE_POOL.length)
     const r = await generateClips({ store, settings: tts, synth })
     expect(r.generated).toBe(r.total)
-    expect(r.total).toBe(DEFAULT_FILLER_POOL.length + DEFAULT_TOOL_PHRASE_POOL.length)
+    expect(r.total).toBe(
+      DEFAULT_FILLER_POOL.length + DEFAULT_TOOL_PHRASE_POOL.length + DEFAULT_THANKS_POOL.length
+    )
     expect(store.keys().some((k) => k.includes('_ACK_'))).toBe(false)
     expect(
       new TextDecoder().decode((await loadCurrentClipAudio(store, tts, null, 'FILLER', 2))!.audio)
@@ -607,6 +624,9 @@ describe('clipes e fila de reprodução', () => {
     expect(
       new TextDecoder().decode((await loadCurrentClipAudio(store, tts, null, 'TOOL', 3))!.audio)
     ).toBe(DEFAULT_TOOL_PHRASE_POOL[2].text)
+    expect(
+      new TextDecoder().decode((await loadCurrentClipAudio(store, tts, null, 'THANKS', 1))!.audio)
+    ).toBe(DEFAULT_THANKS_POOL[0])
     expect(
       await loadCurrentClipAudio(store, tts, null, 'FILLER', DEFAULT_FILLER_POOL.length + 1)
     ).toBeNull()
@@ -623,6 +643,11 @@ describe('clipes e fila de reprodução', () => {
     const st1 = await clipsStatus(store, tts, null, tools)
     expect(st1.byClass.FILLER.ready).toBe(DEFAULT_FILLER_POOL.length)
     expect(st1.byClass.TOOL).toEqual({ total: 1, ready: 0 })
+    expect(st1.byClass.THANKS.ready).toBe(DEFAULT_THANKS_POOL.length)
+    // agradecimentos personalizados: só os THANKS ficam velhos
+    const st2 = await clipsStatus(store, tts, null, null, ['Valeu pela paciência.'])
+    expect(st2.byClass.THANKS).toEqual({ total: 1, ready: 0 })
+    expect(st2.byClass.FILLER.ready).toBe(DEFAULT_FILLER_POOL.length)
   })
 
   it('ducking: rampa até o ganho, continua tocando, vale para a próxima e volta; posição da frase', async () => {
@@ -1369,6 +1394,208 @@ describe('frases de ferramenta na chamada (tool do celular)', () => {
     const tool = h.stack.repo.path(session.id).find((m) => m.message.role === 'tool')!
     expect(String(tool.message.content)).toContain('Cantina do Teste')
     expect(chat.id).toBeTruthy()
+    voice.call.stop()
+    await until(() => !voice.call.getView().call.active, 4000)
+  }, 60_000)
+})
+
+describe('frases de espera na chamada ("manter viva" e "obrigado por aguardar")', () => {
+  let h: Harness
+  afterEach(async () => {
+    await h?.close()
+    setLocationSource(null)
+  })
+
+  /** Host com a voz falsa e as frases de espera curtas (1 s de silêncio → "manter viva"). */
+  const setup = async (opts: { thanksAfterMs: number; location?: LocationService }) => {
+    resetNoiseFloor()
+    h = await makeHarness(opts.location ? { location: opts.location } : {})
+    await h.desk.put('provider', 'prov-voz', null, {
+      sv: 1,
+      name: 'Voz falsa',
+      kind: 'openai',
+      baseUrl: `${h.llm.url}/v1`,
+      apiKey: 'sk-voz',
+      headers: {},
+      createdAt: 2
+    })
+    await h.engine.sync()
+    h.store.setDeviceSetting('sttSettings', {
+      mode: 'api',
+      api: { providerId: 'prov-voz', model: 'whisper-falso' },
+      livePartials: false
+    })
+    h.store.setDeviceSetting('ttsSettings', {
+      backend: 'api',
+      api: { providerId: 'prov-voz', model: 'tts-falso', voice: 'alloy' }
+    })
+    h.store.setDeviceSetting('voiceCallDefaults', {
+      fillers: { enabled: false },
+      delayPhrases: { enabled: true, keepAliveAfterMs: 1000, thanksAfterMs: opts.thanksAfterMs }
+    })
+    const mic = new ScriptedMic()
+    const voice = createVoiceStack({
+      stack: h.stack,
+      store: h.store,
+      mic: () => mic,
+      playback: fakePlayback(10),
+      clips: memoryClipStore(),
+      requestMic: async () => true,
+      bargeIn: () => false
+    })
+    const silence = speech([[64, false]])
+    /** Microfone em silêncio (fecha as falas) até `cond`. */
+    const pump = async (cond: () => boolean, what: string, ms = 20000) => {
+      const t0 = Date.now()
+      while (!cond()) {
+        if (Date.now() - t0 > ms) throw new Error(`timeout: ${what}`)
+        mic.feed(silence)
+        await sleep(4)
+      }
+    }
+    const tl = () => voice.call.getView().timeline
+    const decisions = (cls: string) => tl().filter((e) => e.kind === 'decision' && e.class === cls)
+    return { mic, voice, pump, tl, decisions }
+  }
+
+  const chatWith = (tools: string[] = []) =>
+    h.stack.repo.createChat({
+      config: {
+        ...DEFAULT_CHAT_CONFIG(''),
+        providerId: h.providerId,
+        model: 'fake/agent',
+        enabledTools: tools as unknown as ToolName[]
+      }
+    })
+
+  it('um ruído durante a espera só PAUSA: a "manter viva" ainda toca depois dele (antes zerava o turno)', async () => {
+    const q = speech([[1300, true]])
+    const noise = speech([[400, true]])
+    const { mic, voice, pump, tl, decisions } = await setup({ thanksAfterMs: 4500 })
+    h.llm.voice.fixtures = [
+      { voicedMs: voicedMsOf(wav16(q)).voicedMs, text: '/sleep 4500 a resposta demorada' },
+      { voicedMs: voicedMsOf(wav16(noise)).voicedMs, text: 'Uhum.' }
+    ]
+    const { session } = chatWith()
+    await voice.call.start(session.id)
+    mic.feed(speech([[200, false]]))
+    mic.feed(q)
+    await pump(() => h.stack.runner.isRunning(session.id), 'turno enviado')
+    // ruído/"uhum" logo no começo da espera (antes da 1ª "manter viva")
+    expect(decisions('KEEPALIVE')).toEqual([])
+    mic.feed(noise)
+    await pump(
+      () => tl().filter((e) => e.kind === 'speech-start').length >= 2,
+      'o ruído abriu uma fala'
+    )
+    await pump(() => decisions('KEEPALIVE').some((e) => e.played), '"manter viva" depois do ruído')
+    const all = tl()
+    const starts = all.filter((e) => e.kind === 'speech-start')
+    const ka = decisions('KEEPALIVE').find((e) => e.played)!
+    expect(all.indexOf(starts[1])).toBeGreaterThan(-1)
+    expect(all.indexOf(ka)).toBeGreaterThan(all.indexOf(starts[1]))
+    expect(ka.reason).toBe('waiting/thinking')
+    expect(DEFAULT_KEEPALIVE_POOL).toContain(ka.text)
+    // o "uhum" não virou turno: a resposta do turno original chega e é falada
+    await pump(
+      () => !h.stack.runner.isRunning(session.id) && tl().some((e) => e.kind === 'sentence-end'),
+      'resposta falada'
+    )
+    const users = h.stack.repo.path(session.id).filter((m) => m.message.role === 'user')
+    expect(users).toHaveLength(1)
+    expect(String(users[0].message.content)).toContain('/sleep 4500')
+    voice.call.stop()
+    await until(() => !voice.call.getView().call.active, 4000)
+  }, 60_000)
+
+  it('ferramenta demorada: frase de ferramenta → "manter viva" (pool da ferramenta) → "obrigado por aguardar" (clipe) antes da resposta', async () => {
+    const net = fakeFetch(osmRoutes())
+    let first = true
+    // a 1ª request (o geocoder) demora 5 s: a tool fica rodando
+    const slow = async (url: string, init: RequestInit) => {
+      if (first) {
+        first = false
+        await sleep(5000)
+      }
+      return net.fetch(url, init)
+    }
+    const svc = new LocationService({
+      device: new FakeDevice(),
+      settings: () => ({ ...DEFAULT_LOCATION_SETTINGS, approval: 'always' }),
+      overpass: new OverpassClient({ fetch: slow, userAgent: 'test', minIntervalMs: 0 }),
+      geocoder: new OsmGeocoder({ fetch: slow, userAgent: 'test', sleep: async () => {} }),
+      now: () => 30_000
+    })
+    const q = speech([[1300, true]])
+    const { mic, voice, pump, tl, decisions } = await setup({ thanksAfterMs: 1000, location: svc })
+    h.llm.voice.fixtures = [
+      { voicedMs: voicedMsOf(wav16(q)).voicedMs, text: '/near-at Avenida Paulista | café' }
+    ]
+    // "Gerar clipes" (TTS falso): preâmbulos, frases de ferramenta e agradecimentos desta voz
+    await voice.call.generateClips()
+    expect(voice.call.getView().clips).toMatchObject({ state: 'ok', missing: [] })
+    const { session } = chatWith(['get_location', 'nearby_places'])
+    await voice.call.start(session.id)
+    mic.feed(speech([[200, false]]))
+    mic.feed(q)
+    await pump(
+      () =>
+        decisions('THANKS').length > 0 &&
+        !h.stack.runner.isRunning(session.id) &&
+        tl().some((e) => e.kind === 'sentence-end'),
+      'resposta depois da espera',
+      30_000
+    )
+    expect(decisions('TOOL')[0]).toMatchObject({ played: true, reason: 'location' })
+    const kas = decisions('KEEPALIVE').filter((e) => e.played)
+    expect(kas.length).toBeGreaterThanOrEqual(1)
+    expect(kas.length).toBeLessThanOrEqual(2)
+    for (const k of kas) {
+      expect(k.reason).toBe('waiting/tool')
+      expect(DEFAULT_KEEPALIVE_TOOL_POOL).toContain(k.text)
+    }
+    const thanks = decisions('THANKS')
+    expect(thanks).toHaveLength(1)
+    expect(thanks[0]).toMatchObject({ played: true, reason: 'after-wait' }) // do clipe
+    expect(DEFAULT_THANKS_POOL).toContain(thanks[0].text)
+    // ordem: ferramenta → manter viva → obrigado → 1ª frase da resposta
+    const all = tl()
+    const idx = (e: (typeof all)[number] | undefined) => (e ? all.indexOf(e) : -1)
+    const firstSentence = all.find((e) => e.kind === 'sentence-start')
+    expect(idx(decisions('TOOL')[0])).toBeGreaterThan(-1)
+    expect(idx(decisions('TOOL')[0])).toBeLessThan(idx(kas[0]))
+    expect(idx(kas[kas.length - 1])).toBeLessThan(idx(thanks[0]))
+    expect(idx(thanks[0])).toBeLessThan(idx(firstSentence))
+    const tool = h.stack.repo.path(session.id).find((m) => m.message.role === 'tool')!
+    expect(String(tool.message.content)).toContain('Cantina do Teste')
+    voice.call.stop()
+    await until(() => !voice.call.getView().call.active, 4000)
+  }, 60_000)
+
+  it('resposta logo depois de uma "manter viva": sem agradecimento (a última frase de espera foi há pouco)', async () => {
+    const q = speech([[1300, true]])
+    const { mic, voice, pump, tl, decisions } = await setup({ thanksAfterMs: 4500 })
+    h.llm.voice.fixtures = [
+      { voicedMs: voicedMsOf(wav16(q)).voicedMs, text: '/sleep 2500 resposta rápida' }
+    ]
+    const { session } = chatWith()
+    await voice.call.start(session.id)
+    mic.feed(speech([[200, false]]))
+    mic.feed(q)
+    await pump(
+      () =>
+        decisions('THANKS').length > 0 &&
+        !h.stack.runner.isRunning(session.id) &&
+        tl().some((e) => e.kind === 'sentence-end'),
+      'resposta'
+    )
+    const kas = decisions('KEEPALIVE').filter((e) => e.played)
+    expect(kas.length).toBeGreaterThanOrEqual(1)
+    expect(kas[0].reason).toBe('waiting/thinking')
+    expect(decisions('THANKS')).toEqual([
+      expect.objectContaining({ played: false, reason: 'too-soon' })
+    ])
+    expect(tl().some((e) => e.kind === 'clip-emitted' && e.class === 'THANKS')).toBe(false)
     voice.call.stop()
     await until(() => !voice.call.getView().call.active, 4000)
   }, 60_000)

@@ -1,13 +1,14 @@
-// Clipes da chamada de voz no celular (preâmbulos e frases de ferramenta) — adaptação de
+// Clipes da chamada de voz no celular (preâmbulos, frases de ferramenta e "obrigado por aguardar") — adaptação de
 // ClearChatDesktop/src/main/voice/clips.ts (shim gerado em src/vendor/desktop/voice/clips.ts: o
 // `VoiceCallManager` vendorado importa daqui o tipo `ClipClass`). O desktop grava os clipes em
 // `<userData>/voice-clips/<voz>` com node:fs + hash-wasm; aqui a MESMA definição (o pool da classe,
 // voz, modelo, parâmetros) vira um hash POR CLASSE e os bytes ficam num `ClipStore` injetado (no
 // aparelho: `Documents/voice-clips/`, `src/voice/native.ts`) — o cache é por voz (a voz entra no
-// hash): a voz de uma persona tem os clipes dela. Classes: `FILLER` (o pool de preâmbulos) e `TOOL`
-// (as frases de ferramenta); mudar as frases de ferramenta não invalida os preâmbulos (hash por
-// classe — o de `FILLER` é o mesmo de antes). Clipe ausente ou de definição velha → null: o
-// preâmbulo não toca; a frase de ferramenta é sintetizada ao vivo (= desktop). Classes antigas
+// hash): a voz de uma persona tem os clipes dela. Classes: `FILLER` (o pool de preâmbulos), `TOOL`
+// (as frases de ferramenta) e `THANKS` (o "obrigado por aguardar" — `delayPhrases.thanksPool`);
+// mudar as frases de uma classe não invalida as outras (hash por classe — o de `FILLER` é o mesmo
+// de antes). Clipe ausente ou de definição velha → null: o preâmbulo não toca; a frase de
+// ferramenta e o agradecimento são sintetizados ao vivo (= desktop). Classes antigas
 // (interjeições "Uhum/Aham", saíram em 2026-11-12) contam como velhas e somem na próxima geração.
 // Clipes só são gerados com o clique do usuário (uma API paga). Sem React Native (testável no Node).
 //
@@ -16,8 +17,10 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import {
+  DELAY_PHRASE_POOL_MAX,
   FILLER_POOL_MAX,
   resolveFillerPool,
+  resolveThanksPool,
   resolveToolPhrasePool,
   TOOL_PHRASE_POOL_MAX,
   type FillerPhrase,
@@ -26,24 +29,33 @@ import {
 } from '@shared/voice'
 import { resolveGpuParams } from '@shared/gpuVoice'
 
-/** Classes de clipes (= desktop): `FILLER` (preâmbulo pós-turno) e `TOOL` (frase da 1ª tool). */
-export type ClipClass = 'FILLER' | 'TOOL'
-export const CLIP_CLASSES: readonly ClipClass[] = ['FILLER', 'TOOL']
+/**
+ * Classes de clipes (= desktop): `FILLER` (preâmbulo pós-turno), `TOOL` (frase da 1ª tool) e
+ * `THANKS` ("Obrigado por aguardar." antes da resposta que demorou — pronto na hora).
+ */
+export type ClipClass = 'FILLER' | 'TOOL' | 'THANKS'
+export const CLIP_CLASSES: readonly ClipClass[] = ['FILLER', 'TOOL', 'THANKS']
 
-/** Teto do `<n>` (= desktop: o maior pool — preâmbulos ou frases de ferramenta). */
-export const CLIP_MAX_VARIANTS = Math.max(FILLER_POOL_MAX, TOOL_PHRASE_POOL_MAX)
+/** Teto do `<n>` (= desktop: o maior pool — preâmbulos, frases de ferramenta ou agradecimentos). */
+export const CLIP_MAX_VARIANTS = Math.max(
+  FILLER_POOL_MAX,
+  TOOL_PHRASE_POOL_MAX,
+  DELAY_PHRASE_POOL_MAX
+)
 
 /**
  * Conjunto completo por classe, na ordem dos pools: `FILLER` = o pool de preâmbulos, `TOOL` = as
- * frases de ferramenta (null = os padrões).
+ * frases de ferramenta, `THANKS` = o "obrigado por aguardar" (null = os padrões).
  */
 export function clipPhraseSet(
   fillerPool?: readonly FillerPhrase[] | null,
-  toolPool?: readonly ToolPhrase[] | null
+  toolPool?: readonly ToolPhrase[] | null,
+  thanksPool?: readonly string[] | null
 ): Record<ClipClass, readonly string[]> {
   return {
     FILLER: resolveFillerPool(fillerPool ? [...fillerPool] : null).map((f) => f.text),
-    TOOL: resolveToolPhrasePool(toolPool ? [...toolPool] : null).map((f) => f.text)
+    TOOL: resolveToolPhrasePool(toolPool ? [...toolPool] : null).map((f) => f.text),
+    THANKS: resolveThanksPool(thanksPool)
   }
 }
 
@@ -119,18 +131,20 @@ export function clipClassHash(
   settings: TtsSettings,
   cls: ClipClass,
   fillerPool?: readonly FillerPhrase[] | null,
-  toolPool?: readonly ToolPhrase[] | null
+  toolPool?: readonly ToolPhrase[] | null,
+  thanksPool?: readonly string[] | null
 ): string {
-  return phrasesHash(settings, { [cls]: clipPhraseSet(fillerPool, toolPool)[cls] })
+  return phrasesHash(settings, { [cls]: clipPhraseSet(fillerPool, toolPool, thanksPool)[cls] })
 }
 
 /** Hash da definição inteira (todas as classes) — muda com a voz ou qualquer pool. */
 export function clipsHash(
   settings: TtsSettings,
   fillerPool?: readonly FillerPhrase[] | null,
-  toolPool?: readonly ToolPhrase[] | null
+  toolPool?: readonly ToolPhrase[] | null,
+  thanksPool?: readonly string[] | null
 ): string {
-  return phrasesHash(settings, clipPhraseSet(fillerPool, toolPool))
+  return phrasesHash(settings, clipPhraseSet(fillerPool, toolPool, thanksPool))
 }
 
 /** Onde os bytes dos clipes ficam (aparelho: arquivos; testes: memória). */
@@ -162,12 +176,13 @@ export function clipKey(voiceId: string, hash: string, cls: ClipClass, n: number
 export function clipEntries(
   settings: TtsSettings,
   fillerPool?: readonly FillerPhrase[] | null,
-  toolPool?: readonly ToolPhrase[] | null
+  toolPool?: readonly ToolPhrase[] | null,
+  thanksPool?: readonly string[] | null
 ): { key: string; cls: ClipClass; n: number; text: string }[] {
-  const set = clipPhraseSet(fillerPool, toolPool)
+  const set = clipPhraseSet(fillerPool, toolPool, thanksPool)
   const voice = clipVoiceId(settings)
   return CLIP_CLASSES.flatMap((cls) => {
-    const hash = clipClassHash(settings, cls, fillerPool, toolPool)
+    const hash = clipClassHash(settings, cls, fillerPool, toolPool, thanksPool)
     return set[cls].map((text, i) => ({
       key: clipKey(voice, hash, cls, i + 1),
       cls,
@@ -182,7 +197,8 @@ export async function clipsStatus(
   store: ClipStore,
   settings: TtsSettings,
   fillerPool?: readonly FillerPhrase[] | null,
-  toolPool?: readonly ToolPhrase[] | null
+  toolPool?: readonly ToolPhrase[] | null,
+  thanksPool?: readonly string[] | null
 ): Promise<{
   total: number
   ready: number
@@ -192,7 +208,7 @@ export async function clipsStatus(
     CLIP_CLASSES.map((c) => [c, { total: 0, ready: 0 }])
   ) as Record<ClipClass, { total: number; ready: number }>
   let ready = 0
-  const entries = clipEntries(settings, fillerPool, toolPool)
+  const entries = clipEntries(settings, fillerPool, toolPool, thanksPool)
   for (const e of entries) {
     byClass[e.cls].total++
     if (await store.read(e.key)) {
@@ -210,18 +226,24 @@ export async function loadCurrentClipAudio(
   fillerPool: readonly FillerPhrase[] | null | undefined,
   cls: ClipClass,
   n: number,
-  toolPool?: readonly ToolPhrase[] | null
+  toolPool?: readonly ToolPhrase[] | null,
+  thanksPool?: readonly string[] | null
 ): Promise<{ audio: Uint8Array; mime: string } | null> {
   if (!CLIP_CLASSES.includes(cls)) return null
-  const count = clipPhraseSet(fillerPool, toolPool)[cls].length
+  const count = clipPhraseSet(fillerPool, toolPool, thanksPool)[cls].length
   if (!Number.isInteger(n) || n < 1 || n > count) return null
   return store.read(
-    clipKey(clipVoiceId(settings), clipClassHash(settings, cls, fillerPool, toolPool), cls, n)
+    clipKey(
+      clipVoiceId(settings),
+      clipClassHash(settings, cls, fillerPool, toolPool, thanksPool),
+      cls,
+      n
+    )
   )
 }
 
 /**
- * Gera (sintetiza) os clipes da voz que faltam (preâmbulos e frases de ferramenta) e apaga os de
+ * Gera (sintetiza) os clipes da voz que faltam (preâmbulos, frases de ferramenta e agradecimentos) e apaga os de
  * definições velhas DESTA voz — os de outras vozes (personas) ficam. `synth` = a mesma síntese da
  * chamada (bytes completos). Progresso por clipe; cancelável. Só com o clique do usuário.
  */
@@ -230,11 +252,12 @@ export async function generateClips(opts: {
   settings: TtsSettings
   fillerPool?: readonly FillerPhrase[] | null
   toolPool?: readonly ToolPhrase[] | null
+  thanksPool?: readonly string[] | null
   synth: (text: string, signal: AbortSignal) => Promise<{ audio: Uint8Array; mime: string }>
   signal?: AbortSignal
   onProgress?: (done: number, total: number) => void
 }): Promise<{ total: number; generated: number }> {
-  const entries = clipEntries(opts.settings, opts.fillerPool, opts.toolPool)
+  const entries = clipEntries(opts.settings, opts.fillerPool, opts.toolPool, opts.thanksPool)
   const signal = opts.signal ?? new AbortController().signal
   let done = 0
   let generated = 0

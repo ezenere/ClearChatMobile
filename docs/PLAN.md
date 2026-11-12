@@ -474,6 +474,15 @@ modo sem conta — a sessão de teste do emulador tinha sido encerrada). `vendor
 `shared/voice.ts`/`voicePolicy.ts` só porque a árvore do desktop tem edições não commitadas depois do
 2f16271 (a cópia vendorada = 2f16271).
 
+Depois (vendor do desktop 9d52737): **frases de espera** — o ruído durante a espera só pausa (o sensor
+do celular já reporta fala vazia/"uhum" como `turn('')`, que retoma a contagem); "manter viva" após 8 s
+de silêncio desde o fim da última fala (pools "pensando"/"ferramenta rodando", máx. 2 por turno, nunca
+esperando o usuário); "obrigado por aguardar" (4,5 s, clipe `THANKS_<n>` ou síntese em paralelo) no
+lugar da desculpa. Celular: classe `THANKS` no shim `clips.ts` (+ `thanksPool` nos clipes da chamada e
+da persona), seção "Frases de espera" (`DelayPhrasesSettings.tsx` — os dois tempos e os três pools com
+"Restaurar padrão"), aviso de clipes do dock sem o agradecimento. Testes: ruído na espera, ferramenta
+demorada → "manter viva" → agradecimento, resposta rápida → sem agradecimento, clipes `THANKS`.
+
 ## Notificações push (1.7.0) — estado (2026-11-06)
 
 Feito: `src/push/` (decisão §22.7 pura com `K_push`/AAD e os vetores de `push.json`; tarefa do

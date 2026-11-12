@@ -41,6 +41,13 @@ export function CallDock() {
   const st = v.call
   const elapsed = st.startedAt && now > st.startedAt ? now - st.startedAt : 0
   const phase = st.preparing ?? (st.muted ? 'Microfone mudo' : (PHASE[st.phase] ?? ''))
+  // clipes faltando: aviso só pelos preâmbulos (mudos sem clipe) e frases de ferramenta (saem ao
+  // vivo, mais lentas) — só o "obrigado por aguardar" sem clipe não avisa (sintetizado em paralelo
+  // enquanto o usuário espera) (= `ClipsHint` do desktop)
+  const clipsHint =
+    v.clips.state === 'generating' ||
+    (v.clips.state === 'missing' &&
+      (!v.clips.missing || v.clips.missing.some((c) => c !== 'THANKS')))
   return (
     <View style={s.dock} testID="voice-call-dock">
       <View style={s.head}>
@@ -82,7 +89,7 @@ export function CallDock() {
           <Text style={s.err}>{v.error}</Text>
         </Pressable>
       ) : null}
-      {v.clips.state === 'missing' || v.clips.state === 'generating' ? (
+      {clipsHint ? (
         <Pressable
           style={s.clips}
           disabled={v.clips.state === 'generating'}
