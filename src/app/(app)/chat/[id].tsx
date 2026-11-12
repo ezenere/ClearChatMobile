@@ -51,7 +51,7 @@ import { live as liveChats, useLiveVersion } from '@/live/react'
 import { normalizeVoiceCallConfig } from '@shared/voice'
 import { callReadiness } from '@/voice/call'
 import { readVoiceSettings } from '@/voice/endpoints'
-import { useCallView, voice } from '@/voice/react'
+import { useCallView, useChatVoice, voice } from '@/voice/react'
 import { BottomInset } from '@/ui/BottomBar'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
@@ -107,6 +107,8 @@ export default function ChatScreen() {
     driver,
     connected
   } = useChatRuntime(id, state, loaded?.chat.config)
+  // voz do chat NESTE aparelho (persona/chat → padrão daqui): telefone/microfone esmaecidos
+  const chatVoice = useChatVoice(loaded?.chat.config as Record<string, unknown> | undefined)
   const [sessionId, setSessionId] = useState<string | null>(sessionParam ?? null)
   const [localSel, setLocalSel] = useState<LocalSel | null>(null)
   const [showOld, setShowOld] = useState(true)
@@ -328,7 +330,7 @@ export default function ChatScreen() {
         : null
     const ready = callReadiness(
       chat,
-      readVoiceSettings((k) => store.setting(k)),
+      readVoiceSettings((k) => store.deviceSetting(k)),
       (pid) => hostStack.providers().find((p) => p.id === pid) ?? null,
       personaVoice
     )
@@ -336,6 +338,8 @@ export default function ChatScreen() {
       setCallBlock(ready.reason)
       return
     }
+    // a voz da persona não vale aqui: aviso discreto (a chamada usa a padrão deste aparelho)
+    if (chatVoice.call.note) toast(chatVoice.call.note, 'info')
     setCalling(true)
     try {
       if (sessionId && sessionId !== mainId) setSessionId(mainId)
@@ -490,11 +494,19 @@ export default function ChatScreen() {
       ) : null}
       {local && !localTools && loaded ? (
         <Pressable
-          onPress={() => (callHere ? voice.call.stop() : void startCall())}
+          onPress={() =>
+            callHere
+              ? voice.call.stop()
+              : chatVoice.call.text
+                ? // esmaecido: a fala/transcrição não funciona aqui — o motivo
+                  toast(chatVoice.call.text, 'danger')
+                : void startCall()
+          }
           disabled={calling}
           hitSlop={10}
           style={st.iconBtn}
           accessibilityLabel={callHere ? 'Desligar a chamada de voz' : 'Chamada de voz'}
+          accessibilityHint={chatVoice.call.text ?? chatVoice.call.note ?? undefined}
           testID="chat-call"
         >
           {calling ? (
@@ -503,7 +515,8 @@ export default function ChatScreen() {
             <Ionicons
               name={callHere ? 'call' : 'call-outline'}
               size={20}
-              color={callHere ? colors.success : colors.muted}
+              color={callHere ? colors.success : chatVoice.call.text ? colors.faint : colors.muted}
+              style={!callHere && chatVoice.call.text ? { opacity: 0.6 } : undefined}
             />
           )}
         </Pressable>
@@ -761,6 +774,7 @@ export default function ChatScreen() {
                       : null
                 }
                 onSend={send}
+                voiceConfig={loaded?.chat.config as Record<string, unknown> | undefined}
                 onStop={() => run(() => driver.stop(id, sid))}
                 onQueueForce={(qid) => run(() => driver.queueForce(id, sid, qid))}
                 onQueueRemove={(qid) => run(() => driver.queueRemove(id, sid, qid))}

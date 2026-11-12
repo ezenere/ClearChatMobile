@@ -1,7 +1,9 @@
 // Aba "Voz" da persona (e a mesma edição para um chat): a chamada de voz (`VoiceCallConfig`,
 // §4.3.3/§4.3.6) com os campos que HERDAM (null) — chat → persona → Configurações → Voz. Mesmos
-// campos do desktop (VoiceCallConfigSection): disponível, modelo da chamada, tools próprias, como o
-// prompt do modo voz compõe e o prompt, preâmbulos, tags de voz e "o agente pode encerrar". As
+// campos do desktop (VoiceChoiceSections + VoiceCallConfigSection): a voz (Fala) e a transcrição da
+// persona/chat (protocolo 1.9.0), disponível, modelo da chamada, tools próprias, como o prompt do
+// modo voz compõe e o prompt, preâmbulos, frases de ferramenta, tags de voz e "o agente pode
+// encerrar". As
 // escolhas com herança seguem o `InheritChoice` (★ na opção igual ao herdado — nunca uma opção
 // "Padrão" duplicando o padrão). Tools da chamada que só rodam no computador aparecem marcadas e
 // ficam como estão (a chamada no celular só existe em chats sem ferramentas locais, §8.9).
@@ -10,6 +12,8 @@ import {
   VOICE_CALL_PROMPT_MODES,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
+  SUGGESTED_VOICE_PROMPT,
+  voicePromptLayout,
   type VoiceCallConfig,
   type VoiceCallDefaults,
   type VoiceCallPromptMode
@@ -25,8 +29,12 @@ import { ModelField } from '@/settings/ModelPicker'
 import { FieldLabel, Multiline, Note, NumberField } from '@/settings/ui'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { colors, spacing } from '@/ui/theme'
+import type { VoiceSettings } from '@/voice/endpoints'
+import { TextButton } from '@/ui/Button'
 import { AudioTagsField } from './AudioTagsField'
+import { VoicePromptPreview } from './VoicePromptPreview'
 import { InheritChoice } from './InheritChoice'
+import { VoiceChoiceSections } from './VoiceChoiceSections'
 
 const PROMPT_MODE_LABEL: Record<VoiceCallPromptMode, string> = {
   append: 'Complementar',
@@ -34,10 +42,9 @@ const PROMPT_MODE_LABEL: Record<VoiceCallPromptMode, string> = {
   none: 'Nenhum'
 }
 const PROMPT_MODE_HELP: Record<VoiceCallPromptMode, string> = {
-  append: 'System prompt normal + prompt-base de voz + o prompt do modo voz no fim (padrão).',
-  replace:
-    'Na chamada, o prompt do modo voz (depois do prompt-base) SUBSTITUI o system prompt normal.',
-  none: 'Sem prompt de voz: só o system prompt normal (nem o prompt-base global de voz).'
+  append: 'System prompt normal + o prompt do modo voz no fim (padrão).',
+  replace: 'Na chamada, o prompt do modo voz SUBSTITUI o system prompt normal.',
+  none: 'Sem prompt de voz: só o system prompt normal.'
 }
 
 /** Camada herdada: no chat, a persona de origem (ao vivo); na persona, só o padrão global. */
@@ -55,6 +62,7 @@ export function VoiceConfigEditor({
   persona = null,
   chatTools = null,
   tagsSupport = { supported: false, model: null },
+  device = null,
   testID = 'voice-config'
 }: {
   value: VoiceCallConfig | null | undefined
@@ -70,6 +78,8 @@ export function VoiceConfigEditor({
   chatTools?: ToolName[] | null
   /** A voz da chamada interpreta tags de voz? */
   tagsSupport?: { supported: boolean; model: string | null }
+  /** Settings de voz deste aparelho: com elas, as seções "Fala"/"Transcrição" (voz da persona/chat). */
+  device?: VoiceSettings | null
   testID?: string
 }) {
   // normalizado: campos legados de registros antigos (`interjections`) nunca são regravados
@@ -100,6 +110,7 @@ export function VoiceConfigEditor({
   const inheritedMode: VoiceCallPromptMode = pv?.promptMode ?? 'append'
   const inheritedFillers = pv?.fillers ? pv.fillers.enabled : defaults.fillers.enabled
   const inheritedTags = pv?.audioTags ?? defaults.audioTags
+  const inheritedToolPhrases = pv?.toolPhrases ?? defaults.toolPhrases.enabled
   const inheritedTagsPrompt =
     pv?.audioTagsPrompt ?? defaults.audioTagsPrompt ?? DEFAULT_AUDIO_TAGS_PROMPT
   const mode = resolved.promptMode
@@ -111,6 +122,22 @@ export function VoiceConfigEditor({
         opção com ★ é a herdada ({scope === 'chat' ? 'da persona ou ' : ''}de Configurações → Voz):
         escolhida, segue o padrão; outra fixa o valor {where}.
       </Note>
+      {device ? (
+        <VoiceChoiceSections
+          value={v}
+          onChange={({ tts, stt }) => {
+            const next: VoiceCallConfig = { ...v, tts, stt }
+            if (!next.tts) delete next.tts
+            if (!next.stt) delete next.stt
+            onChange(next)
+          }}
+          scope={scope}
+          persona={scope === 'chat' ? persona : null}
+          device={device}
+          providers={providers}
+          testID={`${testID}-choice`}
+        />
+      ) : null}
       <FieldLabel>{`Disponível ${where}`}</FieldLabel>
       <InheritChoice
         label={`Chamada de voz ${where}`}
@@ -167,18 +194,55 @@ export function VoiceConfigEditor({
       />
       <Note>{PROMPT_MODE_HELP[mode]}</Note>
       {mode !== 'none' ? (
-        <Multiline
-          value={v.voicePrompt ?? ''}
-          onChangeText={(t) => set({ voicePrompt: t.trim() ? t : null })}
-          placeholder={
-            scope === 'chat' && pv?.voicePrompt
-              ? `Da persona: ${pv.voicePrompt}`
-              : 'Prompt do modo voz — ex.: Responda em frases curtas e naturais, sem markdown nem listas.'
-          }
-          minHeight={90}
-          testID={`${testID}-prompt`}
-        />
+        <>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={{ flex: 1, color: colors.muted, fontSize: 13 }}>Prompt do modo voz</Text>
+            {!v.voicePrompt?.trim() ? (
+              // a sugestão vai PARA O CAMPO (visível e editável) — nunca é enviada sozinha
+              <TextButton
+                title="Usar sugestão"
+                icon="sparkles-outline"
+                onPress={() => set({ voicePrompt: SUGGESTED_VOICE_PROMPT })}
+                testID={`${testID}-prompt-suggest`}
+              />
+            ) : null}
+          </View>
+          <Multiline
+            value={v.voicePrompt ?? ''}
+            onChangeText={(t) => set({ voicePrompt: t.trim() ? t : null })}
+            placeholder={
+              scope === 'chat' && pv?.voicePrompt
+                ? `Da persona: ${pv.voicePrompt}`
+                : 'Vazio (padrão) = a chamada manda exatamente o system prompt normal.'
+            }
+            minHeight={90}
+            testID={`${testID}-prompt`}
+          />
+        </>
       ) : null}
+      {/* transparência: o MESMO cálculo da request — o que a chamada acrescenta e de onde vem */}
+      <VoicePromptPreview
+        layout={voicePromptLayout({ ...resolved, audioTagsActive: true })}
+        voiceFrom={
+          v.voicePrompt
+            ? scope === 'chat'
+              ? 'deste chat'
+              : 'desta persona'
+            : pv?.voicePrompt
+              ? `da persona “${persona?.name ?? ''}”`
+              : null
+        }
+        tagsFrom={
+          v.audioTags != null
+            ? scope === 'chat'
+              ? 'deste chat'
+              : 'desta persona'
+            : pv?.audioTags != null
+              ? `da persona “${persona?.name ?? ''}”`
+              : 'padrão deste aparelho (Configurações → Voz)'
+        }
+        testID={`${testID}-prompt-preview`}
+      />
 
       <FieldLabel>O agente pode encerrar a chamada</FieldLabel>
       <InheritChoice
@@ -213,6 +277,24 @@ export function VoiceConfigEditor({
         }
         testID={`${testID}-fillers`}
       />
+
+      <FieldLabel>Frases de ferramenta (“Vou pesquisar isso.”)</FieldLabel>
+      <InheritChoice
+        label="Frases de ferramenta"
+        options={[
+          { value: true, label: 'Ligadas' },
+          { value: false, label: 'Desligadas' }
+        ]}
+        value={v.toolPhrases ?? null}
+        inherited={inheritedToolPhrases}
+        inheritedFrom={from(pv?.toolPhrases != null)}
+        onChange={(toolPhrases) => set({ toolPhrases })}
+        testID={`${testID}-tool-phrases`}
+      />
+      <Note>
+        Uma frase curta sobre a 1ª ferramenta do turno (no máximo uma por turno), com a voz da
+        chamada. As frases ficam em Configurações → Voz.
+      </Note>
 
       <AudioTagsField
         value={v.audioTags ?? null}

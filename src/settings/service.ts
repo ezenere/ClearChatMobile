@@ -28,6 +28,7 @@ import type { LocalStore } from '@/data/store'
 import type { Plain } from '@/data/types'
 import { providerFromPlain } from '@/host/stack'
 import { presetFromPlain } from '@/host/newChat'
+import { isDeviceVoiceSetting } from '@/data/store'
 import {
   copyName,
   engineStates,
@@ -184,11 +185,20 @@ export class SettingsService {
   // ---------------- settings (LWW inteiro) ----------------
 
   setting<T = unknown>(id: string): T | undefined {
+    if (isDeviceVoiceSetting(id)) return this.d.store.deviceSetting<T>(id)
     return this.d.store.setting<T>(id)
   }
 
-  /** Grava um setting sincronizado (`null` = removido; o registro nunca é apagado, §4.3.2). */
+  /**
+   * Grava um setting sincronizado (`null` = removido; o registro nunca é apagado, §4.3.2). As
+   * settings de voz são locais do aparelho desde 1.9.0: gravadas aqui, nunca enviadas.
+   */
   setSetting(id: string, value: unknown): void {
+    if (isDeviceVoiceSetting(id)) {
+      this.d.store.setDeviceSetting(id, value)
+      this.d.notify?.(false)
+      return
+    }
     const cur = this.d.store.getPlain('setting', id)
     if (cur && JSON.stringify(cur.value ?? null) === JSON.stringify(value ?? null)) return
     this.put({ type: 'setting', id }, { ...(cur ?? {}), ...settingPlain(value) })

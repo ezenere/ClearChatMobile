@@ -77,7 +77,7 @@ export interface LoadedChat {
   broken: number
 }
 
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -156,8 +156,31 @@ INSERT OR REPLACE INTO meta (key, value) VALUES ('history_backfill', '1');
 CREATE TABLE IF NOT EXISTS chat_storage (
   chat_id TEXT PRIMARY KEY, storage TEXT NOT NULL, tomb_rev INTEGER NOT NULL DEFAULT 0
 );
+`,
+  // 1.9.0 (§4.3.2/§4.4): as settings de voz viram LOCAIS do aparelho (não sincronizam). O valor
+  // que cada uma tinha no cache (o último sincronizado) é copiado uma vez (`seedDeviceSettings`);
+  // escritas dessas ids ainda na outbox nunca sobem
+  6: `
+CREATE TABLE IF NOT EXISTS device_settings (id TEXT PRIMARY KEY, value TEXT);
+DELETE FROM lww_outbox WHERE type = 'setting' AND id IN ('audioInput', 'sttSettings', 'ttsSettings', 'voiceCallDefaults');
+INSERT OR REPLACE INTO meta (key, value) VALUES ('device_settings_seed', '1');
 `
 }
+
+/**
+ * Settings de voz LOCAIS do aparelho desde o protocolo 1.9.0 (§4.3.2/§4.4): nunca enviadas; os
+ * registros recebidos (de apps ≤ 1.8.x) são ignorados — o valor daqui fica.
+ */
+export const DEVICE_VOICE_SETTING_IDS = [
+  'audioInput',
+  'sttSettings',
+  'ttsSettings',
+  'voiceCallDefaults'
+] as const
+
+/** Id de `setting` local do aparelho desde 1.9.0 (nunca enviado; o recebido é ignorado). */
+export const isDeviceVoiceSetting = (id: string): boolean =>
+  (DEVICE_VOICE_SETTING_IDS as readonly string[]).includes(id)
 
 /** Modo de um chat deste aparelho (§23.2). `live_pending` conta como `live` para tudo. */
 export type ChatStorage = 'online' | 'live' | 'live_pending'
@@ -193,6 +216,7 @@ export class LocalStore {
   /** Registros de memória aplicados no cache (o índice da memória acompanha; null = apagado). */
   private memoryListeners = new Set<(type: string, id: string, plain: Plain | null) => void>()
   private wipeListeners = new Set<() => void>()
+  private deviceListeners = new Set<(id: string) => void>()
   /** Gravações da própria memória (o índice já tem a mudança): não avisa os ouvintes. */
   private quietMemory = 0
 
@@ -200,6 +224,56 @@ export class LocalStore {
     this.sql = sql
     this.migrate()
     if (this.getMeta('history_backfill')) this.backfillHistory()
+    if (this.getMeta('device_settings_seed')) this.seedDeviceSettings()
+  }
+
+  // ---------------- settings locais do aparelho (voz — 1.9.0) ----------------
+
+  /** Cópia única do valor que as settings de voz tinham no cache (o último sincronizado). */
+  private seedDeviceSettings(): void {
+    this.sql.tx(() => {
+      for (const id of DEVICE_VOICE_SETTING_IDS) {
+        const v = this.setting(id)
+        if (v !== undefined)
+          this.sql.run('INSERT OR IGNORE INTO device_settings (id, value) VALUES (?, ?)', [
+            id,
+            JSON.stringify(v)
+          ])
+      }
+      this.setMeta('device_settings_seed', null)
+    })
+  }
+
+  /** Valor de uma setting local do aparelho (`DEVICE_VOICE_SETTING_IDS`); ausente = undefined. */
+  deviceSetting<T = unknown>(id: string): T | undefined {
+    const r = this.sql.get<{ value: string | null }>(
+      'SELECT value FROM device_settings WHERE id = ?',
+      [id]
+    )
+    if (!r?.value) return undefined
+    try {
+      const v = JSON.parse(r.value) as unknown
+      return v == null ? undefined : (v as T)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Grava (ou apaga, com null) uma setting local do aparelho — nunca vai ao servidor. */
+  setDeviceSetting(id: string, value: unknown): void {
+    if (value == null) this.sql.run('DELETE FROM device_settings WHERE id = ?', [id])
+    else
+      this.sql.run(
+        'INSERT INTO device_settings (id, value) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value',
+        [id, JSON.stringify(value)]
+      )
+    for (const fn of [...this.deviceListeners]) fn(id)
+  }
+
+  /** Avisa a cada gravação de uma setting local do aparelho. */
+  onDeviceSetting(fn: (id: string) => void): () => void {
+    this.deviceListeners.add(fn)
+    return () => this.deviceListeners.delete(fn)
   }
 
   onMemoryRecord(fn: (type: string, id: string, plain: Plain | null) => void): () => void {

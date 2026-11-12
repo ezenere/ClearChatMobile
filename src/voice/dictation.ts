@@ -3,13 +3,19 @@
 // puras vendoradas do desktop: `insertDictationText`/`dictationPreview`/`planDictationCommit`). A
 // mensagem enviada leva `meta.voice = { source: 'dictation' }` (= desktop). Parada por silêncio
 // (`audioInput.silenceStopEnabled`/`silenceStopMs`, `SilenceDetector` vendorado) e push-to-talk
-// (segurar o botão) seguem as settings sincronizadas. Motores locais: "só no computador" — explica
-// e não manda o áudio para a API sem o usuário escolher. Sem React Native.
+// (segurar o botão) seguem as settings deste aparelho. A TRANSCRIÇÃO e o idioma são os do chat
+// (protocolo 1.9.0): a escolha da persona/chat (`voice.stt`) quando vale aqui, senão a deste
+// aparelho (`resolveChatVoice` — camadas passadas pelo composer, de chats daqui, do controle remoto
+// e ao vivo). Motores locais: "só no computador" — explica e não manda o áudio para a API sem o
+// usuário escolher. Sem React Native.
 import type { VoicePartialEvent } from '@shared/ipc'
 import type { Provider } from '@shared/types'
+import type { VoiceLayers } from '@shared/voice'
+import { dictationUnavailableText } from '@vendor/renderer/voice/voiceChoice'
 import { SilenceDetector, DEFAULT_SILENCE_THRESHOLD } from '@vendor/renderer/audio/silence'
 import { captureErrorText } from '@vendor/renderer/voice/dictation'
-import { readVoiceSettings, resolveStt } from './endpoints'
+import { readVoiceSettings, resolveStt, type VoiceSettings } from './endpoints'
+import { mobileVoiceText, resolveChatVoice, settingsWith } from './resolve'
 import { pcmBytes, type MicSource } from './mic'
 import { TranscribeSession } from './session'
 
@@ -82,17 +88,41 @@ export class DictationController {
     return readVoiceSettings(this.d.setting).audioInput.pttEnabled
   }
 
-  /** Por que o ditado não roda aqui (pt-BR) — null = pode. */
-  blocked(): string | null {
-    const v = readVoiceSettings(this.d.setting)
+  /**
+   * A transcrição do ditado para um chat: a da persona/chat resolvida aqui (`layers`), com o
+   * idioma dela, ou a deste aparelho. `unavailable` = o texto do microfone esmaecido.
+   */
+  private sttFor(layers?: VoiceLayers | null): {
+    v: VoiceSettings
+    unavailable: string | null
+  } {
+    const device = readVoiceSettings(this.d.setting, { activationDb: this.d.activationDb?.() })
+    const r = resolveChatVoice(layers ?? null, device, this.d.provider).stt
+    const v = settingsWith(device, {
+      tts: null,
+      stt: r.source === 'device' ? null : r.choice,
+      language: r.language
+    })
+    const text = dictationUnavailableText(r)
+    return { v, unavailable: text ? mobileVoiceText(text) : null }
+  }
+
+  /** Por que o ditado não roda aqui (pt-BR) — null = pode. `layers` = a voz do chat. */
+  blocked(layers?: VoiceLayers | null): string | null {
+    const { v, unavailable } = this.sttFor(layers)
+    if (unavailable) return unavailable
     const r = resolveStt(v.stt, this.d.provider)
     return 'block' in r ? r.block.reason : null
   }
 
-  /** Começa a gravar. Erro legível no estado (`error`) e devolvido. */
-  async start(): Promise<string | null> {
+  /** Começa a gravar (com a transcrição do chat — `layers`). Erro legível no estado e devolvido. */
+  async start(layers?: VoiceLayers | null): Promise<string | null> {
     if (this.view.phase !== 'idle') return null
-    const v = readVoiceSettings(this.d.setting)
+    const { v, unavailable } = this.sttFor(layers)
+    if (unavailable) {
+      this.set({ ...IDLE, error: unavailable })
+      return unavailable
+    }
     const r = resolveStt(v.stt, this.d.provider)
     if ('block' in r) {
       this.set({ ...IDLE, error: r.block.reason })

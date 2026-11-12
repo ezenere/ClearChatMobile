@@ -15,8 +15,10 @@ import { applyAnthropicEvent } from '../src/vendor/desktop/agent/adapters/anthro
 import {
   availableTools,
   buildRequest,
+  MOBILE_BROWSE_URL_DESCRIPTION,
   setModelInfoSource,
-  systemContent
+  systemContent,
+  toolDefinitions
 } from '../src/agent/request'
 import { DEFAULT_CHAT_CONFIG } from '../src/vendor/shared/defaults'
 import type { Chat, ChatConfig, Provider, StoredMessage } from '../src/vendor/shared/types'
@@ -523,5 +525,35 @@ describe('runner (provedor falso)', () => {
     await h.stack.runner.send(sid, 'oi')
     await idle(sid)
     expect(path(sid).pop()!.message.content).toBe('Nenhum provider configurado para este chat.')
+  })
+})
+
+describe('browse_url no celular: descrição própria (sem navegador nem JavaScript)', () => {
+  it('o schema enviado ao modelo descreve o fetch do celular (não o navegador oculto do desktop)', () => {
+    const [def] = toolDefinitions(['browse_url'])
+    expect(def.function.name).toBe('browse_url')
+    expect(def.function.description).toBe(MOBILE_BROWSE_URL_DESCRIPTION)
+    expect(def.function.description).toContain('o JavaScript da página NÃO é executado')
+    expect(def.function.description).not.toContain('navegador oculto')
+    expect(Object.keys(def.function.parameters.properties)).toEqual([
+      'url',
+      'mode',
+      'links',
+      'offset'
+    ])
+    expect(def.function.parameters.required).toEqual(['url'])
+    // a request de um chat com browse_url leva a descrição do celular
+    const chat = {
+      id: 'c',
+      title: '',
+      config: { ...DEFAULT_CHAT_CONFIG(''), enabledTools: ['browse_url'], nativeTools: true },
+      mainSessionId: 's',
+      createdAt: 0,
+      updatedAt: 0
+    } as Chat
+    const tools = toolDefinitions(availableTools(chat, { depth: 0 }))
+    expect(tools.find((t) => t.function.name === 'browse_url')?.function.description).toBe(
+      MOBILE_BROWSE_URL_DESCRIPTION
+    )
   })
 })

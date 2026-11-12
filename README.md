@@ -270,8 +270,10 @@ Agente (`src/agent/`, sem React Native):
   `export * from` as adaptações do celular (`src/agent/request.ts`, `src/agent/tools/util.ts`) — o
   `vendor:check` confere o shim também.
 - **Escritos para o celular**: `request.ts` (mesma montagem do desktop; só as tools portáveis —
-  `web_search`, `browse_url`, `list_models`, `ask_user` — vão ao modelo; `<environment>` sem raiz/shell;
-  parâmetros que o modelo não aceita saem com nota), `providers.ts` (`/models` com cache, como o
+  `web_search`, `browse_url`, `list_models`, `ask_user` — vão ao modelo; `<environment>` sem raiz/shell,
+  com o texto exato mostrado na persona (aba Chat → "Ambiente no system prompt"); o `browse_url` vai com
+  descrição própria do celular, `MOBILE_BROWSE_URL_DESCRIPTION` — HTTP sem navegador, o JavaScript da
+  página não roda —, sem tocar no vendorado; parâmetros que o modelo não aceita saem com nota), `providers.ts` (`/models` com cache, como o
   desktop), `attachments.ts` (anexos por referência → base64 na cópia; o runner baixa os blobs antes,
   §14), `registries.ts` (fila, aprovações, questionários, retries, `callWithNetworkRetry`) e
   `runner.ts` (turno do desktop: stream → mensagem com modelo/tokens/custo/duração/raciocínio → tools
@@ -518,14 +520,18 @@ ativação** — `MicActivationLevel`: valor, medidor ao vivo com a linha do ní
 "Testar", o único que abre o microfone), transcrição, fala (provedor/modelo/voz pela listagem do
 provedor — modelo sem lista de vozes, como o Fish Audio pelo OpenRouter, mostra a dica e aceita o
 link `fish.audio/m/<id>` colado —, a nota das tags de voz do modelo, parâmetros do modelo pelos specs
-do desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, prompt-base, modelo,
-preâmbulos, frases de demora — padrões 8 s/15 s, espaçadas —, "Falar por cima da resposta" — volume,
-interromper depois de falar/com palavras, volume volta depois de —, **Tags de voz** com a instrução
+do desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, a prévia "O que a chamada
+muda no prompt", modelo, preâmbulos — "Espera do preâmbulo": só fala se a resposta passar de 2,5 s —,
+frases de demora — padrões 8 s/15 s, espaçadas —, "Falar por cima da resposta" — abaixar a voz depois
+de 500 ms de fala seguida, volume, interromper depois de 1,2 s de fala/com palavras, volume volta
+depois de —, **Tags de voz** com a instrução
 editável, fim de turno) e "Neste aparelho" (falar por cima com fone, microfone de teste em dev,
 "Gerar clipes dos preâmbulos"). Persona → aba **Voz** (`src/settings/VoiceConfigEditor.tsx`): as
 escolhas com herança usam o `InheritChoice` (`src/settings/InheritChoice.tsx`, = desktop): só as
 opções reais, ★ na igual ao herdado (persona → global), sem override a ★ fica selecionada e tocar
-nela limpa o override — Disponível, Prompt na chamada, O agente pode encerrar, Preâmbulos e Tags de
+nela limpa o override — Disponível, Prompt na chamada ("Prompt do modo voz" vazio por padrão, com
+"Usar sugestão" que põe o texto sugerido no campo, e a prévia "O que a chamada muda no prompt" —
+`voicePromptLayout` vendorado, o mesmo cálculo da request), O agente pode encerrar, Preâmbulos e Tags de
 voz (com o texto da instrução, "Usar o padrão" e o aviso quando a voz atual não interpreta tags);
 "Tools próprias na chamada" virou um interruptor (desligado = as do chat, como no desktop).
 **Mensagens da chamada** (`src/chat/voiceText.ts` + `Markdown` `voiceTags`/`dimFrom`, nos chats
@@ -534,6 +540,43 @@ opacidade 0,65 (cor com alfa — `opacity` não vale em `Text` aninhado), fora d
 resposta é falada aqui, o trecho ainda não falado fica em 0,5 e avança palavra por palavra (posição
 do player); depois de uma interrupção o resto não ouvido (`meta.voice.unheard`) aparece esmaecido
 depois do marcador "interrompido".
+
+**Sem prompt oculto.** A chamada não acrescenta prompt do app: o prompt-base de voz saiu (desktop
+2f16271); o único texto a mais é o "Prompt do modo voz" da persona/chat (vazio por padrão) e, com as tags
+de voz ligadas, a instrução delas — os dois visíveis na prévia. Preâmbulo só quando a resposta demora
+(`fillers.delayMs` 2500; settings antigas com 250 viram 2500 na normalização vendorada). Falar por cima:
+o `PlaybackDuck` vendorado abre sem abaixar e só emite `'duck'` depois de `turn.duckOnsetMs` (500 ms) de
+voz seguida — tosse/clique curtos não mexem no volume —; o barge-in vem depois (`bargeInVoicedMs` 1200)
+e a transcrição ao vivo passa pelo filtro de alucinações.
+
+**Voz da persona/chat (protocolo 1.9.0).** Com que voz FALAR e com que transcrição/idioma OUVIR é da
+persona (e do chat, que herda dela ao vivo): `config.voice.tts`/`voice.stt` sincronizam com a persona/
+chat; as 4 settings de voz (`audioInput`, `sttSettings`, `ttsSettings`, `voiceCallDefaults`) viraram
+os **padrões deste aparelho** — tabela `device_settings` do cache (`LocalStore.deviceSetting`/
+`setDeviceSetting`; a migração 6 copia uma vez o último valor sincronizado), nunca enviadas; registros
+recebidos de apps ≤ 1.8.x são ignorados; o merge do primeiro login remapeia o provedor delas e o de
+`voice.tts/stt.api`. Resolução (`src/voice/resolve.ts`, sobre `resolveTtsVoice`/`resolveSttVoice`
+vendorados): escolha do chat → da persona → as daqui; capacidades do celular = só `provider` (existe
+aqui, com endereço, e serve a capacidade) — escolha local/GPU (do computador) cai na padrão daqui com
+o motivo. A **chamada** decide a voz no início (vale a chamada inteira: síntese, frases de demora/
+ferramenta, clipes, falhas, transcrição e idioma — `deps.settings(chatId)` do vendorado = as daqui com
+a escolha aplicada e o endereço/chave do provedor DELA); nenhuma funcionando → "Chamada de voz
+indisponível neste dispositivo — Transcrição: …. Fala: ….". O **ditado** do composer usa a transcrição/
+idioma do chat (local, controle remoto e ao vivo — a config que o celular tem). Novo chat de uma
+persona não copia `tts`/`stt` (`withoutVoiceChoice`). Telefone e microfone esmaecidos com o motivo
+(toque mostra) e o aviso discreto do fallback; aba Voz da persona/"Chamada de voz…" do chat: seções
+**Fala** e **Transcrição** (`src/settings/VoiceChoiceSections.tsx` — o que vale, a disponibilidade
+aqui, "Escolher…" com provedor/modelo/voz/parâmetros ou provedor/modelo/idioma ★, "Testar esta voz",
+"Gerar clipes desta voz" — só com o clique — e "Voltar a usar …"). Configurações → Voz: nota "Padrões
+deste aparelho (não sincronizam)". Clipes por voz (a voz entra na chave; gerar os de uma voz não apaga
+os de outra).
+
+**Frases de ferramenta.** A 1ª tool do turno ganha uma frase curta ("Vou pesquisar isso.";
+`get_location`/`nearby_places` do celular → categoria `location`) — política e decisão vendoradas;
+no celular: classe de clipe `TOOL` no shim `clips.ts` (hash por classe — mudar as frases não invalida
+os preâmbulos), utterance `kind: 'tool'` na fila (pulável, nunca "ouvida", corte com fade), sem clipe →
+síntese ao vivo. Configurações → Voz → "Frases de ferramenta" (liga/desliga e as frases por categoria
+com "Restaurar padrão" — `src/settings/ToolPhrasesSettings.tsx`) e ★ na aba Voz da persona/chat.
 
 **Microfone de teste (só desenvolvimento — testes nunca abrem o microfone real).**
 `clearchat://dev/fakemic?on=1` (ou `EXPO_PUBLIC_CLEARCHAT_FAKE_MIC=1`) troca o microfone por silêncio
@@ -559,7 +602,14 @@ fora do registro, `interjections` nunca reenviado —, clipes só dos preâmbulo
 posição, ditado com o microfone de teste e a chamada inteira — turno, `meta.voice`, `end_call`,
 marcadores codificados, custos —, meia-duplex + Interromper, falar por cima com fone: tosse → volume
 de volta, insistir → barge-in em palavras com `meta.voice.unheard`, tags tiradas da síntese),
-`tests/voiceText.test.ts` (tags/esmaecimento do texto, ★ da herança), `tests/capture.test.ts` e
+`tests/voiceText.test.ts` (tags/esmaecimento do texto, ★ da herança), `tests/voicePersona.test.ts`
+(resolução da voz da persona com as capacidades do celular, fallback e idioma, textos dos ícones,
+recusa da chamada, Novo chat sem a voz da persona, categorias das frases de ferramenta), os casos
+1.9.0 de `tests/voice.test.ts` (settings de voz locais — o registro antigo é ignorado e nada sobe —,
+ditado e chamada com a voz/transcrição da persona e o fallback, frase de ferramenta "location" do
+clipe numa chamada com `nearby_places`; tosse curta sem abaixar, 700 ms → abaixa → volta), os padrões
+sem prompt-base/preâmbulo 2,5 s/onset em `tests/voicePersona.test.ts`, a descrição do `browse_url` do
+celular em `tests/agent.test.ts`, o merge em `tests/noAccount.test.ts`, `tests/capture.test.ts` e
 `tests/integration/voice.test.ts` (servidor real: settings do "desktop" → ditado e chamada no
 celular → o desktop decifra marcadores/falas/`end_call`/persona sem `interjections`).
 

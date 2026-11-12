@@ -1,6 +1,7 @@
 // Partes "avançadas" do editor de persona (= desktop: SignatureSection, ContextSettingsSection e
 // RootOptions do painel/persona): janela de contexto e compactação, assinatura do app (headers
-// HTTP-Referer / X-Title) e as opções que só valem no computador (raiz, sandbox, bloco de ambiente).
+// HTTP-Referer / X-Title), as opções que só valem no computador (raiz, sandbox) e o bloco de
+// ambiente (celular e computador; o texto do celular aparece por inteiro).
 // O diretório raiz da persona é local de cada dispositivo (§4.3.3/§4.4) — não aparece aqui.
 import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
@@ -11,11 +12,12 @@ import {
 } from '@shared/appSignatures'
 import { DEFAULT_COMPACT_PROMPT, DEFAULT_COMPACT_THRESHOLD } from '@shared/defaults'
 import type { ChatConfig } from '@shared/types'
+import { environmentBlock } from '@/agent/request'
 import { FieldLabel, Multiline, Note, NumberField, Row } from '@/settings/ui'
 import { TextButton } from '@/ui/Button'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { TextField } from '@/ui/TextField'
-import { colors, spacing } from '@/ui/theme'
+import { colors, font, radius, spacing } from '@/ui/theme'
 
 type Patch = (p: Partial<ChatConfig>) => void
 interface Props {
@@ -191,15 +193,6 @@ export function ComputerOptions({ cfg, patch }: Props) {
             testID="persona-sandbox"
           />
         </View>
-        <View style={st.row}>
-          <ToggleRow
-            title="Bloco de ambiente"
-            subtitle="Raiz, SO, shell e regras no system prompt."
-            value={!!cfg.envInPrompt}
-            onChange={(envInPrompt) => patch({ envInPrompt })}
-            testID="persona-env"
-          />
-        </View>
       </Card>
       <Note>
         O diretório raiz da persona é escolhido em cada computador (não sincroniza); no celular os
@@ -209,7 +202,46 @@ export function ComputerOptions({ cfg, patch }: Props) {
   )
 }
 
+/** "Bloco de ambiente" (`envInPrompt`): vale no celular E no computador — cada um manda o seu.
+ *  No celular é exatamente `environmentBlock()` (sistema Android + aviso de que não há shell nem
+ *  arquivos), mostrado aqui por inteiro (nada de texto oculto no system prompt). */
+export function EnvironmentOption({ cfg, patch }: Props) {
+  return (
+    <>
+      <FieldLabel>Ambiente no system prompt</FieldLabel>
+      <Card padded={false}>
+        <View style={st.row}>
+          <ToggleRow
+            title="Bloco de ambiente"
+            subtitle="Sistema (Android) e o aviso de que o celular não tem shell nem arquivos."
+            value={!!cfg.envInPrompt}
+            onChange={(envInPrompt) => patch({ envInPrompt })}
+            testID="persona-env"
+          />
+        </View>
+      </Card>
+      <Note>
+        Ligado, o celular acrescenta ao system prompt exatamente este texto (num computador, o bloco
+        de lá traz raiz, SO, shell e regras):
+      </Note>
+      <Text style={st.block} testID="persona-env-text">
+        {environmentBlock()}
+      </Text>
+    </>
+  )
+}
+
 const st = StyleSheet.create({
   row: { paddingHorizontal: spacing.lg, paddingVertical: 2 },
-  check: { color: colors.accentStrong, fontSize: 16, fontWeight: '700' }
+  check: { color: colors.accentStrong, fontSize: 16, fontWeight: '700' },
+  block: {
+    color: colors.muted,
+    fontSize: 12.5,
+    lineHeight: 18,
+    fontFamily: font.mono,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 8
+  }
 })

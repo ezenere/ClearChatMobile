@@ -20,7 +20,12 @@ import { ChatAvatar } from '@/chat/ChatBits'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
 import { useVoiceCallInheritance } from '@/settings/voiceUi'
-import { ComputerOptions, ContextEditor, SignatureEditor } from '@/settings/PersonaAdvanced'
+import {
+  ComputerOptions,
+  ContextEditor,
+  EnvironmentOption,
+  SignatureEditor
+} from '@/settings/PersonaAdvanced'
 import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { resolvePresetConfig } from '@/settings/records'
@@ -270,6 +275,7 @@ export default function PersonaEditor() {
           </Note>
           <ContextEditor cfg={cfg} patch={patch} />
           <SignatureEditor cfg={cfg} patch={patch} />
+          <EnvironmentOption cfg={cfg} patch={patch} />
           <ComputerOptions cfg={cfg} patch={patch} />
         </>
       ) : null}
@@ -329,6 +335,7 @@ export default function PersonaEditor() {
           providers={providers}
           defaults={voiceInherit.defaults}
           tagsSupport={voiceInherit.tagsSupport}
+          device={voiceInherit.device}
           chatTools={cfg.enabledTools ?? null}
         />
       ) : null}

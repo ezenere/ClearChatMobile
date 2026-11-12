@@ -6,11 +6,20 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { Provider } from '@shared/types'
-import type { VoiceCallDefaults } from '@shared/voice'
+import type { TtsSettings, VoiceCallDefaults } from '@shared/voice'
 import type { VoiceCatalogView } from '@shared/voiceCatalog'
 import { listVoiceCatalog } from '@vendor/desktop/voice/voiceCatalog'
 import { store } from '@/data/native'
-import { callTtsTagsSupport, readVoiceSettings, voiceProviders } from '@/voice/endpoints'
+import {
+  callTtsTagsSupport,
+  readVoiceSettings,
+  resolveTts,
+  voiceProviders,
+  type VoiceSettings
+} from '@/voice/endpoints'
+import { expoPlayback } from '@/voice/nativeAudio'
+import { playableAudio } from '@/voice/player'
+import { synthesizeBlock } from '@vendor/desktop/voice/tts'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { Multiline, NumberField, Segmented } from '@/settings/ui'
 import { Sheet, SheetItem } from '@/ui/Sheet'
@@ -23,16 +32,49 @@ import { colors, radius, spacing } from '@/ui/theme'
 export function useVoiceCallInheritance(): {
   defaults: VoiceCallDefaults
   tagsSupport: { supported: boolean; model: string | null }
+  /** As settings de voz deste aparelho (o que a voz/transcrição da persona herda sem escolha). */
+  device: VoiceSettings
+  providers: Provider[]
 } {
   const version = useSettingsVersion()
   return readAt(version, () => {
-    const v = readVoiceSettings((id) => store.setting(id))
+    const v = readVoiceSettings((id) => store.deviceSetting(id))
     const providers = settings.providers()
     return {
       defaults: v.voiceCallDefaults,
-      tagsSupport: callTtsTagsSupport(v.tts, (id) => providers.find((p) => p.id === id) ?? null)
+      tagsSupport: callTtsTagsSupport(v.tts, (id) => providers.find((p) => p.id === id) ?? null),
+      device: v,
+      providers
     }
   })
+}
+
+/** Idiomas do ditado/transcrição (o id vai à API; '' = detecção automática). */
+export const DICTATION_LANGUAGES = [
+  { id: 'pt-BR', name: 'Português (Brasil)' },
+  { id: 'pt-PT', name: 'Português (Portugal)' },
+  { id: 'en-US', name: 'Inglês' },
+  { id: 'es-ES', name: 'Espanhol' },
+  { id: 'fr-FR', name: 'Francês' },
+  { id: 'de-DE', name: 'Alemão' },
+  { id: 'it-IT', name: 'Italiano' }
+]
+
+/**
+ * "Testar voz": sintetiza uma frase com as settings de fala dadas (as daqui ou as da voz de uma
+ * persona) e toca. Erro legível (pt-BR).
+ */
+export async function testTtsVoice(
+  tts: TtsSettings,
+  providers: Provider[],
+  text = 'Olá, isto é um teste.'
+): Promise<void> {
+  const r = resolveTts(tts, (id) => providers.find((p) => p.id === id) ?? null)
+  if ('block' in r) throw new Error(r.block.reason)
+  const clip = await synthesizeBlock({ text, settings: r.settings }, {})
+  const a = playableAudio(clip)
+  const h = await expoPlayback.play(a.audio, a.mime, 1)
+  await h.done
 }
 
 /** Catálogo de modelos/vozes do provedor (cache de 10 min no módulo vendorado). */

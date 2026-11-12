@@ -5,6 +5,7 @@
 import { DEFAULT_CHAT_CONFIG, supportsCacheControl } from '@shared/defaults'
 import { defaultModelRef, resolvePresetModel } from '@shared/models'
 import { applyPreset, DEFAULT_PRESET_NAME } from '@shared/presets'
+import { withoutVoiceChoice } from '@vendor/renderer/voice/voiceChoice'
 import { isChatProvider, providerKind } from '@shared/providerKinds'
 import type { ChatConfig, ChatParams, Preset, Provider, ToolName } from '@shared/types'
 import type { Plain } from '@/data/types'
@@ -66,7 +67,9 @@ export function resolveNewChat(
     baseUrl: prov?.baseUrl,
     kind: prov ? providerKind(prov) : undefined
   })
-  const cfg = applyPreset(base, preset?.config)
+  // a voz/transcrição da persona (`voice.tts`/`voice.stt`, 1.9.0) NÃO vira snapshot: o chat as herda
+  // AO VIVO da persona de origem (`presetId`) — trocar a voz da persona muda a dos chats dela
+  const cfg = withoutVoiceChoice(applyPreset(base, preset?.config))
   const { ref: r } = resolvePresetModel(
     { providerId: base.providerId, model: base.model },
     preset?.config,

@@ -258,11 +258,47 @@ export function setProviderNamesSource(fn: () => string[]): void {
   providerNamesSource = fn
 }
 
+/**
+ * `browse_url` no celular: a implementação (`src/agent/tools/web.ts`) BAIXA o HTML com `fetch` e
+ * extrai o texto — sem navegador nem JavaScript da página (a descrição do desktop fala de um
+ * navegador oculto que executa o JavaScript; aqui ela seria falsa). Mesmos parâmetros + `offset`
+ * (continuar uma página longa), que a implementação do celular aceita.
+ */
+export const MOBILE_BROWSE_URL_DESCRIPTION =
+  'Baixa a página da URL (HTTP, sem navegador: o JavaScript da página NÃO é executado — conteúdo que só aparece via JavaScript não vem) e extrai do HTML o CONTEÚDO PRINCIPAL em Markdown compacto: título, URL, descrição, datas, dados estruturados (preço/produto/artigo, quando houver), títulos, parágrafos, listas, tabelas (com os números), blocos de código, citações e links absolutos [texto](url) — sem menus, cabeçalho, rodapé, barras laterais nem banners de cookies. Se o conteúdo principal não for identificado com segurança, devolve a página inteira sem menus e avisa. Página longa: use offset para continuar a partir de um caractere. mode="full" inclui menus/navegação/rodapé (ex.: para achar links do site); links=true acrescenta a lista "Links da página". Reler a mesma URL com outro mode/links/offset em até 5 min usa a página já baixada.'
+
+function mobileBrowseUrl(providerNames: string[]): ToolDefinition {
+  const base = toolDefinitionFor('browse_url', providerNames)
+  const params = base.function.parameters
+  return {
+    ...base,
+    function: {
+      ...base.function,
+      description: MOBILE_BROWSE_URL_DESCRIPTION,
+      parameters: {
+        ...params,
+        properties: {
+          ...(params.properties ?? {}),
+          offset: {
+            type: 'integer',
+            description:
+              'Continua a leitura do texto extraído a partir deste caractere (página longa). Padrão 0.'
+          }
+        }
+      }
+    }
+  }
+}
+
 export function toolDefinitions(
   names: ToolName[],
   providerNames: string[] = providerNamesSource()
 ): ToolDefinition[] {
-  return names.map((n) => locationSource?.definition(n) ?? toolDefinitionFor(n, providerNames))
+  return names.map(
+    (n) =>
+      locationSource?.definition(n) ??
+      (n === 'browse_url' ? mobileBrowseUrl(providerNames) : toolDefinitionFor(n, providerNames))
+  )
 }
 
 /** System prompt → <environment> → memória (índice + help, só a principal) → texto das tools. */

@@ -30,7 +30,7 @@ import {
   rebaseDictationAnchor,
   type DictationAnchor
 } from '@vendor/renderer/voice/dictation'
-import { useDictationView, voice } from '@/voice/react'
+import { useChatVoice, useDictationView, voice } from '@/voice/react'
 import { describeError } from '@/account/errors'
 import { useAttachment, useAttachmentSource, useSyncStatus } from '@/data/react'
 import type { HostSkill } from '@/remote/mirror'
@@ -274,7 +274,8 @@ export function RemoteComposer({
   onQueueForce,
   onQueueRemove,
   attach,
-  hostUnavailable
+  hostUnavailable,
+  voiceConfig
 }: {
   busy: boolean
   statusText: string | null
@@ -290,6 +291,11 @@ export function RemoteComposer({
   attach?: ComposerAttach
   /** O host não está ao alcance (chat ao vivo: reconectando / indisponível) — ponto amarelo. */
   hostUnavailable?: boolean
+  /**
+   * Config do chat (a que este celular tem — salvo, controle remoto ou ao vivo): o ditado usa a
+   * transcrição/idioma da persona/chat (protocolo 1.9.0) e o microfone esmaece com o motivo.
+   */
+  voiceConfig?: Record<string, unknown> | null
 }) {
   const toast = useToast()
   const [text, setText] = useState('')
@@ -307,6 +313,7 @@ export function RemoteComposer({
       : connTone
   // ---- ditado ----
   const dict = useDictationView()
+  const chatVoice = useChatVoice(voiceConfig)
   const recording = dict.phase !== 'idle'
   const [sel, setSel] = useState({ start: 0, end: 0 })
   const [anchor, setAnchor] = useState<DictationAnchor | null>(null)
@@ -517,18 +524,20 @@ export function RemoteComposer({
 
   const startDictation = async () => {
     if (recording || disabled) return
-    const blocked = voice.dictation.blocked()
+    const blocked = chatVoice.mic.text ?? voice.dictation.blocked(chatVoice.layers)
     if (blocked) {
       toast(blocked, 'danger')
       return
     }
+    // a transcrição da persona não vale aqui: aviso discreto (usa a padrão deste aparelho)
+    if (chatVoice.mic.note) toast(chatVoice.mic.note, 'info')
     setDictError(null)
     const a: DictationAnchor = { text, start: sel.start, end: sel.end }
     anchorRef.current = a
     setAnchor(a)
     voice.dictation.onAutoStop = () => void finishDictation(false)
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
-    const err = await voice.dictation.start()
+    const err = await voice.dictation.start(chatVoice.layers)
     if (err) {
       setAnchor(null)
       toast(err, 'danger')
@@ -733,10 +742,17 @@ export function RemoteComposer({
                 hitSlop={6}
                 style={c.iconBtn}
                 accessibilityLabel="Ditar"
-                accessibilityHint="Grava sua fala e transcreve no campo"
+                accessibilityHint={
+                  chatVoice.mic.text ?? chatVoice.mic.note ?? 'Grava sua fala e transcreve no campo'
+                }
                 testID="composer-mic"
               >
-                <Ionicons name="mic-outline" size={21} color={colors.muted} />
+                <Ionicons
+                  name={chatVoice.mic.text ? 'mic-off-outline' : 'mic-outline'}
+                  size={21}
+                  color={chatVoice.mic.text ? colors.faint : colors.muted}
+                  style={chatVoice.mic.text ? { opacity: 0.6 } : undefined}
+                />
               </Pressable>
             ) : null}
             <View style={c.status}>

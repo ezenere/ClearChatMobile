@@ -434,6 +434,46 @@ Notas para o desktop (vendorado, não corrigido aqui): `sentences.ts` trata "mar
 (março) — "…sobre o mar. Depois…" não corta a frase (o E2E trocou o texto). O `npm run vendor` da
 fatia seguinte (frases de ferramenta, desktop 1a68ecd/protocolo a92f548) ficou pendente.
 
+## Voz por persona (protocolo 1.9.0) e frases de ferramenta — estado (2026-11-12)
+
+Feito (vendor do desktop ed06271 / protocolo 8562ba3 e a92f548):
+- **Frases de ferramenta**: classe `TOOL` no shim `clips.ts` (hash por classe; clipes por voz — a voz
+  entra na chave, gerar os de uma não apaga os de outra; clipes antigos de interjeição somem),
+  utterance `kind: 'tool'` (pulável), Configurações → Voz → "Frases de ferramenta" (liga/desliga,
+  frases por categoria, "Restaurar padrão"), ★ na aba Voz; `get_location`/`nearby_places` → `location`.
+- **Settings de voz locais**: tabela `device_settings` (migração 6 copia o último valor sincronizado);
+  `SettingsService` grava as 4 ids aqui; o merge ignora as online e remapeia as daqui; nada sobe.
+- **Voz da persona/chat**: `src/voice/resolve.ts` (capacidades do celular = provedores; fallback com o
+  motivo; `voiceUse`/`settingsWith`); chamada decidida no início (`callUse`); ditado com a transcrição/
+  idioma do chat (composer de chats daqui, controle remoto e ao vivo); Novo chat sem `tts`/`stt`
+  (`withoutVoiceChoice` vendorado de `lib/voice/voiceChoice.ts`, junto com os textos dos ícones);
+  seções Fala/Transcrição (`VoiceChoiceSections.tsx`) na persona e no "Chamada de voz…" do chat;
+  telefone/microfone esmaecidos com o motivo (toque mostra) e o aviso do fallback; nota "Padrões deste
+  aparelho" em Configurações → Voz.
+
+Verificado: typecheck, lint, `npm test` (novos: `tests/voicePersona.test.ts`, casos 1.9.0 e de frases de
+ferramenta em `tests/voice.test.ts`, merge em `tests/noAccount.test.ts`) e E2E no AVD (`-no-audio`,
+microfone de teste, LLM/STT/TTS falsos): migração dos settings de voz (valores mantidos), nota do
+aparelho, editor das frases de ferramenta, persona com voz própria (seletores, "Gerar clipes desta
+voz"), chat herdando ao vivo ("Usando a voz da persona “Padrão”"), ★ das frases de ferramenta,
+chamada com a voz da persona (`voz: tts-persona` no selo) e a frase de ferramenta do clipe da persona
+(`list_chats` → "Deixa eu ver as informações."), ícones esmaecidos com o motivo. Screenshots em
+`scratchpad/mobile/voice3/`. `tests/integration/voice.test.ts` atualizado (não rodado — servidor real).
+
+Não testado: o fallback no AVD (só nos unitários — o seletor do celular só oferece provedores daqui).
+
+Depois (vendor do desktop 2f16271): **sem prompt oculto** — Configurações → Voz sem prompt-base, só o
+"Prompt do modo voz" da persona/chat (vazio, "Usar sugestão") e a prévia "O que a chamada muda no
+prompt" (`VoicePromptPreview.tsx`, na aba Voz e em Configurações → Voz); **preâmbulo só se demorar**
+("Espera do preâmbulo", 2,5 s); **abaixar a voz só depois de 500 ms** de fala seguida (evento `'duck'`
+do `PlaybackDuck`; "Abaixar a voz depois de"; barge-in em 1,2 s). Persona → "Ambiente no system
+prompt": o bloco do celular por extenso (`environmentBlock()`), fora do grupo "No computador";
+`browse_url` com descrição própria do celular (`MOBILE_BROWSE_URL_DESCRIPTION` em `src/agent/request.ts`).
+Verificado: typecheck, lint, `npm test` (402) e no AVD (screenshots 13–17 em `scratchpad/mobile/voice3/`,
+modo sem conta — a sessão de teste do emulador tinha sido encerrada). `vendor:check` acusa
+`shared/voice.ts`/`voicePolicy.ts` só porque a árvore do desktop tem edições não commitadas depois do
+2f16271 (a cópia vendorada = 2f16271).
+
 ## Notificações push (1.7.0) — estado (2026-11-06)
 
 Feito: `src/push/` (decisão §22.7 pura com `K_push`/AAD e os vetores de `push.json`; tarefa do

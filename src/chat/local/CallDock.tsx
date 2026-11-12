@@ -99,7 +99,9 @@ export function CallDock() {
           <Text style={s.clipsText}>
             {v.clips.state === 'generating'
               ? `Gerando clipes… ${v.clips.done ?? 0}/${v.clips.total ?? 0}`
-              : 'Sem clipes dos preâmbulos — gerar com a voz atual'}
+              : v.clips.missing?.includes('FILLER')
+                ? 'Sem clipes dos preâmbulos — gerar com a voz da chamada'
+                : 'Frases de ferramenta sem clipe (saem ao vivo) — gerar com a voz da chamada'}
           </Text>
         </Pressable>
       ) : null}
@@ -183,6 +185,7 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
         providers={providers}
         defaults={inherit.defaults}
         tagsSupport={inherit.tagsSupport}
+        device={inherit.device}
         persona={persona}
         chatTools={Array.isArray(cfg?.enabledTools) ? (cfg.enabledTools as ToolName[]) : null}
         onChange={(voiceCfg) => {

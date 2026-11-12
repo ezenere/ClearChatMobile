@@ -1,6 +1,7 @@
 // Fase 6 (voz) contra o servidor de sync REAL local, com LLM/STT/TTS FALSOS: o "desktop" (seed)
-// grava as settings de áudio e o provedor de voz; o "celular" (AccountService + SyncEngine + host
-// reais) recebe, dita (meta.voice de ditado), faz uma chamada inteira com o microfone de TESTE
+// grava o provedor de voz e as settings de áudio como um app ≤ 1.8.x (o celular ≥ 1.9.0 as IGNORA —
+// as settings de voz são deste aparelho e configuradas aqui); o "celular" (AccountService +
+// SyncEngine + host reais) recebe, dita (meta.voice de ditado), faz uma chamada inteira com o microfone de TESTE
 // (turno falado → resposta falada → "tchau" → end_call) e grava a persona com voz; o desktop
 // decifra os registros e confere: marcador da chamada codificado como no §4.3.8
 // (`memory-extraction` + `voiceCall`), falas com `meta.voice`, a tool end_call e a `voice` da persona.
@@ -133,7 +134,7 @@ describe.skipIf(!enabled)('voz contra o servidor real (LLM/STT/TTS falsos)', () 
         headers: {},
         createdAt: now
       }),
-      // as settings de áudio como o desktop grava (sem partes do dispositivo)
+      // as settings de áudio como um desktop ≤ 1.8.x grava (o celular ≥ 1.9.0 ignora)
       await item(desk, 'setting', 'sttSettings', null, {
         sv: 1,
         value: {
@@ -223,7 +224,26 @@ describe.skipIf(!enabled)('voz contra o servidor real (LLM/STT/TTS falsos)', () 
       'pull',
       60_000
     )
-    await waitFor(() => !!store.setting('ttsSettings'), 'settings de áudio')
+    await waitFor(() => !!store.setting('ttsSettings'), 'registro de um app antigo')
+    // 1.9.0: settings de voz são deste aparelho — o registro recebido não vira a do celular
+    expect(store.deviceSetting('ttsSettings')).toBeUndefined()
+    store.setDeviceSetting('sttSettings', {
+      mode: 'api',
+      api: { providerId: 'prov-falso', model: 'whisper-falso' },
+      local: null,
+      livePartials: true
+    })
+    store.setDeviceSetting('ttsSettings', {
+      backend: 'api',
+      api: { providerId: 'prov-falso', model: 'tts-falso', voice: 'alloy' },
+      local: null
+    })
+    store.setDeviceSetting('audioInput', {
+      pttEnabled: true,
+      silenceStopEnabled: true,
+      silenceStopMs: 5000,
+      language: 'pt-BR'
+    })
     await waitFor(() => stack.host.isConnected, 'websocket do celular')
 
     const mic = new ScriptedMic()

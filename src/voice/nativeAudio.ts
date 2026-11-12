@@ -11,7 +11,7 @@ import {
   type AudioStatus,
   type AudioStreamBuffer
 } from 'expo-audio'
-import type { ClipStore } from './clips'
+import { prunable, type ClipStore } from './clips'
 import { FrameAssembler, MIC_SAMPLE_RATE, type MicFrame, type MicSource } from './mic'
 import type { PlaybackBackend, PlaybackHandle } from './player'
 
@@ -239,10 +239,13 @@ export function fileClipStore(): ClipStore {
       f.create({ overwrite: true })
       f.write(out)
     },
-    async prune(keep) {
+    async prune(keep, voiceId) {
       if (!dir.exists) return
-      const names = new Set(keep.map((k) => `${k.replace(/[^A-Za-z0-9_-]/g, '_')}.bin`))
-      for (const e of dir.list()) if (e instanceof File && !names.has(e.name)) e.delete()
+      const safe = (k: string) => k.replace(/[^A-Za-z0-9_-]/g, '_')
+      const names = keep.map((k) => `${safe(k)}.bin`)
+      // nomes já saneados: a mesma regra do `prunable` sobre o nome sem a extensão
+      for (const e of dir.list())
+        if (e instanceof File && prunable(e.name, names, `${safe(voiceId)}`)) e.delete()
     }
   }
 }

@@ -37,6 +37,7 @@ import {
   normalizeDelayPhrases,
   resolveDelayPhrasePools,
   resolveFillerPool,
+  resolveToolPhrasePool,
   resolveTurnSilenceMs,
   resolveTurnTiming,
   resolveVoiceCallConfig,
@@ -58,6 +59,7 @@ import {
   EMPTY_FILLER_STATE,
   EVAL_TAIL_MAX_CHARS,
   FILLER_RECENT_WINDOW,
+  TOOL_PHRASE_RECENT_WINDOW,
   apologyDueAt,
   apologySkipReason,
   classifyFillerContext,
@@ -67,6 +69,9 @@ import {
   keepAliveDueAt,
   pickDelayPhrase,
   pickFillerPhrase,
+  pickToolPhrase,
+  toolPhraseCategory,
+  toolPhraseSkipReason,
   type BargeInReason,
   type DelayPhraseState,
   type FillerState
@@ -99,7 +104,7 @@ export interface VoiceCallUtterance {
    * Origem do áudio (sentença da resposta, preâmbulo ou frase de demora sintetizada ao vivo);
    * ausente = 'sentence'.
    */
-  kind?: 'sentence' | 'filler' | 'delay'
+  kind?: 'sentence' | 'filler' | 'delay' | 'tool'
   /** Sentença da resposta: o texto dela (a leitura ao vivo do chat esmaece o que ainda não tocou). */
   text?: string
 }
@@ -200,8 +205,13 @@ export interface VoiceCallDeps {
   classifyError?(e: unknown, source: VoiceFailureSource): VoiceFailure | null
   /** A chamada terminou (por qualquer motivo): o IPC derruba os streams de TTS em curso. */
   onCallEnded?(): void
-  /** Settings de voz completas (lidas a cada uso — a tela de Configurações pode mudá-las). */
-  settings(): {
+  /**
+   * Settings de voz completas (lidas a cada uso — a tela de Configurações pode mudá-las). Com
+   * `chatId` (a chamada sempre passa o do chat dela): a fala/transcrição EFETIVAS daquele chat — a
+   * voz da persona/chat quando disponível neste dispositivo, senão a daqui (protocolo 1.9.0,
+   * `resolveTtsVoice`/`resolveSttVoice` em `@shared/voice`).
+   */
+  settings(chatId?: string | null): {
     defaults: VoiceCallDefaults
     audioInput: AudioInputSettings
     stt: SttSettings
@@ -339,7 +349,7 @@ export class VoiceCallManager {
   #carry: { awaiting: boolean; text: string } | null = null
   // ---- preâmbulo pós-turno (1 por turno; nunca cortado pela resposta) ----
   #filler: FillerState = { ...EMPTY_FILLER_STATE }
-  #fillerTimer: ReturnType<typeof setTimeout> | null = null
+  #fillerTimer: unknown = null
   #fillerUttId: string | null = null
   /** Geração do filler (async): reset/stop/barge-in descartam a carga de clip em voo. */
   #fillerGen = 0
@@ -364,6 +374,21 @@ export class VoiceCallManager {
   #delayRecent: { keepalive: number[]; apology: number[] } = { keepalive: [], apology: [] }
   /** Tools em execução agora (depois da 1ª frase só elas reabrem o "manter viva"). */
   #toolsRunningIds = new Set<string>()
+  // ---- frase de ferramenta (1ª tool do turno — SPEC → "Frases de ferramenta") ----
+  /** A frase de ferramenta deste turno já foi decidida (tocou, pulada ou descartada): no máx. 1. */
+  #toolDecided = false
+  /** Geração: reset/stop/fala do usuário descartam a carga/síntese em voo. */
+  #toolGen = 0
+  /** Frase de ferramenta emitida e ainda tocando (até o `playback-idle`). */
+  #toolUttId: string | null = null
+  /** Síntese ao vivo em voo (clipe ausente). */
+  #toolAbort: AbortController | null = null
+  /** Índices do pool usados por último (nunca repete os últimos `TOOL_PHRASE_RECENT_WINDOW`). */
+  #toolRecent: number[] = []
+  /** Fim do preâmbulo deste turno (ms) — a frase de ferramenta só sai 3 s depois dele. */
+  #fillerEndedAt: number | null = null
+  /** tool_call id → nome (das mensagens do assistente — o `tool-running` só traz o id). */
+  #toolNames = new Map<string, string>()
   // ---- histórico e custos da chamada (marcadores, meta.voice) ----
   #meter: CallMeter | null = null
   /** Última transcrição final ainda não usada num turno (vira o `meta.voice` da fala). */
@@ -428,7 +453,7 @@ export class VoiceCallManager {
     const info = this.#deps.sessionInfo(sessionId)
     if (!info) throw new Error('Sessão não encontrada.')
     if (info.depth > 0) throw new Error('A chamada de voz é só em sessões principais.')
-    const { defaults, audioInput } = this.#deps.settings()
+    const { defaults, audioInput } = this.#deps.settings(info.chatId)
     // resolve com o chat da sessão (this.#chatId ainda não está setado aqui)
     const resolved = this.#resolvedFor(info.chatId)
     if (!resolved.enabled) throw new Error('Chamada de voz desativada para este chat.')
@@ -479,6 +504,7 @@ export class VoiceCallManager {
     this.#clearSynth()
     this.#ttsFeedCall((f) => f.close()) // [tts-feed] fim da chamada: fecha a conexão
     this.#resetFiller(true)
+    this.#resetToolPhrase(true)
     this.#resetDelay(true, 'stopped')
     this.#machine.stop()
     this.#sessionId = null
@@ -559,6 +585,7 @@ export class VoiceCallManager {
     // o preâmbulo tocando sai de cena (o renderer já cortou com fade); frases de demora param
     // (nunca falam por cima do usuário — o turno novo/continuado rearma)
     this.#resetFiller(true)
+    this.#resetToolPhrase(true)
     this.#resetDelay(true, 'user-speaking')
     // a fala anterior ainda está transcrevendo (o silêncio fechou o turno no meio da frase): o
     // texto dela será unido ao desta fala em vez de virar turno sozinho
@@ -652,11 +679,14 @@ export class VoiceCallManager {
     // terminou de tocar uma frase curta (preâmbulo/"manter viva"/desculpa — com o que vinha atrás
     // dela na fila): os intervalos das frases de demora contam deste FIM, nunca da decisão nem da
     // emissão (a latência da síntese e a duração do áudio não comem o silêncio entre elas)
-    const shortEnded = !!this.#fillerUttId || !!this.#delayPlaying
+    const shortEnded = !!this.#fillerUttId || !!this.#delayPlaying || !!this.#toolUttId
     const keepAliveEnded = this.#delayPlaying?.kind === 'keepalive'
+    // o preâmbulo terminou agora: a frase de ferramenta conta 3 s daqui
+    if (this.#fillerUttId) this.#fillerEndedAt = this.#now()
     this.#playbackActive = false
     this.#fillerUttId = null
     this.#delayPlaying = null
+    this.#toolUttId = null
     this.#machine.playbackIdle()
     // esperando a resposta: o silêncio começa agora (a frase "manter viva" conta daqui)
     if (this.#delay.turnStartedAt != null) {
@@ -701,6 +731,7 @@ export class VoiceCallManager {
       : [...this.#uttKey.keys()]
     this.#playbackActive = false
     this.#resetFiller(true) // quem falou é o usuário: sem filler no meio da fala dele
+    this.#resetToolPhrase(true)
     this.#resetDelay(true, 'barge-in')
     this.#interruptAnswer(played, this.#partialHeard(input?.current))
     this.#machine.bargeIn()
@@ -787,7 +818,7 @@ export class VoiceCallManager {
 
   /** A voz da chamada (settings de fala atuais) interpreta tags de voz? */
   #tagsSupported(): boolean {
-    return safeCall(() => ttsSupportsAudioTags(this.#deps.settings().tts), false)
+    return safeCall(() => ttsSupportsAudioTags(this.#deps.settings(this.#chatId).tts), false)
   }
 
   /**
@@ -806,7 +837,7 @@ export class VoiceCallManager {
   #resolvedFor(chatId: string | null): ResolvedVoiceCall {
     const cfg = chatId ? this.#deps.chatConfig(chatId) : null
     const persona = chatId ? (this.#deps.personaVoice?.(chatId) ?? null) : null
-    return resolveVoiceCallConfig(cfg?.voice ?? null, this.#deps.settings().defaults, persona)
+    return resolveVoiceCallConfig(cfg?.voice ?? null, this.#deps.settings(chatId).defaults, persona)
   }
 
   // ---------------- turno continuado / barge-in (histórico só com o ouvido) ----------------
@@ -847,6 +878,7 @@ export class VoiceCallManager {
     this.#speakCancelled = true
     this.#clearSynth()
     this.#resetFiller(true)
+    this.#resetToolPhrase(true)
     this.#machine.suspend()
     this.#machine.turnArrived(text) // vira o pendente (suspenso: nada sai antes do ajuste)
     const canMerge = !!prev?.userMessageId && !prev.toolsRan && !!this.#deps.amendTurn
@@ -1001,8 +1033,10 @@ export class VoiceCallManager {
         return
       }
       if (m.message.role === 'assistant' && !isDisplayOnly(m.meta)) {
-        for (const tc of m.message.tool_calls ?? [])
+        for (const tc of m.message.tool_calls ?? []) {
           if (tc.function.name === 'end_call') this.#endCallIds.add(tc.id)
+          this.#toolNames.set(tc.id, tc.function.name)
+        }
         this.#flushMessage(typeof m.message.content === 'string' ? m.message.content : '', m.id)
       } else if (
         m.message.role === 'tool' &&
@@ -1051,12 +1085,15 @@ export class VoiceCallManager {
       }
     }
     if (e.type === 'tool-running' && e.sessionId === sessionId && e.running) {
+      // a 1ª tool do turno ganha uma frase curta ("Vou pesquisar isso.") — no lugar do preâmbulo
+      // quando ele ainda não tocou (a regra de frase única do turno decide antes do preâmbulo)
+      this.#onFirstTool(e.toolCallId)
       if (this.#turn) this.#turn.toolsRan = true
-      // tools em execução no turno: a espera tende a longa → o preâmbulo sai já (1 por turno)
+      // tool em execução: NÃO antecipa o preâmbulo (a frase de ferramenta cobre a tool); se ele
+      // ainda sair (resposta lenta, frase de ferramenta pulada), é uma frase de "comando"
       this.#filler.toolsRunning = true
       if (this.#filler.turnStartedAt != null && this.#fillerContext === 'generic')
         this.#fillerContext = 'command'
-      void this.#tryFiller()
     }
   }
 
@@ -1214,9 +1251,8 @@ export class VoiceCallManager {
         // 1ª frase pronta: o preâmbulo não sai mais (se já está tocando, a frase ESPERA ele terminar
         // na fila do renderer — nunca corta no meio da palavra)
         this.#filler.spokenThisTurn = true
-        if (this.#fillerTimer) {
-          clearTimeout(this.#fillerTimer)
-          this.#fillerTimer = null
+        if (this.#fillerTimer != null) {
+          this.#clearFillerTimer()
           // a resposta ficou pronta antes da espera do preâmbulo: dispensado
           this.#emitTimeline({
             ts: this.#now(),
@@ -1292,6 +1328,8 @@ export class VoiceCallManager {
     this.#uttSpeech = new Map()
     this.#sentencesThisTurn = 0
     this.#resetFiller(true) // turno novo: o filler do turno anterior (se tocando) é cancelado
+    this.#resetToolPhrase(true)
+    this.#toolNames = new Map()
     this.#resetDelay(true, 'new-turn')
   }
 
@@ -1304,14 +1342,19 @@ export class VoiceCallManager {
   }
 
   /**
-   * Arma o preâmbulo do turno: depois de `delayMs` (padrão 250 ms) sem a 1ª frase da resposta
-   * pronta — ou já, com tools em execução — toca UM clipe `FILLER` escolhido pelo contexto da fala
+   * Arma o preâmbulo do turno: só quando a resposta DEMORA — depois de `delayMs` (padrão 2500 ms)
+   * sem a 1ª frase da resposta pronta nem outra frase curta no lugar (a frase de ferramenta
+   * substitui; uma frase de demora também) — toca UM clipe `FILLER` escolhido pelo contexto da fala
    * (pergunta/comando/correção/pedido longo), sem repetir os últimos usados. Fala curta demais
    * ("oi", "valeu") ou com menos VOZ que `FILLER_MIN_SPEECH_MS` (`voicedMs` — tempo com voz, sem o
    * silêncio do fim de turno) não ganha preâmbulo.
    */
   #armFiller(text: string, voicedMs: number | null = null): void {
     this.#resetFiller(true)
+    // turno novo: a frase de ferramenta volta a valer (1 por turno)
+    this.#resetToolPhrase(true)
+    this.#toolDecided = false
+    this.#fillerEndedAt = null
     this.#armDelayPhrases() // frases de demora valem em todo turno respondido (fala curta inclusive)
     const resolved = this.#resolved()
     this.#fillerContext = classifyFillerContext(text)
@@ -1345,21 +1388,30 @@ export class VoiceCallManager {
       return
     }
     const delay = this.#fillerDelay()
-    this.#fillerTimer = setTimeout(() => this.#onFillerTimer(), delay)
+    this.#fillerTimer = this.#setDelayTimer(() => this.#onFillerTimer(), delay)
+  }
+
+  /** Cancela o timer do preâmbulo (timers injetáveis — os mesmos das frases de demora). */
+  #clearFillerTimer(): void {
+    const t = this.#fillerTimer
+    this.#fillerTimer = null
+    if (t == null) return
+    if (this.#deps.timers) this.#deps.timers.clear(t)
+    else clearTimeout(t as ReturnType<typeof setTimeout>)
   }
 
   /**
    * Timer do filler disparou: timers podem sair ~1 ms adiantados (Node) — o atraso ainda não
-   * cumprido é reagendado; cumprido (ou com tool em execução), tenta disparar.
+   * cumprido é reagendado; cumprido, tenta disparar.
    */
   #onFillerTimer(): void {
     this.#fillerTimer = null
     const delay = this.#fillerDelay()
     const started = this.#filler.turnStartedAt
-    if (started != null && !this.#filler.toolsRunning) {
+    if (started != null) {
       const remaining = started + delay - this.#now()
       if (remaining > 0) {
-        this.#fillerTimer = setTimeout(() => this.#onFillerTimer(), remaining)
+        this.#fillerTimer = this.#setDelayTimer(() => this.#onFillerTimer(), remaining)
         return
       }
     }
@@ -1425,10 +1477,7 @@ export class VoiceCallManager {
 
   /** Zera o filler do turno (timer/carga em voo); `cancelPlaying` cancela o clipe tocando. */
   #resetFiller(cancelPlaying: boolean): void {
-    if (this.#fillerTimer) {
-      clearTimeout(this.#fillerTimer)
-      this.#fillerTimer = null
-    }
+    this.#clearFillerTimer()
     this.#fillerGen++
     this.#filler = { ...EMPTY_FILLER_STATE }
     const id = this.#fillerUttId
@@ -1436,6 +1485,165 @@ export class VoiceCallManager {
     if (cancelPlaying && id) {
       this.#deps.emitUtteranceCancel(id)
       this.#emitTimeline({ ts: this.#now(), kind: 'clip-cancelled', class: 'FILLER', id })
+    }
+  }
+
+  // ---------------- frase de ferramenta (SPEC → "Frases de ferramenta") ----------------
+
+  /**
+   * A 1ª tool que começa no turno: decide a frase de ferramenta (no máx. 1 por turno — a decisão
+   * vale mesmo quando ela é pulada). Pula (`toolPhraseSkipReason`): desligada, tool sem frase, o
+   * assistente já falou/cortou uma frase da resposta (ele mesmo anunciou), desligamento armado, o
+   * usuário falando, frase curta tocando agora, preâmbulo terminado há < 3 s, outro áudio tocando.
+   * Preâmbulo que ainda não tocou é SUBSTITUÍDO (nenhum preâmbulo neste turno).
+   */
+  #onFirstTool(toolCallId: string): void {
+    if (this.#toolDecided || !this.#turn || !this.#sessionId) return
+    const category = toolPhraseCategory(this.#toolNames.get(toolCallId) ?? '')
+    // tool sem frase (`end_call`, `ask_user`): não conta como "a 1ª tool" — a próxima ainda vale
+    if (!category) return
+    this.#toolDecided = true
+    const phase = this.#machine.phase
+    const now = this.#now()
+    // fim da última frase curta deste turno (preâmbulo ou frase de demora): 3 s de folga
+    const ends = [this.#fillerEndedAt, this.#delay.lastShortEndAt].filter(
+      (t): t is number => t != null
+    )
+    const skip = toolPhraseSkipReason({
+      enabled: this.#resolved().toolPhrases,
+      category,
+      answerStarted: this.#keyText.size > 0 || this.#delay.answerSpoken,
+      hangup: !!this.#hangup,
+      userSpeaking: phase === 'listening' || phase === 'transcribing',
+      shortPlaying: !!this.#fillerUttId || !!this.#delayPlaying || !!this.#toolUttId,
+      preambleEndedAt: ends.length ? Math.max(...ends) : null,
+      playbackActive: this.#playbackActive,
+      now
+    })
+    if (skip) {
+      this.#toolSkip(category, skip)
+      return
+    }
+    // o preâmbulo ainda não tocou: a frase de ferramenta fica no lugar dele (timer/carga descartados)
+    const preamblePending =
+      this.#filler.turnStartedAt != null && this.#filler.enabled && !this.#filler.usedThisTurn
+    this.#clearFillerTimer()
+    this.#fillerGen++
+    this.#filler.usedThisTurn = true
+    if (preamblePending)
+      this.#emitTimeline({
+        ts: now,
+        kind: 'decision',
+        class: 'FILLER',
+        played: false,
+        reason: 'tool-phrase'
+      })
+    void this.#playToolPhrase(category, toolCallId, now)
+  }
+
+  /**
+   * Toca a frase da categoria (sem repetir as últimas): o clipe pré-gerado `TOOL_<n>` (latência
+   * zero); sem clipe, síntese AO VIVO (como as frases de demora — caracteres no custo). Pronta tarde
+   * demais — a tool terminou (só na síntese ao vivo), a resposta começou, o usuário falou… — é
+   * descartada.
+   */
+  async #playToolPhrase(
+    category: NonNullable<ReturnType<typeof toolPhraseCategory>>,
+    toolCallId: string,
+    decidedAt: number
+  ): Promise<void> {
+    const gen = this.#toolGen
+    const pool = resolveToolPhrasePool(this.#deps.settings().defaults.toolPhrases?.pool ?? null)
+    const idx = pickToolPhrase(pool, category, this.#toolRecent, () => this.#rng())
+    if (idx == null) return this.#toolSkip(category, 'no-phrase')
+    const text = pool[idx].text
+    this.#toolRecent = [...this.#toolRecent, idx].slice(-TOOL_PHRASE_RECENT_WINDOW)
+    let r = await safeCall(() => this.#deps.clip('TOOL', idx + 1), Promise.resolve(null)).catch(
+      () => null
+    )
+    if (gen !== this.#toolGen || !this.#sessionId) return
+    let live = false
+    if (!r) {
+      const abort = new AbortController()
+      this.#toolAbort = abort
+      if (this.#meter) this.#meter.tts.chars += text.length
+      try {
+        r = await this.#phraseSynth(text, abort.signal)
+        live = true
+      } catch (e) {
+        if (abort.signal.aborted || gen !== this.#toolGen) return
+        this.#toolSkip(category, `tts-error: ${e instanceof Error ? e.message : String(e)}`, text)
+        return
+      } finally {
+        if (this.#toolAbort === abort) this.#toolAbort = null
+      }
+      if (gen !== this.#toolGen || !this.#sessionId) return
+    }
+    const phase = this.#machine.phase
+    // síntese ao vivo que ficou pronta com a tool já terminada: tarde demais. O clipe (latência
+    // ~zero) toca mesmo com uma tool rápida já de volta — o modelo ainda processa o resultado
+    const why =
+      live && !this.#toolsRunningIds.has(toolCallId)
+        ? 'tool-done'
+        : this.#keyText.size > 0 || this.#delay.answerSpoken
+          ? 'answer-first'
+          : this.#hangup
+            ? 'hangup'
+            : phase === 'listening' || phase === 'transcribing'
+              ? 'user-speaking'
+              : this.#fillerUttId || this.#delayPlaying
+                ? 'clip-playing'
+                : this.#playbackActive
+                  ? 'assistant-audio'
+                  : null
+    if (why) return this.#toolSkip(category, live ? `live/${why}` : why, text)
+    this.#uttSeq++
+    const id = `u${this.#uttSeq}`
+    this.#toolUttId = id
+    this.#playbackActive = true
+    this.#delay.silentSince = null // algo tocando: o silêncio das frases de demora volta no idle
+    this.#deps.emitUtterance({ id, audio: r.audio, mime: r.mime, kind: 'tool' })
+    this.#scheduleDelay()
+    const now = this.#now()
+    this.#emitTimeline({
+      ts: now,
+      kind: 'decision',
+      class: 'TOOL',
+      id,
+      variant: idx + 1,
+      played: true,
+      latencyMs: Math.max(0, now - decidedAt),
+      text: text.slice(0, EVAL_TAIL_MAX_CHARS),
+      reason: live ? `${category}/live` : category
+    })
+    this.#emitTimeline({ ts: now, kind: 'clip-emitted', class: 'TOOL', id, variant: idx + 1 })
+  }
+
+  /**
+   * Frase de ferramenta que NÃO tocou (motivo na timeline — `<categoria>/<motivo>`, ou
+   * `<categoria>/live/<motivo>` quando a síntese ao vivo ficou pronta tarde demais).
+   */
+  #toolSkip(category: string | null, reason: string, text?: string): void {
+    this.#emitTimeline({
+      ts: this.#now(),
+      kind: 'decision',
+      class: 'TOOL',
+      played: false,
+      reason: `${category ?? 'none'}/${reason}`,
+      ...(text ? { text: text.slice(0, EVAL_TAIL_MAX_CHARS) } : {})
+    })
+  }
+
+  /** Descarta a frase de ferramenta em voo; `cancelPlaying` corta a que está tocando (fade). */
+  #resetToolPhrase(cancelPlaying: boolean): void {
+    this.#toolGen++
+    this.#toolAbort?.abort()
+    this.#toolAbort = null
+    const id = this.#toolUttId
+    if (cancelPlaying && id) {
+      this.#toolUttId = null
+      this.#deps.emitUtteranceCancel(id)
+      this.#emitTimeline({ ts: this.#now(), kind: 'clip-cancelled', class: 'TOOL', id })
     }
   }
 
@@ -1798,7 +2006,7 @@ export class VoiceCallManager {
   /** Começa a medição e grava o marcador de início. */
   #beginMeter(sessionId: string): void {
     this.#flushPendingEnd() // marcador de fim de uma chamada anterior ainda adiado: grava antes
-    const { stt, tts } = this.#deps.settings()
+    const { stt, tts } = this.#deps.settings(this.#chatId)
     const callId = this.#deps.newCallId?.() ?? crypto.randomUUID()
     const startedAt = this.#now()
     const sttModel =

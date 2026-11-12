@@ -723,6 +723,7 @@ export default function LiveChatScreen() {
                 onQueueRemove={(qid) => run(() => remote.queueRemove(id, sid, qid))}
                 attach={attach}
                 hostUnavailable={!active}
+                voiceConfig={loaded?.chat.config as Record<string, unknown> | undefined}
               />
             </View>
             {loaded.broken ? (

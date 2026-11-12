@@ -320,6 +320,10 @@ describe('entrar depois: merge do primeiro login (§12)', () => {
       createdAt: 1
     })
     await desk.put('setting', 'defaultSystemPrompt', null, { sv: 1, value: 'do PC' })
+    await desk.put('setting', 'ttsSettings', null, {
+      sv: 1,
+      value: { backend: 'api', api: { providerId: 'prov-pc', model: 'do-pc', voice: null } }
+    })
     await desk.put('chat', 'chat-pc', 'chat-pc', chatPlain('Do PC', 's-pc'))
     await desk.put('session', 's-pc', 'chat-pc', sessionPlain('chat-pc'))
     await desk.put(
@@ -338,6 +342,8 @@ describe('entrar depois: merge do primeiro login (§12)', () => {
     })
     p.settings.setSetting('defaultSystemPrompt', 'do celular')
     p.settings.setSetting('defaultModel', { providerId: pid, model: 'm1' })
+    // settings de voz: locais do aparelho (1.9.0) — remapeadas, nunca enviadas; a do PC é ignorada
+    p.settings.setSetting('sttSettings', { mode: 'api', api: { providerId: pid, model: 'w' } })
     const { chatId } = p.newChat()
     expect(p.store.getPlain('chat', chatId)!.config).toMatchObject({ providerId: pid })
     p.signIn()
@@ -358,6 +364,11 @@ describe('entrar depois: merge do primeiro login (§12)', () => {
     expect(p.store.getPlain('chat', chatId)!.config).toMatchObject({ providerId: 'prov-pc' })
     expect(p.store.setting('defaultModel')).toEqual({ providerId: 'prov-pc', model: 'm1' })
     expect(p.store.setting('defaultSystemPrompt')).toBe('do PC')
+    expect(p.store.deviceSetting('sttSettings')).toEqual({
+      mode: 'api',
+      api: { providerId: 'prov-pc', model: 'w' }
+    })
+    expect(p.store.deviceSetting('ttsSettings')).toBeUndefined()
     expect(
       p.store
         .listChats()
@@ -370,6 +381,8 @@ describe('entrar depois: merge do primeiro login (§12)', () => {
     expect(p.server.records.get('provider|prov-pc')!.rev).toBe(1)
     expect(p.server.records.get(`provider|${pid}`)).toBeUndefined()
     expect(p.server.records.get('setting|defaultSystemPrompt')!.rev).toBe(1)
+    expect(p.server.records.get('setting|sttSettings')).toBeUndefined()
+    expect(p.server.records.get('setting|ttsSettings')!.rev).toBe(1)
     expect((await serverPlain(server, desk, 'setting', 'defaultModel'))!.value).toEqual({
       providerId: 'prov-pc',
       model: 'm1'
@@ -497,7 +510,11 @@ describe('merge: peças puras', () => {
             providerId: 'p1',
             presetId: 'x',
             smartApprove: { providerId: 'p1', capture: { providerId: 'p1' } },
-            voice: { model: { providerId: 'p1' } },
+            voice: {
+              model: { providerId: 'p1' },
+              tts: { backend: 'api', api: { providerId: 'p1', model: 't', voice: null } },
+              stt: { mode: 'api', api: { providerId: 'p1', model: 'w' } }
+            },
             memory: {
               collections: ['c1', 'c9'],
               writeTo: { people: 'c1' },
@@ -512,7 +529,11 @@ describe('merge: peças puras', () => {
         providerId: 'P',
         presetId: 'X',
         smartApprove: { providerId: 'P', capture: { providerId: 'P' } },
-        voice: { model: { providerId: 'P' } },
+        voice: {
+          model: { providerId: 'P' },
+          tts: { backend: 'api', api: { providerId: 'P', model: 't', voice: null } },
+          stt: { mode: 'api', api: { providerId: 'P', model: 'w' } }
+        },
         memory: {
           collections: ['C', 'c9'],
           writeTo: { people: 'C' },

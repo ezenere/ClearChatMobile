@@ -148,6 +148,10 @@ const GROUPS = {
       'skills.ts',
       // fase 6: ditado (ponto de inserção, desfecho, erros de captura) e DSP puro da captura
       'voice/dictation.ts',
+      // voz: rótulos/edição das frases de ferramenta; voz da persona/chat (rótulos, textos dos
+      // ícones esmaecidos, `withoutVoiceChoice` do Novo chat — protocolo 1.9.0)
+      'voice/toolPhrases.ts',
+      'voice/voiceChoice.ts',
       'audio/silence.ts',
       'audio/pcm.ts'
     ]

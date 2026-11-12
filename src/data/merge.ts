@@ -13,7 +13,12 @@
 // Sem React Native (testável no Node com o servidor falso).
 import { SyncApiError, SyncNetworkError } from '@vendor/desktop/sync/http'
 import { openRecord, type Subkeys } from '@/crypto'
-import { RecordState, type LocalStore } from './store'
+import {
+  DEVICE_VOICE_SETTING_IDS,
+  isDeviceVoiceSetting,
+  RecordState,
+  type LocalStore
+} from './store'
 import {
   type Change,
   type ChatState,
@@ -346,7 +351,14 @@ function remapConfig(cfg: Plain, get: Getter): boolean {
     set(cfg.smartApprove, 'providerId', 'provider')
     if (isObj(cfg.smartApprove.capture)) set(cfg.smartApprove.capture, 'providerId', 'provider')
   }
-  if (isObj(cfg.voice) && isObj(cfg.voice.model)) set(cfg.voice.model, 'providerId', 'provider')
+  if (isObj(cfg.voice)) {
+    // modelo da chamada (1.5.0) e a fala/transcrição da persona/chat pela API (1.9.0)
+    if (isObj(cfg.voice.model)) set(cfg.voice.model, 'providerId', 'provider')
+    for (const k of ['tts', 'stt']) {
+      const choice = cfg.voice[k]
+      if (isObj(choice) && isObj(choice.api)) set(choice.api, 'providerId', 'provider')
+    }
+  }
   if (isObj(cfg.memory)) {
     const mem = cfg.memory
     if (isObj(mem.extraction)) set(mem.extraction, 'providerId', 'provider')
@@ -437,6 +449,14 @@ export function applyMerge(
         const next = remapPlain(r.type, r.id, r.plain, get)
         if (next) store.replacePlain(r.type, r.id, next)
       }
+      // settings de voz locais do aparelho (1.9.0): continuam apontando para os provedores daqui
+      // (que o merge deduplicou) — remapeadas, nunca enviadas
+      for (const id of DEVICE_VOICE_SETTING_IDS) {
+        const value = store.deviceSetting(id)
+        if (value === undefined) continue
+        const next = remapPlain('setting', id, { value }, get)
+        if (next) store.setDeviceSetting(id, next.value)
+      }
     }
     // chats com histórias diferentes e prioridade online: a versão local sai antes
     if (priority === 'online')
@@ -457,6 +477,8 @@ export function applyMerge(
       const c = r.change
       // um chat só deste aparelho com o mesmo id do online: a cópia local fica (nunca é unida)
       if (localOnlyOf(store, c.type, c.id, c.scope ?? null)) continue
+      // settings de voz de apps ≤ 1.8.x: locais do aparelho desde 1.9.0 — ignoradas
+      if (c.type === 'setting' && isDeviceVoiceSetting(c.id)) continue
       if (!isRecordType(c.type)) {
         if (!c.deleted && !store.recordMeta(c.type, c.id))
           store.putRecord(c, null, RecordState.Opaque)
@@ -495,6 +517,8 @@ export function applyMerge(
       if (snap.records.has(key(l.type, l.id)) || !MERGE_TYPES.has(l.type)) continue
       // "Só neste aparelho": nunca sobe sozinho (salvar online é opt-in, §12.7)
       if (localOnlyOf(store, l.type, l.id, l.scope)) continue
+      // settings de voz: locais do aparelho desde 1.9.0 (nunca enviadas)
+      if (l.type === 'setting' && isDeviceVoiceSetting(l.id)) continue
       if (l.deleted) {
         store.dropTombstone(l.type, l.id) // apagado aqui e nunca enviado
         continue

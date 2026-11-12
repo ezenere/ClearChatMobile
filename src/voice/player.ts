@@ -1,6 +1,6 @@
 // Fila de reprodução da chamada de voz no celular — o papel do `UtteranceQueue` do renderer do
 // desktop (src/renderer/src/lib/voice/utteranceQueue.ts, Web Audio/`<audio>`): toca as utterances
-// (frases da resposta, preâmbulo, frases de demora) NA ORDEM, sem sobreposição, estados
+// (frases da resposta, preâmbulo, frases de demora e de ferramenta) NA ORDEM, sem sobreposição, estados
 // `idle`/`playing`, `drop(id)`/`cancel()` com fade curto, volume, o **ducking** (`setDuck` — o
 // usuário fala por cima: a voz do assistente abaixa numa rampa e continua tocando) e a posição da
 // frase tocando (`currentPosition` — o "ouvido" em palavras do barge-in e a leitura ao vivo). O
@@ -15,8 +15,8 @@ export interface Utterance {
   id: string
   audio: Uint8Array
   mime: string
-  /** Origem (ausente = 'sentence'). */
-  kind?: 'sentence' | 'filler' | 'delay'
+  /** Origem (ausente = 'sentence'): frase da resposta, preâmbulo, frase de demora ou de ferramenta. */
+  kind?: 'sentence' | 'filler' | 'delay' | 'tool'
   /** Sentença da resposta: o texto dela (a leitura ao vivo esmaece o que ainda não tocou). */
   text?: string
 }

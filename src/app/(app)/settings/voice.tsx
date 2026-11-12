@@ -11,8 +11,10 @@ import {
   BARGE_IN_RANGES,
   DEFAULT_BARGE_IN,
   DEFAULT_DELAY_PHRASES,
-  DEFAULT_VOICE_BASE_PROMPT,
+  DEFAULT_FILLER_DELAY_MS,
+  FILLER_DELAY_MS_RANGE,
   resolveBargeIn,
+  voicePromptLayout,
   type AudioInputSettings,
   type SttSettings,
   type TtsSettings,
@@ -26,11 +28,14 @@ import { describeError } from '@/account/errors'
 import { store } from '@/data/native'
 import { ModelField } from '@/settings/ModelPicker'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
-import { FieldLabel, Multiline, Note, NumberField, Segmented, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, Note, NumberField, Segmented, SettingsScreen } from '@/settings/ui'
 import { AudioTagsField } from '@/settings/AudioTagsField'
 import { MicActivationLevel } from '@/settings/MicActivationLevel'
+import { ToolPhrasesSettings } from '@/settings/ToolPhrasesSettings'
+import { VoicePromptPreview } from '@/settings/VoicePromptPreview'
 import {
   CatalogField,
+  DICTATION_LANGUAGES,
   VoiceParamsEditor,
   VoiceProviderField,
   useVoiceCatalog
@@ -61,19 +66,9 @@ import {
 import { useCallView } from '@/voice/react'
 import { synthesizeBlock } from '@vendor/desktop/voice/tts'
 
-const LANGUAGES = [
-  { id: 'pt-BR', name: 'Português (Brasil)' },
-  { id: 'pt-PT', name: 'Português (Portugal)' },
-  { id: 'en-US', name: 'Inglês' },
-  { id: 'es-ES', name: 'Espanhol' },
-  { id: 'fr-FR', name: 'Francês' },
-  { id: 'de-DE', name: 'Alemão' },
-  { id: 'it-IT', name: 'Italiano' }
-]
-
 function read() {
   return {
-    ...readVoiceSettings((id) => store.setting(id)),
+    ...readVoiceSettings((id) => store.deviceSetting(id), { activationDb: activationDb() }),
     providers: settings.providers()
   }
 }
@@ -89,7 +84,7 @@ export default function VoiceSettings() {
   const [testing, setTesting] = useState(false)
 
   const save = (id: string, value: unknown) =>
-    settings.setSetting(id, audioSettingOut(id, value, store.setting(id)))
+    settings.setSetting(id, audioSettingOut(id, value, store.deviceSetting(id)))
   const setInput = (p: Partial<AudioInputSettings>) => save('audioInput', { ...v.audioInput, ...p })
   const setStt = (p: Partial<SttSettings>) => save('sttSettings', { ...v.stt, ...p })
   const setTts = (p: Partial<TtsSettings>) => save('ttsSettings', { ...v.tts, ...p })
@@ -147,10 +142,12 @@ export default function VoiceSettings() {
 
   return (
     <SettingsScreen title="Voz" testID="screen-voice">
-      <Note>
-        Ditado no composer e chamada de voz nos chats executados neste celular. Sincroniza com o
-        computador, menos o que é deste aparelho (microfone, motores locais e GPU).
-      </Note>
+      <Banner tone="info" testID="voice-device-note">
+        Padrões deste aparelho (não sincronizam) — cada persona pode ter a própria voz e transcrição
+        (Configurações → Personas → aba Voz). Uma voz de persona que não existe aqui (provedor
+        ausente, motor local ou GPU do computador) usa a padrão deste aparelho.
+      </Banner>
+      <Note>Ditado no composer e chamada de voz nos chats executados neste celular.</Note>
 
       {/* ---------------- ditado ---------------- */}
       <FieldLabel>Ditado</FieldLabel>
@@ -159,7 +156,7 @@ export default function VoiceSettings() {
           title="Idioma"
           icon="language-outline"
           value={v.audioInput.language}
-          items={LANGUAGES}
+          items={DICTATION_LANGUAGES}
           onChange={(language) => setInput({ language })}
           emptyLabel="Detectar automaticamente"
           allowEmpty
@@ -416,23 +413,24 @@ export default function VoiceSettings() {
           onChange={(endCall) => setCall({ endCall })}
           testID="voice-call-endcall"
         />
-        <ToggleRow
-          title="Prompt-base do modo voz"
-          value={d.basePromptEnabled}
-          onChange={(basePromptEnabled) => setCall({ basePromptEnabled })}
-          testID="voice-call-baseprompt"
-        />
       </Card>
-      {d.basePromptEnabled ? (
-        <Multiline
-          value={d.basePrompt ?? DEFAULT_VOICE_BASE_PROMPT}
-          onChangeText={(t) =>
-            setCall({ basePrompt: t.trim() && t !== DEFAULT_VOICE_BASE_PROMPT ? t : null })
-          }
-          minHeight={120}
-          testID="voice-call-baseprompt-text"
-        />
-      ) : null}
+      {/* transparência: o que uma chamada sem prompt próprio na persona/chat muda no prompt */}
+      <VoicePromptPreview
+        layout={voicePromptLayout({
+          voicePrompt: null,
+          promptMode: 'append',
+          audioTags: d.audioTags,
+          audioTagsPrompt: d.audioTagsPrompt ?? DEFAULT_AUDIO_TAGS_PROMPT,
+          audioTagsActive: true
+        })}
+        voiceFrom={null}
+        tagsFrom="padrão deste aparelho"
+      />
+      <Note>
+        O app não acrescenta prompt próprio na chamada: o único texto a mais é o “Prompt do modo
+        voz” de cada persona/chat (aba Voz — vazio por padrão, com “Usar sugestão”) e, com as tags
+        de voz ligadas, a instrução delas.
+      </Note>
       <Text style={st.sub}>Modelo da chamada</Text>
       <ModelField
         providers={v.providers}
@@ -451,20 +449,29 @@ export default function VoiceSettings() {
       <Card>
         <ToggleRow
           title="Preâmbulos"
-          subtitle="Uma frase curta (“Hum, deixa eu ver.”) logo depois da sua fala, enquanto a resposta vem."
+          subtitle="“Hum, deixa eu ver.” — só quando a resposta DEMORA (a espera abaixo); com uma ferramenta, a frase de ferramenta fica no lugar dele."
           value={d.fillers.enabled}
           onChange={(enabled) => setCall({ fillers: { ...d.fillers, enabled } })}
           testID="voice-call-fillers"
         />
         {d.fillers.enabled ? (
-          <NumberField
-            label="Espera do preâmbulo"
-            value={d.fillers.delayMs}
-            onChange={(n) => setCall({ fillers: { ...d.fillers, delayMs: n ?? 250 } })}
-            min={0}
-            max={5000}
-            suffix="ms"
-          />
+          <>
+            <NumberField
+              label="Espera do preâmbulo"
+              value={d.fillers.delayMs}
+              onChange={(n) =>
+                setCall({ fillers: { ...d.fillers, delayMs: n ?? DEFAULT_FILLER_DELAY_MS } })
+              }
+              min={FILLER_DELAY_MS_RANGE.min}
+              max={FILLER_DELAY_MS_RANGE.max}
+              suffix="ms"
+              placeholder={String(DEFAULT_FILLER_DELAY_MS)}
+              testID="voice-call-filler-delay"
+            />
+            <Text style={st.hint} testID="voice-call-filler-delay-help">
+              {`Falar “deixa eu ver…” só se a resposta demorar mais que isto depois da sua fala: se a 1ª frase da resposta (ou a frase de ferramenta) sair antes, o preâmbulo nem toca. 0 = sempre, logo depois da sua fala. Padrão ${String(DEFAULT_FILLER_DELAY_MS / 1000).replace('.', ',')} s.`}
+            </Text>
+          </>
         ) : null}
         <ToggleRow
           title="Frases de demora"
@@ -517,8 +524,24 @@ export default function VoiceSettings() {
           {`“Manter viva” (padrão ${DEFAULT_DELAY_PHRASES.keepAliveAfterMs / 1000} s de silêncio esperando a resposta; no máximo 2 por turno, ${KEEPALIVE_COOLDOWN_MS / 1000} s entre o fim de uma e o início da outra) e desculpa (padrão ${DEFAULT_DELAY_PHRASES.apologyAfterMs / 1000} s desde a sua fala — só para demoras longas; a resposta nunca espera por ela). Espaçadas: sempre pelo menos ${DELAY_MIN_GAP_MS / 1000} s de silêncio entre o fim de uma frase curta (preâmbulo, “manter viva”, desculpa) e a próxima.`}
         </Note>
       ) : null}
+      <Text style={st.sub}>Frases de ferramenta</Text>
+      <ToolPhrasesSettings
+        value={d.toolPhrases}
+        onChange={(toolPhrases) => setCall({ toolPhrases })}
+      />
       <Text style={st.sub}>Falar por cima da resposta</Text>
       <Card>
+        <NumberField
+          label="Abaixar a voz depois de"
+          value={bargeIn.onsetMs}
+          onChange={(n) =>
+            setCall({ turn: { ...turn, duckOnsetMs: n ?? DEFAULT_BARGE_IN.onsetMs } })
+          }
+          min={BARGE_IN_RANGES.onsetMs.min}
+          max={BARGE_IN_RANGES.onsetMs.max}
+          suffix="ms"
+          testID="voice-call-duck-onset"
+        />
         <NumberField
           label="Volume ao falar por cima"
           value={Math.round(bargeIn.duckGain * 100)}
@@ -569,7 +592,7 @@ export default function VoiceSettings() {
         />
       </Card>
       <Note>
-        {`Falar enquanto o assistente responde não para a resposta na hora: a voz dele ABAIXA para o volume acima (e continua) — uma tosse, um “uhum” ou um barulho não interrompem nada; o volume volta depois do silêncio acima e o som curto é descartado. Se você insistir (o tempo com voz acima, ${DEFAULT_BARGE_IN.words}+ palavras reais na transcrição ao vivo ou um pedido curto como “para”, “espera”, “chega”), ele para e a sua fala vira o próximo turno — no histórico fica só o que você ouviu. Neste celular vale com “Falar por cima da resposta” ligado em Neste aparelho (use fone); sem ele, use o botão Interromper.`}
+        {`Falar enquanto o assistente responde não para a resposta na hora: depois de “Abaixar a voz depois de” de voz SEGUIDA por cima (um clique, uma tosse curta ou um barulho isolado nunca abaixam nada), a voz dele ABAIXA para o volume acima e continua; o volume volta depois do silêncio acima e o som curto é descartado. Se você insistir (o tempo com voz acima desde o começo da fala por cima, ${DEFAULT_BARGE_IN.words}+ palavras reais na transcrição ao vivo ou um pedido curto como “para”, “espera”, “chega” — sempre depois de a voz ter abaixado), ele para e a sua fala vira o próximo turno — no histórico fica só o que você ouviu. Neste celular vale com “Falar por cima da resposta” ligado em Neste aparelho (use fone); sem ele, use o botão Interromper.`}
       </Note>
       <AudioTagsField
         global
@@ -663,7 +686,7 @@ export default function VoiceSettings() {
         title={
           callView.clips.state === 'generating'
             ? `Gerando clipes… ${callView.clips.done ?? 0}/${callView.clips.total ?? 0}`
-            : 'Gerar clipes dos preâmbulos'
+            : 'Gerar clipes (preâmbulos e frases de ferramenta)'
         }
         icon="musical-notes-outline"
         variant="secondary"
@@ -677,9 +700,11 @@ export default function VoiceSettings() {
         testID="voice-gen-clips"
       />
       <Note>
-        Os clipes (os preâmbulos — “Hum, deixa eu ver aqui.”) são gerados com a voz atual e ficam só
-        neste aparelho. Ao trocar a voz ou as frases, gere de novo — sem clipes, os preâmbulos não
-        tocam.
+        Os clipes (os preâmbulos — “Hum, deixa eu ver aqui.” — e as frases de ferramenta) são
+        gerados com a voz padrão deste aparelho e ficam só aqui; a voz de uma persona tem os clipes
+        dela (“Gerar clipes desta voz” na aba Voz da persona). Ao trocar a voz ou as frases, gere de
+        novo — sem clipes, os preâmbulos não tocam e as frases de ferramenta são sintetizadas na
+        hora.
       </Note>
     </SettingsScreen>
   )
@@ -687,5 +712,6 @@ export default function VoiceSettings() {
 
 const st = StyleSheet.create({
   pad: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
-  sub: { color: colors.muted, fontSize: 13, marginBottom: -4 }
+  sub: { color: colors.muted, fontSize: 13, marginBottom: -4 },
+  hint: { color: colors.faint, fontSize: 11.5, lineHeight: 15, marginTop: -2, marginBottom: 4 }
 })

@@ -13,15 +13,19 @@ import {
   DEFAULT_FILLER_DELAY_MS,
   type BargeInConfig,
   type FillerContext,
-  type FillerPhrase
+  type FillerPhrase,
+  type ToolPhrase,
+  type ToolPhraseCategory
 } from './voice'
 import { isBackchannelText, isCommandLike, isQuestionLike } from './voiceTurn'
+import { filterSilenceHallucination } from './speechGate'
 
 // ---------------- constantes de tempo ----------------
 
 /**
- * Espera padrão entre o turno enviado e o preâmbulo (ms): se a 1ª frase da resposta ficar pronta
- * antes disso, o preâmbulo nem sai (configurável em `voiceCallDefaults.fillers.delayMs`).
+ * Espera padrão entre o turno enviado e o preâmbulo (ms — 2500): o preâmbulo só sai quando a
+ * resposta demora; se a 1ª frase da resposta ficar pronta antes disso, ele nem sai (configurável em
+ * `voiceCallDefaults.fillers.delayMs`).
  */
 export const FILLER_DELAY_MS = DEFAULT_FILLER_DELAY_MS
 
@@ -49,7 +53,10 @@ export const EVAL_TAIL_MAX_CHARS = 80
 export interface FillerState {
   /** Momento em que o turno do usuário foi disparado (ms); null = sem turno em andamento. */
   turnStartedAt: number | null
-  /** Há tools em execução no turno (o espera costuma ser longa → filler já). */
+  /**
+   * Há tools em execução no turno — só informativo (o rótulo da decisão): a tool tem a frase de
+   * ferramenta, que SUBSTITUI o preâmbulo; tool rodando NÃO antecipa o preâmbulo (2026-11-12).
+   */
   toolsRunning: boolean
   /** O agente já falou algo neste turno (1ª utterance de sentença emitida). */
   spokenThisTurn: boolean
@@ -72,10 +79,13 @@ export const EMPTY_FILLER_STATE: FillerState = {
 }
 
 /**
- * O filler (preâmbulo) deste turno deve tocar AGORA? Regra v2 (por regra, sem classificador):
- * - no máximo 1 por turno (`usedThisTurn`) e NUNCA depois de a 1ª frase da resposta ficar pronta
+ * O filler (preâmbulo) deste turno deve tocar AGORA? Regra v3 (2026-11-12 — "só quando a resposta
+ * demora de verdade"):
+ * - no máximo 1 por turno (`usedThisTurn` — também marcado quando a frase de ferramenta ou uma
+ *   frase de demora tocou no lugar) e NUNCA depois de a 1ª frase da resposta ficar pronta
  *   (`spokenThisTurn`) — resposta rápida dispensa o preâmbulo;
- * - com tools em execução, dispara já; senão após `delayMs` (0 = já; inválido/negativo → o padrão);
+ * - só depois de `delayMs` do turno enviado (padrão 2500; 0 = já; inválido/negativo → o padrão) —
+ *   tool em execução NÃO antecipa (a frase de ferramenta cobre a tool);
  * - só com resposta em voo e filler habilitado.
  */
 export function fillerShouldFire(
@@ -85,7 +95,6 @@ export function fillerShouldFire(
 ): boolean {
   if (!s.enabled || s.usedThisTurn || s.spokenThisTurn || !s.responseInFlight) return false
   if (s.turnStartedAt == null) return false
-  if (s.toolsRunning) return true
   const wait = Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : FILLER_DELAY_MS
   return now - s.turnStartedAt >= wait
 }
@@ -226,6 +235,127 @@ export class VoicedSpan {
   }
 }
 
+// ---------------- frases de ferramenta (SPEC → "Frases de ferramenta") ----------------
+
+/**
+ * Preâmbulo que já tocou: a frase de ferramenta só sai se ele terminou há pelo menos isto (ms) —
+ * senão as duas emendariam ("Hum, deixa eu ver." + "Vou pesquisar isso.").
+ */
+export const TOOL_PHRASE_AFTER_PREAMBLE_MS = 3000
+/** A frase de ferramenta não repete nenhuma das últimas N usadas. */
+export const TOOL_PHRASE_RECENT_WINDOW = 3
+
+/** Tools sem frase (a própria tool já é a fala/interação: despedida, pergunta na tela). */
+const TOOLS_WITHOUT_PHRASE = new Set(['end_call', 'ask_user'])
+
+/**
+ * Categoria da frase de uma tool (null = tool sem frase — `end_call`, `ask_user`). Tools do celular
+ * (`get_location`, `nearby_places`) caem em `location`; desconhecidas, em `generic`.
+ */
+export function toolPhraseCategory(toolName: string): ToolPhraseCategory | null {
+  const n = String(toolName ?? '').trim()
+  if (TOOLS_WITHOUT_PHRASE.has(n)) return null
+  if (n === 'web_search' || n === 'browse_url') return 'web'
+  if (
+    /^(list_dir|read_file|search_files|find_files|present_file|write_file|edit_file)$/.test(n) ||
+    /^fs_/.test(n)
+  )
+    return 'files'
+  if (n === 'shell' || /^process_/.test(n)) return 'shell'
+  if (/^memory_/.test(n)) return 'memory'
+  if (
+    /^(delegate_task|send_to_chat|check_subagents|wait_subagents|cancel_subagent|message_subagent)$/.test(
+      n
+    )
+  )
+    return 'agents'
+  if (
+    /^(list_models|get_chat_info|list_chats|read_history|list_skills|skill_load|skill_read)$/.test(
+      n
+    )
+  )
+    return 'info'
+  if (n === 'get_location' || n === 'nearby_places') return 'location'
+  return 'generic'
+}
+
+/**
+ * Escolhe a frase (índice no pool) para a categoria: as da categoria fora das últimas
+ * `TOOL_PHRASE_RECENT_WINDOW`; sem candidata → as genéricas fora das recentes → qualquer da
+ * categoria (a usada há mais tempo) → qualquer genérica. Sorteio via `rng` (1 chamada). null = nada.
+ */
+export function pickToolPhrase(
+  pool: readonly ToolPhrase[],
+  category: ToolPhraseCategory,
+  recent: readonly number[],
+  rng: () => number = Math.random
+): number | null {
+  if (!pool.length) return null
+  const window = recent.slice(-TOOL_PHRASE_RECENT_WINDOW)
+  const of = (c: ToolPhraseCategory): number[] =>
+    pool
+      .map((_, i) => i)
+      .filter((i) => (pool[i].categories.length ? pool[i].categories : ['generic']).includes(c))
+  const fresh = (xs: number[]): number[] => xs.filter((i) => !window.includes(i))
+  let cands = fresh(of(category))
+  if (!cands.length && category !== 'generic') cands = fresh(of('generic'))
+  if (!cands.length) {
+    const fallback = of(category).length ? of(category) : of('generic')
+    if (!fallback.length) return null
+    return fallback.reduce((best, i) => (window.indexOf(i) < window.indexOf(best) ? i : best))
+  }
+  let r = typeof rng === 'function' ? Number(rng()) : NaN
+  if (!Number.isFinite(r)) r = Math.random()
+  const k = Math.min(
+    cands.length - 1,
+    Math.floor(Math.min(Math.max(r, 0), 0.999999999) * cands.length)
+  )
+  return cands[k]
+}
+
+/** Por que a frase de ferramenta NÃO sai (null = sai). */
+export type ToolPhraseSkip =
+  | 'disabled'
+  | 'no-phrase'
+  | 'announced'
+  | 'hangup'
+  | 'user-speaking'
+  | 'clip-playing'
+  | 'after-preamble'
+  | 'assistant-audio'
+
+/**
+ * Regras da frase da 1ª tool do turno (a função é pura; quem chama garante "só a 1ª"): desligada;
+ * tool sem frase; o assistente já falou/cortou uma frase da resposta neste turno (ele mesmo anunciou
+ * a tool); desligamento armado; o usuário falando; uma frase curta tocando agora; o preâmbulo
+ * terminou há menos de `TOOL_PHRASE_AFTER_PREAMBLE_MS`; outro áudio do assistente tocando.
+ */
+export function toolPhraseSkipReason(input: {
+  enabled: boolean
+  category: ToolPhraseCategory | null
+  answerStarted: boolean
+  hangup: boolean
+  userSpeaking: boolean
+  shortPlaying: boolean
+  preambleEndedAt: number | null
+  playbackActive: boolean
+  now: number
+}): ToolPhraseSkip | null {
+  if (!input.enabled) return 'disabled'
+  if (!input.category) return 'no-phrase'
+  if (input.answerStarted) return 'announced'
+  if (input.hangup) return 'hangup'
+  if (input.userSpeaking) return 'user-speaking'
+  if (input.shortPlaying) return 'clip-playing'
+  if (
+    input.preambleEndedAt != null &&
+    input.now - input.preambleEndedAt < TOOL_PHRASE_AFTER_PREAMBLE_MS
+  )
+    return 'after-preamble'
+  if (input.playbackActive) return 'assistant-audio'
+  return null
+}
+
 // ---------------- frases de demora (sintetizadas ao vivo — SPEC → "Frases de demora") ----------------
 
 /** No máximo N frases "manter viva" por turno. */
@@ -363,8 +493,19 @@ export function pickDelayPhrase(
 /** Por que a fala por cima da resposta virou barge-in. */
 export type BargeInReason = 'voiced' | 'words' | 'stop-word'
 
-/** Resultado de um quadro/texto durante o ducking. */
-export type DuckEvent = 'pending' | 'barge-in' | 'restore'
+/**
+ * Resultado de um quadro/texto durante a fala por cima: `'duck'` (uma vez — a voz sustentada passou
+ * do onset: o chamador ABAIXA o volume), `'barge-in'`, `'restore'` (o episódio fechou sem
+ * confirmar — volume de volta se tinha abaixado) ou `'pending'`.
+ */
+export type DuckEvent = 'pending' | 'duck' | 'barge-in' | 'restore'
+
+/**
+ * Lacuna máxima (ms) DENTRO de uma sequência de voz para o onset do ducking: pausas curtas entre
+ * sílabas/palavras não zeram a contagem; um silêncio maior que isto zera (rajadas separadas de
+ * ruído não se somam).
+ */
+export const DUCK_ONSET_GAP_MS = 120
 
 const foldWords = (text: string): string[] =>
   foldText(String(text ?? ''))
@@ -407,18 +548,28 @@ export function countRealWords(text: string): number {
 }
 
 /**
- * Fala do usuário DURANTE a reprodução do assistente, com histerese ("ducking"): ao começar, o
- * chamador ABAIXA o áudio do assistente para `duckGain` (ele continua tocando); o usuário que
- * insiste — `voicedMs` de voz no episódio, ou `words` palavras reais / uma ordem de parada na
- * transcrição parcial (`transcript`) — vira **barge-in** (o chamador para a resposta; a fala segue
- * como o próximo turno); o que para antes (tosse, "uhum", ruído, palavra curta) devolve o volume
- * depois de `restoreMs` de silêncio e o som é descartado (nenhum turno). Classe pura — `useVoiceCall`
- * alimenta com os quadros RMS e executa as ações (o mobile, com o player dele).
+ * Fala do usuário DURANTE a reprodução do assistente, com histerese em DOIS degraus (2026-11-12):
+ * 1. **onset** — o volume só ABAIXA (`'duck'`, para `duckGain`; ele continua tocando) depois de
+ *    `onsetMs` de voz SUSTENTADA acima do nível de ativação: lacunas ≤ `DUCK_ONSET_GAP_MS` dentro da
+ *    sequência são toleradas, um silêncio maior zera a contagem — clique, pancada, tosse curta e
+ *    ruído isolado nunca abaixam nada;
+ * 2. **barge-in** — já abaixado, o usuário que insiste (`voicedMs` de voz no episódio, contados
+ *    desde o início dele, ou `words` palavras reais / uma ordem de parada na transcrição parcial
+ *    — `transcript`, que descarta alucinações do STT pelo filtro do portão de fala) para a
+ *    resposta; a fala segue como o próximo turno. Nada disso vale antes do onset.
+ * O que para antes (silêncio contínuo de `restoreMs`) fecha o episódio (`'restore'`: o volume volta
+ * se tinha abaixado e o som é descartado — nenhum turno). Classe pura — `useVoiceCall` alimenta com
+ * os quadros RMS e executa as ações (o mobile, com o player dele).
  */
 export class PlaybackDuck {
-  readonly cfg: BargeInConfig
+  readonly cfg: Required<BargeInConfig>
   #open = false
+  #ducked = false
+  /** Voz no episódio (ms) — o barge-in conta daqui. */
   #voiced = 0
+  /** Voz da sequência atual (ms) — o onset conta daqui. */
+  #run = 0
+  /** Silêncio desde o último quadro com voz (ms). */
   #quiet = 0
   #reason: BargeInReason | null = null
 
@@ -429,13 +580,19 @@ export class PlaybackDuck {
       duckGain: Math.min(1, ok(cfg.duckGain, DEFAULT_BARGE_IN.duckGain)),
       voicedMs: ok(cfg.voicedMs, DEFAULT_BARGE_IN.voicedMs) || DEFAULT_BARGE_IN.voicedMs,
       words: Math.max(1, Math.round(ok(cfg.words, DEFAULT_BARGE_IN.words))),
-      restoreMs: ok(cfg.restoreMs, DEFAULT_BARGE_IN.restoreMs) || DEFAULT_BARGE_IN.restoreMs
+      restoreMs: ok(cfg.restoreMs, DEFAULT_BARGE_IN.restoreMs) || DEFAULT_BARGE_IN.restoreMs,
+      onsetMs: ok(cfg.onsetMs, DEFAULT_BARGE_IN.onsetMs)
     }
   }
 
-  /** Há uma fala por cima em avaliação (áudio do assistente abaixado). */
+  /** Há uma fala por cima em avaliação (o volume pode ainda não ter abaixado — ver `ducked`). */
   get open(): boolean {
     return this.#open
+  }
+
+  /** O volume do assistente foi abaixado neste episódio (a voz passou do onset). */
+  get ducked(): boolean {
+    return this.#ducked
   }
 
   /** Voz detectada no episódio (ms de quadros acima do limiar). */
@@ -448,13 +605,18 @@ export class PlaybackDuck {
     return this.#reason
   }
 
-  /** Abre o episódio (o quadro do início da fala já conta) — o chamador abaixa o volume. */
-  start(rms: number, frameMs: number, threshold: number): void {
+  /**
+   * Abre o episódio (o quadro do início da fala já conta) SEM abaixar o volume — devolve o evento
+   * do quadro (`'duck'` só com onset ≤ um quadro).
+   */
+  start(rms: number, frameMs: number, threshold: number): DuckEvent {
     this.#open = true
+    this.#ducked = false
     this.#voiced = 0
+    this.#run = 0
     this.#quiet = 0
     this.#reason = null
-    this.frame(rms, frameMs, threshold)
+    return this.frame(rms, frameMs, threshold)
   }
 
   #commit(reason: BargeInReason): DuckEvent {
@@ -465,16 +627,25 @@ export class PlaybackDuck {
   }
 
   /**
-   * Quadro durante o episódio: `'barge-in'` (uma vez) quando a voz passa de `voicedMs`;
-   * `'restore'` quando o silêncio contínuo chega a `restoreMs` (o episódio fecha — volume de volta,
-   * som descartado); senão `'pending'`. Fechado → sempre `'pending'`.
+   * Quadro durante o episódio: `'duck'` (uma vez) quando a sequência de voz chega ao onset;
+   * `'barge-in'` (uma vez, só depois do onset) quando a voz do episódio passa de `voicedMs`;
+   * `'restore'` quando o silêncio contínuo chega a `restoreMs` (o episódio fecha); senão
+   * `'pending'`. Fechado → sempre `'pending'`.
    */
   frame(rms: number, frameMs: number, threshold: number): DuckEvent {
     if (!this.#open) return 'pending'
     const dt = Number.isFinite(frameMs) && frameMs > 0 ? frameMs : 0
     if (rms >= threshold) {
-      this.#voiced += dt
+      // pausa maior que a lacuna tolerada: a sequência recomeça (rajadas não se somam)
+      if (this.#quiet > DUCK_ONSET_GAP_MS) this.#run = 0
       this.#quiet = 0
+      this.#voiced += dt
+      this.#run += dt
+      if (!this.#ducked) {
+        if (this.#run < this.cfg.onsetMs) return 'pending'
+        this.#ducked = true
+        return 'duck'
+      }
       if (this.#voiced >= this.cfg.voicedMs) return this.#commit('voiced')
       return 'pending'
     }
@@ -487,20 +658,26 @@ export class PlaybackDuck {
   }
 
   /**
-   * Transcrição parcial/especulativa da fala do episódio: ordem de parada → barge-in já
-   * (`'stop-word'`); `words` palavras reais → barge-in (`'words'`). Fechado → `'pending'`.
+   * Transcrição parcial/especulativa da fala do episódio — só depois do onset (antes, nem uma
+   * palavra de ruído transcrita interrompe): alucinação conhecida do STT para a voz medida
+   * (`filterSilenceHallucination`) não conta; ordem de parada → barge-in já (`'stop-word'`);
+   * `words` palavras reais → barge-in (`'words'`). Fechado/não abaixado → `'pending'`.
    */
   transcript(text: string): DuckEvent {
-    if (!this.#open) return 'pending'
-    if (isStopCommand(text)) return this.#commit('stop-word')
-    if (countRealWords(text) >= this.cfg.words) return this.#commit('words')
+    if (!this.#open || !this.#ducked) return 'pending'
+    const real = filterSilenceHallucination(text, { voicedMs: this.#voiced, finalIsland: true })
+    if (!real.trim()) return 'pending'
+    if (isStopCommand(real)) return this.#commit('stop-word')
+    if (countRealWords(real) >= this.cfg.words) return this.#commit('words')
     return 'pending'
   }
 
   /** Fecha o episódio sem classificar (mudo/parada da chamada/fim do turno). */
   reset(): void {
     this.#open = false
+    this.#ducked = false
     this.#voiced = 0
+    this.#run = 0
     this.#quiet = 0
     this.#reason = null
   }

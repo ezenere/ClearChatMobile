@@ -6,8 +6,8 @@
 // (a mesma regra do portão do STT: nível de ativação deste aparelho + piso de ruído adaptativo), fim
 // de turno ADAPTATIVO (`AdaptiveTurnGate` + transcrição especulativa na pausa +
 // `classifyUtteranceEnd`), uma sessão de transcrição por fala, a fila de reprodução e a fala por
-// cima da resposta com histerese (`PlaybackDuck`): a voz do assistente ABAIXA (rampa de ganho no
-// player) e continua; quem insiste (voz/palavras/"para") vira barge-in — o histórico fica só com as
+// cima da resposta com histerese (`PlaybackDuck`): depois de voz sustentada (onset) a voz do
+// assistente ABAIXA (rampa de ganho no player) e continua; quem insiste (voz/palavras/"para") vira barge-in — o histórico fica só com as
 // palavras OUVIDAS (posição do player); o que para antes (tosse, "uhum") devolve o volume e é
 // descartado. Meia-duplex: nada do assistente toca durante a fala do usuário.
 //
@@ -28,7 +28,8 @@ import {
   type ResolvedVoiceCall,
   type TurnTiming,
   type VoiceCallConfig,
-  type VoiceCallState
+  type VoiceCallState,
+  type VoiceTtsChoice
 } from '@shared/voice'
 import { DUCK_FADE_MS, PlaybackDuck, VoicedSpan, type BargeInReason } from '@shared/voicePolicy'
 import { AdaptiveTurnGate, classifyUtteranceEnd, type UtteranceEnd } from '@shared/voiceTurn'
@@ -39,8 +40,22 @@ import { captureErrorText } from '@vendor/renderer/voice/dictation'
 import { VoiceCallManager, type VoiceCallAmend } from '@vendor/desktop/voice/call'
 import { classifyVoiceError, voiceProviderLabel } from '@vendor/desktop/voice/callErrors'
 import { synthesizeBlock } from '@vendor/desktop/voice/tts'
-import { clipsStatus, generateClips, loadCurrentClipAudio, type ClipStore } from './clips'
+import {
+  clipsStatus,
+  generateClips,
+  loadCurrentClipAudio,
+  type ClipClass,
+  type ClipStore
+} from './clips'
 import { readVoiceSettings, resolveStt, resolveTts, type VoiceSettings } from './endpoints'
+import {
+  callRefusal,
+  resolveChatVoice,
+  settingsWith,
+  voiceLayers,
+  voiceUse,
+  type VoiceUse
+} from './resolve'
 import { VoiceFollow } from './follow'
 import { FRAME_MS, pcmBytes, type MicFrame, type MicSource } from './mic'
 import { UtteranceQueue, type PlaybackBackend } from './player'
@@ -126,7 +141,16 @@ export interface CallView {
   /** Erro da chamada atual ou o motivo do fim (fica até a próxima chamada). */
   error: string | null
   volume: number
-  clips: { state: 'unknown' | 'ok' | 'missing' | 'generating'; done?: number; total?: number }
+  /**
+   * Clipes da voz da chamada (preâmbulos e frases de ferramenta): `missing` lista as classes sem
+   * clipe — preâmbulos sem clipe ficam mudos; frases de ferramenta sem clipe saem ao vivo.
+   */
+  clips: {
+    state: 'unknown' | 'ok' | 'missing' | 'generating'
+    done?: number
+    total?: number
+    missing?: ClipClass[]
+  }
   /** Reprodução em curso (o botão "Interromper" aparece). */
   playing: boolean
   /** Microfone surdo agora (meia-duplex enquanto o assistente fala). */
@@ -149,7 +173,11 @@ const INITIAL: CallView = {
   timeline: []
 }
 
-/** Pré-checagem da chamada (pt-BR): o que falta para ligar neste chat. null = pronto. */
+/**
+ * Pré-checagem da chamada (pt-BR): o que falta para ligar neste chat. null = pronto. A voz é a da
+ * persona/chat resolvida AQUI (`resolveChatVoice`: escolha disponível, ou a padrão deste aparelho);
+ * nenhuma funcionando → "Chamada de voz indisponível neste dispositivo — Transcrição: …. Fala: …."
+ */
 export function callReadiness(
   chat: Chat,
   settings: VoiceSettings,
@@ -166,9 +194,14 @@ export function callReadiness(
       reason: 'A chamada de voz está desligada para este chat (persona/Configurações → Voz).',
       desktopOnly: false
     }
-  const stt = resolveStt(settings.stt, provider)
+  const r = resolveChatVoice(voiceLayers(chat.config.voice, persona), settings, provider)
+  const refusal = callRefusal(r)
+  if (refusal) return { reason: refusal, desktopOnly: false }
+  // o que a chamada vai usar com o endereço/chave do provedor (blocos legíveis do celular)
+  const eff = settingsWith(settings, voiceUse(r))
+  const stt = resolveStt(eff.stt, provider)
   if ('block' in stt) return stt.block
-  const tts = resolveTts(settings.tts, provider)
+  const tts = resolveTts(eff.tts, provider)
   if ('block' in tts) return tts.block
   return null
 }
@@ -231,6 +264,8 @@ export class VoiceCallController {
         this.d.log?.(
           `voice-eval filler#${e.variant} ${e.played ? 'tocou' : 'não tocou'} ${e.reason} (${e.latencyMs} ms)`
         ),
+      // clipes da voz EFETIVA da chamada (a da persona/chat quando vale aqui) — sem clipe: o
+      // preâmbulo não toca e a frase de ferramenta sai ao vivo (vendorado)
       clip: (cls, n) => {
         const v = this.settings()
         const tts = resolveTts(v.tts, this.d.provider)
@@ -240,7 +275,8 @@ export class VoiceCallController {
           tts.settings,
           v.voiceCallDefaults.fillers.pool,
           cls,
-          n
+          n,
+          v.voiceCallDefaults.toolPhrases.pool
         )
       },
       sessionInfo: (sessionId) => {
@@ -260,7 +296,9 @@ export class VoiceCallController {
         return classifyVoiceError(e, source, voiceProviderLabel(p?.baseUrl ?? null, false))
       },
       onCallEnded: () => this.queue?.cancel(FADE_MS),
-      // settings de fala RESOLVIDAS (endereço/família): o main decide se a voz interpreta tags
+      // settings RESOLVIDAS (endereço/família) da voz decidida para a chamada (a da persona/chat
+      // quando vale aqui, senão as deste aparelho — `callUse`): o main decide se a voz interpreta
+      // tags, sintetiza e classifica as falhas com ela
       settings: () => {
         const v = this.settings()
         const tts = resolveTts(v.tts, this.d.provider)
@@ -303,16 +341,26 @@ export class VoiceCallController {
   }
   private pushTimeline(e: VoiceCallTimelineEvent): void {
     // log de desenvolvimento (Metro): a fala por cima e o barge-in em palavras
-    if (LOGGED_KINDS.has(e.kind))
+    // (e as decisões das frases curtas: preâmbulo, demora, ferramenta)
+    if (LOGGED_KINDS.has(e.kind) || (e.kind === 'decision' && e.class))
       this.d.log?.(
-        `timeline ${e.kind}${e.reason ? ` ${e.reason}` : ''}${e.speechMs != null ? ` voz=${e.speechMs}ms` : ''}${e.text ? ` “${e.text}”` : ''}`
+        `timeline ${e.kind}${e.class ? ` ${e.class}` : ''}${e.played != null ? (e.played ? ' tocou' : ' não tocou') : ''}${e.reason ? ` ${e.reason}` : ''}${e.speechMs != null ? ` voz=${e.speechMs}ms` : ''}${e.text ? ` “${e.text}”` : ''}`
       )
     const tl = [...this.view.timeline, e]
     this.set({ timeline: tl.length > 60 ? tl.slice(-60) : tl })
   }
 
-  private settings(): VoiceSettings {
+  /** Voz decidida no início da chamada (vale a chamada inteira); null = sem chamada. */
+  private callUse: VoiceUse | null = null
+
+  /** As settings de voz DESTE aparelho (Configurações → Voz). */
+  private deviceSettings(): VoiceSettings {
     return readVoiceSettings(this.d.setting, { activationDb: this.d.activationDb?.() })
+  }
+
+  /** As settings EFETIVAS: as daqui com a voz decidida para a chamada aplicada (fala/transcrição/idioma). */
+  private settings(): VoiceSettings {
+    return settingsWith(this.deviceSettings(), this.callUse)
   }
 
   private onState(state: VoiceCallState): void {
@@ -350,9 +398,14 @@ export class VoiceCallController {
     const session = this.d.repo.session(sessionId)
     const chat = session ? this.d.repo.chat(session.chatId) : null
     if (!session || !chat) throw new Error('Chat não encontrado.')
-    const v = this.settings()
-    const ready = callReadiness(chat, v, this.d.provider, this.d.personaVoice(chat.id))
+    const v = this.deviceSettings()
+    const persona = this.d.personaVoice(chat.id)
+    const ready = callReadiness(chat, v, this.d.provider, persona)
     if (ready) throw new Error(ready.reason)
+    // a voz da persona/chat (ou a padrão daqui) é decidida AGORA para a chamada inteira
+    const use = voiceUse(
+      resolveChatVoice(voiceLayers(chat.config.voice, persona), v, this.d.provider)
+    )
     if (!(await this.d.requestMic()))
       throw new Error(captureErrorText({ name: 'NotAllowedError', message: '' }))
     const gen = ++this.generation
@@ -363,6 +416,9 @@ export class VoiceCallController {
       return
     }
     this.set({ ...INITIAL, volume: this.view.volume })
+    this.callUse = use
+    // o rabo do eco é da chamada anterior: a nova começa ouvindo
+    this.lastPlaybackAt = 0
     this.follow.set({ sessionId, heard: [], current: null })
     const queue = new UtteranceQueue({
       backend: this.d.playback,
@@ -410,8 +466,13 @@ export class VoiceCallController {
         })
         // clipe (preâmbulo/frase de demora) não é essencial: pula com o registro; frase da
         // resposta que não toca encerra a chamada (nunca uma resposta muda)
-        if (item.kind === 'filler' || item.kind === 'delay') {
-          const what = item.kind === 'filler' ? 'o preâmbulo' : 'a frase de demora'
+        if (item.kind === 'filler' || item.kind === 'delay' || item.kind === 'tool') {
+          const what =
+            item.kind === 'filler'
+              ? 'o preâmbulo'
+              : item.kind === 'tool'
+                ? 'a frase de ferramenta'
+                : 'a frase de demora'
           this.set({ error: `Não foi possível tocar ${what}: ${reason}` })
           return
         }
@@ -459,6 +520,7 @@ export class VoiceCallController {
     this.followTimer = null
     this.follow.set({ sessionId: null, heard: [], current: null })
     await this.stopCapture()
+    this.callUse = null
     this.queue?.cancel(FADE_MS)
     this.queue?.dispose()
     this.queue = null
@@ -519,22 +581,33 @@ export class VoiceCallController {
   }
 
   /**
-   * O usuário parou de falar por cima antes de confirmar (tosse, "uhum", ruído): o volume volta e o
-   * som curto é descartado (nenhum turno; só o registro na timeline).
+   * O usuário parou de falar por cima antes de confirmar (tosse, "uhum", ruído): o volume volta (se
+   * tinha abaixado) e o som curto é descartado (nenhum turno). Ruído curto que nem chegou ao onset
+   * nunca abaixou nada — nada a devolver nem registrar.
    */
   private restoreDuck(): void {
     const ms = Math.round(this.hold.voicedMs)
+    const ducked = this.hold.ducked
     this.hold.reset()
-    this.queue?.setDuck(1, DUCK_FADE_MS)
+    if (ducked) this.queue?.setDuck(1, DUCK_FADE_MS)
     this.speaking = false
     this.preroll = []
     this.gate?.reset()
     this.dropSession()
     this.voiced.reset()
     this.setLive('', null)
+    if (!ducked) return
     this.set({ ducked: false })
     this.pushTimeline({ ts: this.now(), kind: 'duck-restore', speechMs: ms })
     this.manager.backchannel({ ms })
+  }
+
+  /** A voz por cima passou do onset (voz sustentada): o áudio do assistente ABAIXA e continua. */
+  private duckNow(): void {
+    if (!this.queue) return
+    this.queue.setDuck(this.hold.cfg.duckGain, DUCK_FADE_MS)
+    this.set({ ducked: true })
+    this.pushTimeline({ ts: this.now(), kind: 'duck', speechMs: Math.round(this.hold.voicedMs) })
   }
 
   /** Texto da fala atual chegando (parcial ao vivo): durante o ducking, palavras/"para" confirmam. */
@@ -543,38 +616,76 @@ export class VoiceCallController {
     if (this.hold.transcript(text) === 'barge-in') this.commitBargeIn(this.hold.reason ?? 'words')
   }
 
-  // ---------------- clipes (preâmbulos) ----------------
+  // ---------------- clipes (preâmbulos e frases de ferramenta, por voz) ----------------
 
-  async refreshClips(): Promise<void> {
-    const v = this.settings()
-    const tts = resolveTts(v.tts, this.d.provider)
-    if ('block' in tts) return this.set({ clips: { state: 'unknown' } })
+  /**
+   * As settings de uma voz para os clipes: a escolha de uma persona/chat (`VoiceTtsChoice`) sobre
+   * as daqui, ou — sem escolha — a voz efetiva (a da chamada em andamento, ou a daqui).
+   */
+  private clipSettings(tts?: VoiceTtsChoice | null): VoiceSettings {
+    return tts
+      ? settingsWith(this.deviceSettings(), { tts, stt: null, language: null })
+      : this.settings()
+  }
+
+  /** Estado dos clipes de uma voz (sem `tts`: a da chamada/a daqui). */
+  async clipsOf(tts?: VoiceTtsChoice | null): Promise<CallView['clips']> {
+    const v = this.clipSettings(tts)
+    const r = resolveTts(v.tts, this.d.provider)
+    if ('block' in r) return { state: 'unknown' }
     try {
-      const s = await clipsStatus(this.d.clips, tts.settings, v.voiceCallDefaults.fillers.pool)
-      this.set({
-        clips: { state: s.ready >= s.total ? 'ok' : 'missing', done: s.ready, total: s.total }
-      })
+      const s = await clipsStatus(
+        this.d.clips,
+        r.settings,
+        v.voiceCallDefaults.fillers.pool,
+        v.voiceCallDefaults.toolPhrases.pool
+      )
+      const missing = (Object.keys(s.byClass) as ClipClass[]).filter(
+        (c) => s.byClass[c].ready < s.byClass[c].total
+      )
+      return {
+        state: missing.length ? 'missing' : 'ok',
+        done: s.ready,
+        total: s.total,
+        missing
+      }
     } catch {
-      this.set({ clips: { state: 'unknown' } })
+      return { state: 'unknown' }
     }
   }
 
-  /** "Gerar clipes": sintetiza o pool de preâmbulos com a voz atual. */
-  async generateClips(): Promise<void> {
-    const v = this.settings()
-    const tts = resolveTts(v.tts, this.d.provider)
-    if ('block' in tts) throw new Error(tts.block.reason)
-    this.set({ clips: { state: 'generating', done: 0, total: 0 } })
+  async refreshClips(): Promise<void> {
+    this.set({ clips: await this.clipsOf() })
+  }
+
+  /**
+   * "Gerar clipes" (só com o clique — uma API paga): sintetiza os preâmbulos e as frases de
+   * ferramenta de uma voz — a da chamada/a daqui, ou a escolha de uma persona/chat (`tts` —
+   * "Gerar clipes desta voz"). Progresso em `onProgress` (e no `clips` da tela sem `tts`).
+   */
+  async generateClips(
+    tts?: VoiceTtsChoice | null,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<void> {
+    const v = this.clipSettings(tts)
+    const r = resolveTts(v.tts, this.d.provider)
+    if ('block' in r) throw new Error(r.block.reason)
+    const mine = !tts
+    if (mine) this.set({ clips: { state: 'generating', done: 0, total: 0 } })
     try {
       await generateClips({
         store: this.d.clips,
-        settings: tts.settings,
+        settings: r.settings,
         fillerPool: v.voiceCallDefaults.fillers.pool,
-        synth: (text, signal) => synthesizeBlock({ text, settings: tts.settings }, { signal }),
-        onProgress: (done, total) => this.set({ clips: { state: 'generating', done, total } })
+        toolPool: v.voiceCallDefaults.toolPhrases.pool,
+        synth: (text, signal) => synthesizeBlock({ text, settings: r.settings }, { signal }),
+        onProgress: (done, total) => {
+          onProgress?.(done, total)
+          if (mine) this.set({ clips: { state: 'generating', done, total } })
+        }
       })
     } finally {
-      await this.refreshClips()
+      if (mine) await this.refreshClips()
     }
   }
 
@@ -784,16 +895,10 @@ export class VoiceCallController {
       const mainSpeaking = this.manager.state().phase === 'speaking'
       const heard = this.started.size > 0
       if (queue && (sentencePlaying || (heard && mainSpeaking))) {
-        // fala do usuário durante a resposta já ouvida: o áudio do assistente ABAIXA e continua
-        // (nada é cancelado até o usuário insistir — voz/palavras/"para")
-        this.hold.start(rms, FRAME_MS, SPEECH)
-        queue.setDuck(this.hold.cfg.duckGain, DUCK_FADE_MS)
-        this.set({ ducked: true })
-        this.pushTimeline({
-          ts: this.now(),
-          kind: 'duck',
-          speechMs: Math.round(this.hold.voicedMs)
-        })
+        // fala do usuário durante a resposta já ouvida: o episódio abre SEM mexer no volume — o
+        // áudio do assistente só ABAIXA depois do onset (voz sustentada, `turn.duckOnsetMs`; ruído
+        // curto nunca) e nada é cancelado até o usuário insistir — voz/palavras/"para"
+        if (this.hold.start(rms, FRAME_MS, SPEECH) === 'duck') this.duckNow()
       } else {
         // nada da resposta foi ouvido (só preâmbulo/frase de demora, ou frases ainda na fila):
         // tudo sai com fade e o main decide o turno continuado
@@ -822,7 +927,8 @@ export class VoiceCallController {
     }
     if (this.hold.open) {
       const e = this.hold.frame(rms, FRAME_MS, SPEECH)
-      if (e === 'barge-in') this.commitBargeIn(this.hold.reason ?? 'voiced')
+      if (e === 'duck') this.duckNow()
+      else if (e === 'barge-in') this.commitBargeIn(this.hold.reason ?? 'voiced')
       else if (e === 'restore') this.restoreDuck()
     }
   }

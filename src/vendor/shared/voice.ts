@@ -1,10 +1,11 @@
 // VENDORED from ClearChatDesktop/src/shared/voice.ts — do not edit; run npm run vendor
-// Áudio/voz — contratos da feature: configuração do DITADO (100% global, settings `audioInput`,
-// `sttSettings`, `ttsSettings`) e da CHAMADA DE VOZ (por persona/chat em `ChatConfig.voice`, com os
-// padrões globais herdados na setting `voiceCallDefaults`). Tudo JSON-serializável (nunca
-// `undefined` nos writers); sincronizam desde o protocolo 1.5.0, menos as partes do dispositivo
-// (microfone, `installed`, modo/bloco da GPU — `src/main/sync/records.ts`, SPEC → "Áudio no
-// sync"). Ver SPEC.md → "Áudio".
+// Áudio/voz — contratos da feature: as settings de voz DESTE DISPOSITIVO (`audioInput`,
+// `sttSettings`, `ttsSettings`, `voiceCallDefaults` — locais desde o protocolo 1.9.0: não
+// sincronizam) e a voz/config da CHAMADA por persona/chat em `ChatConfig.voice` (sincroniza),
+// inclusive a escolha de FALA e TRANSCRIÇÃO da persona (`voice.tts`/`voice.stt`, protocolo 1.9.0 —
+// `resolveTtsVoice`/`resolveSttVoice`: chat → persona → settings do dispositivo, com a
+// disponibilidade conferida aqui). Tudo JSON-serializável (nunca `undefined` nos writers). Ver
+// SPEC.md → "Áudio" e "Voz da persona/chat".
 import { DEFAULT_ACTIVATION_DB, normalizeActivationDb } from './speechGate'
 import { AUDIO_TAGS_PROMPT_MAX, DEFAULT_AUDIO_TAGS_PROMPT } from './audioTags'
 import {
@@ -16,6 +17,7 @@ import {
 } from './types'
 import { planVoiceReasoning, type VoiceReasoningRules } from './voiceCallParams'
 import {
+  DEFAULT_STT_GPU,
   DEFAULT_TTS_GPU,
   GPU_STT_ENGINE_ID,
   isGpuTtsEngineId,
@@ -55,7 +57,7 @@ export interface AudioInputSettings {
    * Nível de ativação do microfone (dBFS de RMS; padrão `DEFAULT_ACTIVATION_DB` = −45; faixa
    * −70…−20): abaixo dele nada é fala — o portão de ativação (`@shared/speechGate`) não manda o
    * trecho ao STT (ditado e chamada). Depende do microfone/sala: **local do dispositivo** como o
-   * `deviceId` (nunca sai no registro do sync; o recebido não o sobrescreve).
+   * `deviceId` (como todo o `audioInput` desde o protocolo 1.9.0 — nunca sincroniza).
    */
   activationDb: number
   /** Push-to-talk: a captura só corre enquanto a tecla (ou o botão) estiver pressionada (padrão true). */
@@ -113,7 +115,8 @@ export interface SttEndpointConfig {
   providerKind?: string
   /**
    * Parâmetros do modelo por família de API (`temperature`, `prompt` — `@shared/voiceParams`): só
-   * os escolhidos (aditivo; sincroniza com o resto de `sttSettings` — protocolo 1.5.0, §4.3.2).
+   * os escolhidos (aditivo). Nas settings deste dispositivo não sincroniza (1.9.0); na escolha de
+   * uma persona/chat (`VoiceSttChoice.api.params`) vai junto com ela.
    */
   params?: VoiceApiParams
 }
@@ -207,13 +210,14 @@ export interface TtsEndpointConfig {
   /**
    * ElevenLabs direta: a chamada usa o WebSocket multi-contexto (texto em streaming) quando o
    * modelo aceita. Ausente = ligado (padrão); `false` = força HTTP por frase. Gravado só quando
-   * `false` (aditivo; sincroniza com o resto de `ttsSettings` — protocolo 1.5.0).
+   * `false` (aditivo; na escolha de uma persona/chat sincroniza com ela).
    */
   elevenLabsWs?: boolean
   /**
    * Parâmetros do modelo por família de API (`@shared/voiceParams` — ElevenLabs: formato de saída,
    * `voice_settings`, normalização, `auto_mode`; OpenRouter/OpenAI: `speed`, `instructions`): só os
-   * escolhidos (aditivo; sincroniza com o resto de `ttsSettings` — protocolo 1.5.0, §4.3.2).
+   * escolhidos (aditivo). Nas settings deste dispositivo não sincroniza (1.9.0); na escolha de
+   * uma persona/chat (`VoiceTtsChoice.api.params`) vai junto com ela.
    */
   params?: VoiceApiParams
   /**
@@ -361,8 +365,8 @@ export const FILLER_POOL_MAX = 16
 /**
  * Pool padrão de preâmbulos (~0,6–1,4 s cada, pronunciáveis por Kokoro e ElevenLabs — o benchmark
  * mostrou que "Hum, deixa eu ver." funciona nos dois e "Hum…"/"Hmm" soltos não). A chamada toca UM
- * logo depois do turno (ponte até a 1ª frase da resposta), escolhido pelo contexto, sem repetir
- * nenhum dos últimos `FILLER_RECENT_WINDOW` usados.
+ * só quando a resposta DEMORA (nada falado em `fillers.delayMs` — 2,5 s — depois do turno: ponte até
+ * a 1ª frase), escolhido pelo contexto, sem repetir nenhum dos últimos `FILLER_RECENT_WINDOW` usados.
  */
 export const DEFAULT_FILLER_POOL: readonly FillerPhrase[] = [
   { text: 'Hum, deixa eu ver aqui.', contexts: ['question', 'generic'] },
@@ -382,16 +386,113 @@ export const DEFAULT_FILLER_POOL: readonly FillerPhrase[] = [
 /** Padrões GLOBAIS dos fillers (`voiceCallDefaults.fillers`): o pool e o tempo valem para todos os chats. */
 export interface VoiceFillerDefaults extends VoiceFillers {
   /**
-   * Espera entre o turno enviado e o preâmbulo (ms; padrão 250, 0 = já): se a 1ª frase da resposta
-   * ficar pronta antes disso, o preâmbulo nem sai.
+   * Espera entre o turno enviado e o preâmbulo (ms; padrão 2500, faixa 0–10000, 0 = já): o
+   * "deixa eu ver…" só sai quando a resposta DEMORA — se a 1ª frase da resposta (ou a frase de
+   * ferramenta/de demora) sair antes disso, o preâmbulo nem toca. Local do dispositivo (1.9.0).
    */
   delayMs: number
   /** Pool de preâmbulos; null = `DEFAULT_FILLER_POOL` (mudou → os clipes são regerados). */
   pool: FillerPhrase[] | null
 }
 
-/** Espera padrão do preâmbulo depois do turno enviado (ms). */
-export const DEFAULT_FILLER_DELAY_MS = 250
+/**
+ * Espera padrão do preâmbulo depois do turno enviado (ms): só uma resposta lenta de verdade ganha o
+ * "deixa eu ver…" (com 250 ms saía em quase todo turno e soava desconectado — 2026-11-12).
+ */
+export const DEFAULT_FILLER_DELAY_MS = 2500
+/** Padrão ANTIGO da espera do preâmbulo (até 2026-11-12): o valor gravado igual a ele migra. */
+export const LEGACY_FILLER_DELAY_MS = 250
+/** Faixa da espera do preâmbulo (ms; fora dela é preso no limite — 0 = já). */
+export const FILLER_DELAY_MS_RANGE = { min: 0, max: 10_000 } as const
+
+/**
+ * Espera do preâmbulo normalizada: inteiro em `FILLER_DELAY_MS_RANGE` (0 válido = já); lixo/
+ * negativo → o padrão; o padrão antigo EXATO (250) migra para o novo (2500) — outros valores
+ * escolhidos pelo usuário ficam como estão.
+ */
+export function normalizeFillerDelayMs(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : NaN
+  if (Number.isNaN(n) || n < 0 || n === LEGACY_FILLER_DELAY_MS) return DEFAULT_FILLER_DELAY_MS
+  return Math.min(FILLER_DELAY_MS_RANGE.max, n)
+}
+
+/**
+ * Categoria da ferramenta para a frase falada quando o assistente usa uma tool na chamada
+ * (`toolPhraseCategory` em `@shared/voicePolicy`): pesquisa na web, arquivos, terminal/processos,
+ * memória, subagentes/outros chats, informações (modelos/chats/histórico/skills), localização (tools
+ * do celular — `get_location`/`nearby_places`) e genérica.
+ */
+export type ToolPhraseCategory =
+  'web' | 'files' | 'shell' | 'memory' | 'agents' | 'info' | 'location' | 'generic'
+export const TOOL_PHRASE_CATEGORIES: readonly ToolPhraseCategory[] = [
+  'web',
+  'files',
+  'shell',
+  'memory',
+  'agents',
+  'info',
+  'location',
+  'generic'
+]
+
+/** Uma frase de ferramenta do pool (vira o clipe `TOOL_<n>` — n = posição 1-based no pool). */
+export interface ToolPhrase {
+  /** Texto falado (pt-BR por extenso). */
+  text: string
+  /** Categorias em que a frase cabe (lista vazia = `generic`). */
+  categories: ToolPhraseCategory[]
+}
+
+/** Máximo de frases no pool de frases de ferramenta (= máximo de clipes `TOOL_<n>`). */
+export const TOOL_PHRASE_POOL_MAX = 40
+
+/**
+ * Pool padrão das frases de ferramenta (curtas, ~1 s; 3–4 por categoria). A chamada fala UMA por
+ * turno, na 1ª tool que começa — sem repetir as últimas usadas.
+ */
+export const DEFAULT_TOOL_PHRASE_POOL: readonly ToolPhrase[] = [
+  { text: 'Vou pesquisar isso.', categories: ['web'] },
+  { text: 'Deixa eu procurar na internet.', categories: ['web'] },
+  { text: 'Vou dar uma olhada na web.', categories: ['web'] },
+  { text: 'Um instante, vou pesquisar.', categories: ['web'] },
+  { text: 'Deixa eu dar uma olhada nos arquivos.', categories: ['files'] },
+  { text: 'Vou olhar os arquivos.', categories: ['files'] },
+  { text: 'Deixa eu conferir no projeto.', categories: ['files'] },
+  { text: 'Vou abrir isso aqui.', categories: ['files'] },
+  { text: 'Vou rodar isso aqui.', categories: ['shell'] },
+  { text: 'Deixa eu executar isso.', categories: ['shell'] },
+  { text: 'Vou rodar um comando.', categories: ['shell'] },
+  { text: 'Deixa eu ver o que eu tenho anotado.', categories: ['memory'] },
+  { text: 'Vou consultar a memória.', categories: ['memory'] },
+  { text: 'Um instante, vou checar minhas notas.', categories: ['memory'] },
+  { text: 'Vou pedir ajuda para um assistente.', categories: ['agents'] },
+  { text: 'Deixa eu passar isso adiante.', categories: ['agents'] },
+  { text: 'Vou delegar essa parte.', categories: ['agents'] },
+  { text: 'Deixa eu conferir isso.', categories: ['info'] },
+  { text: 'Vou checar rapidinho.', categories: ['info'] },
+  { text: 'Deixa eu ver as informações.', categories: ['info'] },
+  { text: 'Deixa eu ver onde você está.', categories: ['location'] },
+  { text: 'Vou procurar lugares por perto.', categories: ['location'] },
+  { text: 'Vou checar a localização.', categories: ['location'] },
+  { text: 'Deixa eu ver isso.', categories: ['generic'] },
+  { text: 'Um instante, vou cuidar disso.', categories: ['generic'] },
+  { text: 'Vou fazer isso agora.', categories: ['generic'] }
+]
+
+/**
+ * Frases de ferramenta da chamada (`voiceCallDefaults.toolPhrases`, global; aditivo): quando o
+ * assistente começa a 1ª tool do turno, a chamada fala uma frase curta da categoria dela ("Vou
+ * pesquisar isso.") — clipe pré-gerado `TOOL_<n>` (síntese ao vivo se o clipe não está pronto). Por
+ * persona/chat só o liga/desliga (`VoiceCallConfig.toolPhrases`, ★ herda).
+ */
+export interface VoiceToolPhrases {
+  /** Liga as frases de ferramenta (padrão true). */
+  enabled: boolean
+  /** Pool; null = `DEFAULT_TOOL_PHRASE_POOL` (mudou → os clipes são regerados). */
+  pool: ToolPhrase[] | null
+}
+
+export const DEFAULT_TOOL_PHRASES: VoiceToolPhrases = { enabled: true, pool: null }
 
 /**
  * Frases de demora da chamada (`voiceCallDefaults.delayPhrases`, global): sintetizadas AO VIVO pela
@@ -512,17 +613,74 @@ export interface VoiceCallConfig {
    * (persona → global `voiceCallDefaults.audioTags`, desligado). Opt-in explícito; aditivo.
    */
   audioTags?: boolean | null
+  /**
+   * Frases de ferramenta ("Vou pesquisar isso." na 1ª tool do turno); null/ausente = herda
+   * (persona → global `voiceCallDefaults.toolPhrases.enabled`, ligado). Aditivo.
+   */
+  toolPhrases?: boolean | null
   /** Texto da instrução das tags; null/ausente = herda (persona → global → `DEFAULT_AUDIO_TAGS_PROMPT`). */
   audioTagsPrompt?: string | null
+  /**
+   * Voz da persona/chat — com que motor/provedor, modelo, voz e parâmetros FALAR (chamada, prévias,
+   * clipes). null/ausente = herda (chat → persona → `ttsSettings` deste dispositivo). Protocolo
+   * 1.9.0; aditivo (só gravado quando escolhido). Ver `resolveTtsVoice`.
+   */
+  tts?: VoiceTtsChoice | null
+  /**
+   * Transcrição da persona/chat — com que motor/modelo/idioma OUVIR (chamada e ditado no composer
+   * dos chats dela). null/ausente = herda (chat → persona → `sttSettings` deste dispositivo).
+   * Protocolo 1.9.0; aditivo. Ver `resolveSttVoice`.
+   */
+  stt?: VoiceSttChoice | null
+}
+
+// ---------------- voz da persona/chat (`voice.tts`/`voice.stt` — protocolo 1.9.0) ----------------
+
+/**
+ * Fala pela API: provedor CADASTRADO (`providerId` = id de `provider`; endereço/chave nunca entram
+ * aqui), modelo, voz e os parâmetros escolhidos (`api.params`, como em `ttsSettings`).
+ */
+export interface VoiceTtsApiChoice {
+  providerId: string
+  model: string
+  /** null = a voz padrão da API. */
+  voice: string | null
+  /** ElevenLabs direta: `false` = HTTP por frase na chamada (ausente = WebSocket). */
+  elevenLabsWs?: false
+  params?: VoiceApiParams
 }
 
 /**
- * Composição do prompt nos turnos de voz (o prompt-base global entra em `append` e `replace`,
- * salvo desligado em Configurações → Áudio; nunca em `none`):
- * - `append` (complementar, padrão): system prompt do chat + prompt-base + prompt do modo voz;
- * - `replace` (substituto): prompt-base + prompt do modo voz NO LUGAR do system prompt do chat
- *   (prompt do modo voz vazio → nada a pôr no lugar: vale como `append`);
- * - `none` (nenhum): só o system prompt do chat — sem prompt-base nem prompt do modo voz.
+ * Com que voz a persona/chat FALA (protocolo 1.9.0, §4.3.6). Mesma forma/regras do registro
+ * `ttsSettings`: na GPU só motor + voz sincronizam (passos/parâmetros ficam no dispositivo).
+ */
+export type VoiceTtsChoice =
+  | { backend: 'api'; api: VoiceTtsApiChoice }
+  | { backend: 'local'; local: { engine: TtsLocalEngine; voice: string } }
+  /** `engine` = id do motor da GPU (`GpuTtsEngineId`; um id desconhecido aqui é preservado e vale como indisponível). */
+  | { backend: 'gpu'; gpu: { engine: string; voice: string | null } }
+
+/**
+ * Com que motor/modelo/idioma a persona/chat OUVE (protocolo 1.9.0, §4.3.6). `api` obrigatório em
+ * `api`/`hybrid`, `local` em `local`/`hybrid`, `gpu` em `gpu` (blocos de outros modos não são
+ * gravados). `language` null/ausente = o idioma do ditado deste dispositivo (`audioInput.language`).
+ */
+export interface VoiceSttChoice {
+  mode: SttMode
+  api?: { providerId: string; model: string; params?: VoiceApiParams }
+  local?: { engine: SttLocalEngine; model: string }
+  gpu?: { engine: string; model: string | null }
+  language?: string | null
+}
+
+/**
+ * Composição do prompt nos turnos de voz — o ÚNICO texto que a chamada muda é o "Prompt do modo
+ * voz" (`voicePrompt`) da persona/chat (o app não põe prompt próprio; vazio = a chamada manda
+ * exatamente o system prompt normal):
+ * - `append` (complementar, padrão): system prompt do chat + prompt do modo voz;
+ * - `replace` (substituto): o prompt do modo voz NO LUGAR do system prompt do chat (prompt do modo
+ *   voz vazio → nada a pôr no lugar: vale como `append`);
+ * - `none` (nenhum): só o system prompt do chat — sem o prompt do modo voz.
  */
 export type VoiceCallPromptMode = 'append' | 'replace' | 'none'
 export const VOICE_CALL_PROMPT_MODES: readonly VoiceCallPromptMode[] = ['append', 'replace', 'none']
@@ -546,10 +704,6 @@ export interface VoiceCallDefaults {
    * params), como qualquer parâmetro do modelo — a chamada não impõe teto próprio.
    */
   model: VoiceCallModelConfig | null
-  /** Prompt-base do modo voz somado ao system prompt (ligado por padrão). */
-  basePromptEnabled: boolean
-  /** Texto do prompt-base; null = `DEFAULT_VOICE_BASE_PROMPT`. */
-  basePrompt: string | null
   /** "O agente pode encerrar a chamada" (tool `end_call` nos turnos da chamada; padrão true). */
   endCall: boolean
   /**
@@ -557,6 +711,8 @@ export interface VoiceCallDefaults {
    * lá.") — ver `VoiceDelayPhrases`. Aditivo (ausente no registro = os padrões).
    */
   delayPhrases: VoiceDelayPhrases
+  /** Frases de ferramenta (1 por turno, na 1ª tool) — ver `VoiceToolPhrases`. Aditivo (ausente = padrões). */
+  toolPhrases: VoiceToolPhrases
   /** Tags de voz na chamada (padrão false — opt-in). Aditivo (ausente = false). */
   audioTags: boolean
   /** Instrução das tags; null = `DEFAULT_AUDIO_TAGS_PROMPT`. Aditivo. */
@@ -596,16 +752,22 @@ export interface VoiceCallTurnConfig {
   speculativeApi: boolean
   /**
    * Barge-in com histerese ("ducking" — aditivo; ausente = os padrões): a fala do usuário por cima
-   * da resposta primeiro ABAIXA o áudio do assistente para `duckGain` (0–1; padrão 0.3) e ele
-   * continua tocando; só vira barge-in (para a resposta) com `bargeInVoicedMs` de voz no episódio
-   * (padrão 700) ou `bargeInWords` palavras reais na transcrição parcial (padrão 3; "uhum"/"sim"
-   * não contam) — ou uma palavra de parada ("para", "espera"…). Parou antes disso: depois de
-   * `duckRestoreMs` de silêncio (padrão 450) o volume volta e o som curto é descartado.
+   * da resposta só ABAIXA o áudio do assistente para `duckGain` (0–1; padrão 0.3) depois de
+   * `duckOnsetMs` de voz SUSTENTADA acima do nível de ativação (padrão 500; lacunas curtas ≤
+   * `DUCK_ONSET_GAP_MS` dentro da sequência são toleradas, uma pausa maior zera a contagem — clique,
+   * pancada e ruído curto nunca abaixam); abaixada, ela continua tocando e só vira barge-in (para a
+   * resposta) com `bargeInVoicedMs` de voz no episódio (padrão 1200 — contados desde o início dele)
+   * ou `bargeInWords` palavras reais na transcrição parcial (padrão 3; "uhum"/"sim" e alucinações
+   * do STT não contam) — ou uma palavra de parada ("para", "espera"…) —, sempre só depois do
+   * `duckOnsetMs`. Parou antes disso: depois de `duckRestoreMs` de silêncio (padrão 450) o volume
+   * volta e o som curto é descartado.
    */
   duckGain?: number
   bargeInVoicedMs?: number
   bargeInWords?: number
   duckRestoreMs?: number
+  /** Voz sustentada (ms) por cima da resposta antes de abaixar o volume (padrão 500; 100–3000). */
+  duckOnsetMs?: number
 }
 
 /** Limiares do barge-in com histerese (resolvidos de `VoiceCallTurnConfig` — `resolveBargeIn`). */
@@ -618,21 +780,34 @@ export interface BargeInConfig {
   words: number
   /** Silêncio (ms) que devolve o volume e descarta o som curto. */
   restoreMs: number
+  /**
+   * Voz SUSTENTADA (ms) por cima da resposta antes de abaixar o volume (onset): ruído curto não
+   * abaixa nada. Aditivo — ausente = `DEFAULT_BARGE_IN.onsetMs`.
+   */
+  onsetMs?: number
 }
 
-export const DEFAULT_BARGE_IN: BargeInConfig = {
+export const DEFAULT_BARGE_IN: Required<BargeInConfig> = {
   duckGain: 0.3,
-  voicedMs: 700,
+  voicedMs: 1200,
   words: 3,
-  restoreMs: 450
+  restoreMs: 450,
+  onsetMs: 500
 }
+
+/**
+ * Padrão ANTIGO de `bargeInVoicedMs` (até 2026-11-12): o valor gravado EXATAMENTE igual migra para o
+ * novo (1200 — uma janela de verdade entre abaixar e parar); outros valores ficam como estão.
+ */
+export const LEGACY_BARGE_IN_VOICED_MS = 700
 
 /** Faixas aceitas dos limiares do barge-in (fora delas o valor é preso no limite). */
 export const BARGE_IN_RANGES = {
   duckGain: { min: 0, max: 1 },
   voicedMs: { min: 200, max: 5000 },
   words: { min: 1, max: 10 },
-  restoreMs: { min: 150, max: 3000 }
+  restoreMs: { min: 150, max: 3000 },
+  onsetMs: { min: 100, max: 3000 }
 } as const
 
 /** Silêncio de turno padrão da chamada sem transcrição especulativa (ms). */
@@ -649,21 +824,22 @@ export const DEFAULT_VOICE_CALL_TURN: VoiceCallTurnConfig = {
   duckGain: DEFAULT_BARGE_IN.duckGain,
   bargeInVoicedMs: DEFAULT_BARGE_IN.voicedMs,
   bargeInWords: DEFAULT_BARGE_IN.words,
-  duckRestoreMs: DEFAULT_BARGE_IN.restoreMs
+  duckRestoreMs: DEFAULT_BARGE_IN.restoreMs,
+  duckOnsetMs: DEFAULT_BARGE_IN.onsetMs
 }
 
 /**
- * Prompt-base do modo voz (somado ao system prompt nos turnos da chamada, antes do `voicePrompt`
- * do chat): respostas curtas, sem markdown, sem narrar falhas internas, e o aviso de que a fala
- * vem de transcrição automática (maiúsculas/acentos podem estar errados — "SRC" pode ser "src").
+ * SUGESTÃO para o campo "Prompt do modo voz" da persona/chat — o "Usar sugestão" do editor a
+ * INSERE no campo, onde o usuário a vê e edita; só vai à request porque passou a ser o conteúdo do
+ * campo. Nunca é enviada sozinha (não há prompt-base nem padrão oculto — 2026-11-12). A despedida
+ * com `end_call` está na descrição da própria tool (visível na aba Tools).
  */
-export const DEFAULT_VOICE_BASE_PROMPT = [
+export const SUGGESTED_VOICE_PROMPT = [
   'Você está numa conversa por voz: sua resposta será lida em voz alta.',
   'A primeira frase tem no máximo 10 palavras e vai direto ao ponto. No máximo 3 frases curtas no total.',
   'Sem markdown, listas, títulos, tabelas, emojis ou blocos de código — escreva como se fala.',
   'Não narre tentativas internas nem erros de ferramentas em detalhe: se algo falhar, diga em uma frase curta o que houve e o que vai fazer.',
-  'A fala do usuário vem de transcrição automática e pode ter maiúsculas, acentos ou palavras erradas (ex.: "SRC" pode ser a pasta "src"); interprete pela intenção e, em nomes de arquivos e pastas, tente a grafia em minúsculas antes de concluir que não existe.',
-  'Se o usuário se despedir ou pedir para desligar, responda com uma despedida curta e, se a ferramenta end_call estiver disponível, chame-a no mesmo turno.'
+  'A fala do usuário vem de transcrição automática e pode ter maiúsculas, acentos ou palavras erradas (ex.: "SRC" pode ser a pasta "src"); interprete pela intenção e, em nomes de arquivos e pastas, tente a grafia em minúsculas antes de concluir que não existe.'
 ].join(' ')
 
 export const DEFAULT_VOICE_CALL_DEFAULTS: VoiceCallDefaults = {
@@ -671,10 +847,9 @@ export const DEFAULT_VOICE_CALL_DEFAULTS: VoiceCallDefaults = {
   fillers: { enabled: true, prompt: null, delayMs: DEFAULT_FILLER_DELAY_MS, pool: null },
   turn: { ...DEFAULT_VOICE_CALL_TURN },
   model: null,
-  basePromptEnabled: true,
-  basePrompt: null,
   endCall: true,
   delayPhrases: { ...DEFAULT_DELAY_PHRASES },
+  toolPhrases: { ...DEFAULT_TOOL_PHRASES },
   audioTags: false,
   audioTagsPrompt: null
 }
@@ -885,6 +1060,42 @@ export function resolveFillerPool(pool: FillerPhrase[] | null | undefined): Fill
   return p ?? DEFAULT_FILLER_POOL.map((f) => ({ text: f.text, contexts: [...f.contexts] }))
 }
 
+/**
+ * Pool de frases de ferramenta: textos aparados (≤ 80 chars, sem duplicatas), categorias conhecidas
+ * (vazia = `generic`), no máximo `TOOL_PHRASE_POOL_MAX`; vazio/lixo → null.
+ */
+export function normalizeToolPhrasePool(v: unknown): ToolPhrase[] | null {
+  if (!Array.isArray(v)) return null
+  const out: ToolPhrase[] = []
+  for (const item of v) {
+    const o = asObject(item)
+    const text = typeof o?.text === 'string' ? o.text.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
+    if (!text || out.some((p) => p.text === text)) continue
+    const categories = Array.isArray(o?.categories)
+      ? TOOL_PHRASE_CATEGORIES.filter((c) => (o!.categories as unknown[]).includes(c))
+      : []
+    if (!categories.length) continue // sem categoria conhecida: nunca seria escolhida
+    out.push({ text, categories })
+    if (out.length >= TOOL_PHRASE_POOL_MAX) break
+  }
+  return out.length ? out : null
+}
+
+/** Pool efetivo de frases de ferramenta (null → `DEFAULT_TOOL_PHRASE_POOL`). */
+export function resolveToolPhrasePool(pool: ToolPhrase[] | null | undefined): ToolPhrase[] {
+  const p = normalizeToolPhrasePool(pool ?? null)
+  return p ?? DEFAULT_TOOL_PHRASE_POOL.map((f) => ({ text: f.text, categories: [...f.categories] }))
+}
+
+/** Frases de ferramenta completas (ausente/lixo → `DEFAULT_TOOL_PHRASES`). */
+export function normalizeToolPhrases(v: unknown): VoiceToolPhrases {
+  const src = asObject(v)
+  return {
+    enabled: boolOr(src?.enabled, DEFAULT_TOOL_PHRASES.enabled),
+    pool: normalizeToolPhrasePool(src?.pool)
+  }
+}
+
 /** Turnos completos (ausente/lixo → `DEFAULT_VOICE_CALL_TURN`); 0 em `silenceStopMs` vira null. */
 export function normalizeVoiceCallTurn(v: unknown): VoiceCallTurnConfig {
   const t = asObject(v)
@@ -911,14 +1122,18 @@ export function normalizeVoiceCallTurn(v: unknown): VoiceCallTurnConfig {
         duckGain: b.duckGain,
         bargeInVoicedMs: b.voicedMs,
         bargeInWords: b.words,
-        duckRestoreMs: b.restoreMs
+        duckRestoreMs: b.restoreMs,
+        duckOnsetMs: b.onsetMs
       }
     })()
   }
 }
 
-/** Limiares do barge-in com histerese a partir do `turn` (ausente/lixo → `DEFAULT_BARGE_IN`). */
-export function resolveBargeIn(turn: unknown): BargeInConfig {
+/**
+ * Limiares do barge-in com histerese a partir do `turn` (ausente/lixo → `DEFAULT_BARGE_IN`; fora da
+ * faixa → preso no limite; `bargeInVoicedMs` igual ao padrão antigo — 700 — migra para 1200).
+ */
+export function resolveBargeIn(turn: unknown): Required<BargeInConfig> {
   const t = asObject(turn)
   const d = DEFAULT_BARGE_IN
   const r = BARGE_IN_RANGES
@@ -932,11 +1147,13 @@ export function resolveBargeIn(turn: unknown): BargeInConfig {
     const n = int ? Math.round(v) : Math.round(v * 100) / 100
     return Math.min(range.max, Math.max(range.min, n))
   }
+  const voiced = t?.bargeInVoicedMs === LEGACY_BARGE_IN_VOICED_MS ? d.voicedMs : t?.bargeInVoicedMs
   return {
     duckGain: num(t?.duckGain, d.duckGain, r.duckGain, false),
-    voicedMs: num(t?.bargeInVoicedMs, d.voicedMs, r.voicedMs, true),
+    voicedMs: num(voiced, d.voicedMs, r.voicedMs, true),
     words: num(t?.bargeInWords, d.words, r.words, true),
-    restoreMs: num(t?.duckRestoreMs, d.restoreMs, r.restoreMs, true)
+    restoreMs: num(t?.duckRestoreMs, d.restoreMs, r.restoreMs, true),
+    onsetMs: num(t?.duckOnsetMs, d.onsetMs, r.onsetMs, true)
   }
 }
 
@@ -990,10 +1207,114 @@ export function normalizeVoiceCallConfig(v: unknown): VoiceCallConfig {
     ...(typeof src.endCall === 'boolean' ? { endCall: src.endCall } : {}),
     // tags de voz (aditivo; opt-in): só gravados quando escolhidos — lixo some
     ...(typeof src.audioTags === 'boolean' ? { audioTags: src.audioTags } : {}),
+    ...(typeof src.toolPhrases === 'boolean' ? { toolPhrases: src.toolPhrases } : {}),
     ...(() => {
       const p = normalizeAudioTagsPrompt(src.audioTagsPrompt)
       return p ? { audioTagsPrompt: p } : {}
+    })(),
+    // voz da persona/chat (protocolo 1.9.0; aditivo): só gravada quando escolhida — lixo some
+    ...(() => {
+      const tts = normalizeVoiceTtsChoice(src.tts)
+      return tts ? { tts } : {}
+    })(),
+    ...(() => {
+      const stt = normalizeVoiceSttChoice(src.stt)
+      return stt ? { stt } : {}
     })()
+  }
+}
+
+/** Id curto (provedor/modelo/voz/motor): aparado, até 200 chars; vazio/não-string → null. */
+const choiceId = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : null
+
+/**
+ * Voz da persona/chat (`voice.tts`) a partir de qualquer valor salvo/recebido; null = herda (lixo,
+ * backend desconhecido, API sem provedor/modelo, motor local desconhecido). Endereço/chave e
+ * campos de runtime (`baseUrl`, `apiKey`, `providerKind`, `extraBody`) e os parâmetros da GPU
+ * (`steps`, `params`) nunca são copiados.
+ */
+export function normalizeVoiceTtsChoice(v: unknown): VoiceTtsChoice | null {
+  const src = asObject(v)
+  if (!src) return null
+  if (src.backend === 'api') {
+    const api = asObject(src.api)
+    const providerId = choiceId(api?.providerId)
+    const model = choiceId(api?.model)
+    if (!api || !providerId || !model) return null
+    const params = normalizeVoiceApiParams('tts', api.params)
+    return {
+      backend: 'api',
+      api: {
+        providerId,
+        model,
+        voice: choiceId(api.voice),
+        ...(api.elevenLabsWs === false ? { elevenLabsWs: false as const } : {}),
+        ...(params ? { params } : {})
+      }
+    }
+  }
+  if (src.backend === 'local') {
+    const local = asObject(src.local)
+    if (!local || !(TTS_LOCAL_ENGINES as readonly unknown[]).includes(local.engine)) return null
+    return {
+      backend: 'local',
+      local: {
+        engine: local.engine as TtsLocalEngine,
+        voice: choiceId(local.voice) ?? DEFAULT_TTS_LOCAL.voice
+      }
+    }
+  }
+  if (src.backend === 'gpu') {
+    const gpu = asObject(src.gpu)
+    const engine = choiceId(gpu?.engine)
+    if (!gpu || !engine) return null
+    return { backend: 'gpu', gpu: { engine, voice: choiceId(gpu.voice) } }
+  }
+  return null
+}
+
+/**
+ * Transcrição da persona/chat (`voice.stt`) a partir de qualquer valor; null = herda (lixo, modo
+ * desconhecido, bloco obrigatório do modo ausente/inválido). Só os blocos do modo são mantidos;
+ * `gpu` ausente no modo `gpu` vira o motor único (`whisper-large-v3-turbo`). Sem endereço/chave nem
+ * parâmetros da GPU.
+ */
+export function normalizeVoiceSttChoice(v: unknown): VoiceSttChoice | null {
+  const src = asObject(v)
+  if (!src || !(STT_MODES as readonly unknown[]).includes(src.mode)) return null
+  const mode = src.mode as SttMode
+  const apiSrc = asObject(src.api)
+  const providerId = choiceId(apiSrc?.providerId)
+  const model = choiceId(apiSrc?.model)
+  const params = normalizeVoiceApiParams('stt', apiSrc?.params)
+  const api = providerId && model ? { providerId, model, ...(params ? { params } : {}) } : null
+  const localSrc = asObject(src.local)
+  const local =
+    localSrc && (STT_LOCAL_ENGINES as readonly unknown[]).includes(localSrc.engine)
+      ? {
+          engine: localSrc.engine as SttLocalEngine,
+          model: typeof localSrc.model === 'string' ? localSrc.model.trim().slice(0, 200) : ''
+        }
+      : null
+  const usesApi = mode === 'api' || mode === 'hybrid'
+  const usesLocal = mode === 'local' || mode === 'hybrid'
+  if ((usesApi && !api) || (usesLocal && !local)) return null
+  const gpuSrc = asObject(src.gpu)
+  const language = choiceId(src.language)?.slice(0, 35) ?? null
+  return {
+    mode,
+    ...(usesApi && api ? { api } : {}),
+    ...(usesLocal && local ? { local } : {}),
+    ...(mode === 'gpu'
+      ? {
+          gpu: {
+            engine: choiceId(gpuSrc?.engine) ?? GPU_STT_ENGINE_ID,
+            model: choiceId(gpuSrc?.model)
+          }
+        }
+      : {}),
+    ...(language ? { language } : {})
   }
 }
 
@@ -1008,18 +1329,19 @@ export function normalizeVoiceCallDefaults(v: unknown): VoiceCallDefaults {
     fillers: {
       enabled: boolOr(fillers?.enabled, d.fillers.enabled),
       prompt: promptOrNull(fillers?.prompt),
-      // 0 é válido (preâmbulo já, sem esperar)
-      delayMs: Math.min(5000, intOr(fillers?.delayMs, d.fillers.delayMs)),
+      // 0 é válido (preâmbulo já, sem esperar); 250 (padrão antigo) migra para 2500
+      delayMs: normalizeFillerDelayMs(fillers?.delayMs),
       pool: normalizeFillerPool(fillers?.pool)
     },
     turn: normalizeVoiceCallTurn(src?.turn),
     // `maxTokens` (teto antigo dos turnos de voz) saiu: o max_tokens vive nos params do modelo da
     // chamada — um valor gravado é descartado aqui
     model: normalizeVoiceCallModel(src?.model),
-    basePromptEnabled: boolOr(src?.basePromptEnabled, d.basePromptEnabled),
-    basePrompt: promptOrNull(src?.basePrompt),
+    // `basePromptEnabled`/`basePrompt` (o "prompt-base do modo voz", removido em 2026-11-12 — o
+    // ClearChat não põe prompt próprio na chamada) são legado: descartados aqui
     endCall: boolOr(src?.endCall, d.endCall),
     delayPhrases: normalizeDelayPhrases(src?.delayPhrases),
+    toolPhrases: normalizeToolPhrases(src?.toolPhrases),
     audioTags: boolOr(src?.audioTags, d.audioTags),
     audioTagsPrompt: normalizeAudioTagsPrompt(src?.audioTagsPrompt)
   }
@@ -1151,7 +1473,10 @@ export function layerVoiceCallConfig(
   const mode = c.promptMode ?? p.promptMode ?? null
   const endCall = c.endCall ?? p.endCall ?? null
   const audioTags = c.audioTags ?? p.audioTags ?? null
+  const toolPhrases = c.toolPhrases ?? p.toolPhrases ?? null
   const audioTagsPrompt = c.audioTagsPrompt ?? p.audioTagsPrompt ?? null
+  const tts = c.tts ?? p.tts ?? null
+  const stt = c.stt ?? p.stt ?? null
   return {
     enabled: c.enabled ?? p.enabled,
     model: c.model ?? p.model,
@@ -1161,7 +1486,10 @@ export function layerVoiceCallConfig(
     fillers: c.fillers ?? p.fillers,
     ...(endCall !== null ? { endCall } : {}),
     ...(audioTags !== null ? { audioTags } : {}),
-    ...(audioTagsPrompt !== null ? { audioTagsPrompt } : {})
+    ...(toolPhrases !== null ? { toolPhrases } : {}),
+    ...(audioTagsPrompt !== null ? { audioTagsPrompt } : {}),
+    ...(tts ? { tts } : {}),
+    ...(stt ? { stt } : {})
   }
 }
 
@@ -1202,10 +1530,10 @@ export interface ResolvedVoiceCall {
   promptMode: VoiceCallPromptMode
   /** Falas preenchidoras efetivas (consumidas pela chamada — ver SPEC → "Fillers"). */
   fillers: VoiceFillers
-  /** Prompt-base do modo voz (global); null = desligado. */
-  basePrompt: string | null
   /** O agente pode encerrar a chamada (tool `end_call`) — chat > persona > global (padrão true). */
   endCall: boolean
+  /** Frases de ferramenta (chat > persona > global `toolPhrases.enabled`; padrão true). */
+  toolPhrases: boolean
   /** Tags de voz pedidas (chat > persona > global; padrão false) — ver `audioTagsActive`. */
   audioTags: boolean
   /** Instrução efetiva das tags (chat > persona > global > `DEFAULT_AUDIO_TAGS_PROMPT`). */
@@ -1242,33 +1570,62 @@ export function resolveVoiceCallConfig(
     voicePrompt: c.voicePrompt,
     promptMode: c.promptMode ?? 'append',
     fillers: c.fillers ?? { enabled: d.fillers.enabled, prompt: d.fillers.prompt },
-    basePrompt: d.basePromptEnabled ? (d.basePrompt ?? DEFAULT_VOICE_BASE_PROMPT) : null,
     endCall: c.endCall ?? d.endCall,
     audioTags: c.audioTags ?? d.audioTags,
+    toolPhrases: c.toolPhrases ?? d.toolPhrases.enabled,
     audioTagsPrompt: c.audioTagsPrompt ?? d.audioTagsPrompt ?? DEFAULT_AUDIO_TAGS_PROMPT
   }
 }
 
 /**
  * System prompt dos turnos de voz pelo modo (ver `VoiceCallPromptMode`): `append` = system +
- * prompt-base + prompt do modo voz; `replace` = prompt-base + prompt do modo voz no lugar do system
- * (sem prompt do modo voz → como `append`); `none` = só o system. Separados por linha em branco. A
+ * prompt do modo voz; `replace` = o prompt do modo voz no lugar do system (sem prompt do modo voz
+ * → como `append`); `none` = só o system. Separados por linha em branco. A
  * instrução das tags de voz entra no FIM (em qualquer modo — é um opt-in explícito) só com as tags
  * pedidas (`audioTags`) E a voz da chamada as interpretando (`audioTagsActive`).
  */
 export function voiceSystemPrompt(
   systemPrompt: string,
-  call: Pick<ResolvedVoiceCall, 'basePrompt' | 'voicePrompt' | 'promptMode'> &
+  call: Pick<ResolvedVoiceCall, 'voicePrompt' | 'promptMode'> &
     Partial<Pick<ResolvedVoiceCall, 'audioTags' | 'audioTagsPrompt' | 'audioTagsActive'>>
 ): string {
-  const join = (parts: (string | null | undefined)[]): string =>
-    parts.filter((x): x is string => !!x?.trim()).join('\n\n')
-  const tags = call.audioTags && call.audioTagsActive ? (call.audioTagsPrompt ?? null) : null
+  const layout = voicePromptLayout(call)
+  if (!layout.parts.length) return systemPrompt
+  const texts = layout.parts.map((p) => p.text)
+  return (layout.replacesSystem ? texts : [systemPrompt, ...texts])
+    .filter((x) => !!x?.trim())
+    .join('\n\n')
+}
+
+/** Uma parte que a chamada ACRESCENTA ao prompt (de onde vem: o prompt do modo voz ou as tags). */
+export interface VoicePromptPart {
+  kind: 'voice' | 'tags'
+  text: string
+}
+
+/**
+ * O que a chamada põe no prompt, na ordem (transparência — a prévia da aba Voz e de Configurações
+ * → Áudio usa o MESMO cálculo que a request): `replacesSystem` = o system prompt do chat sai
+ * (modo substituto com prompt do modo voz); `parts` = os textos acrescentados (vazios saem). O
+ * ÚNICO texto que a chamada muda é o "Prompt do modo voz" da persona/chat (+ a instrução das tags de
+ * voz, só com o opt-in e visível/editável) — o app não põe prompt próprio (2026-11-12).
+ */
+export function voicePromptLayout(
+  call: Pick<ResolvedVoiceCall, 'voicePrompt' | 'promptMode'> &
+    Partial<Pick<ResolvedVoiceCall, 'audioTags' | 'audioTagsPrompt' | 'audioTagsActive'>>
+): { replacesSystem: boolean; parts: VoicePromptPart[] } {
+  const part = (
+    kind: VoicePromptPart['kind'],
+    text: string | null | undefined
+  ): VoicePromptPart[] => (text?.trim() ? [{ kind, text }] : [])
+  const tags = part(
+    'tags',
+    call.audioTags && call.audioTagsActive ? (call.audioTagsPrompt ?? null) : null
+  )
   const mode = call.promptMode ?? 'append'
-  if (mode === 'none') return tags ? join([systemPrompt, tags]) : systemPrompt
-  if (mode === 'replace' && call.voicePrompt?.trim())
-    return join([call.basePrompt, call.voicePrompt, tags])
-  return join([systemPrompt, call.basePrompt, call.voicePrompt, tags])
+  if (mode === 'none') return { replacesSystem: false, parts: tags }
+  const parts = [...part('voice', call.voicePrompt), ...tags]
+  return { replacesSystem: mode === 'replace' && !!call.voicePrompt?.trim(), parts }
 }
 
 /**
@@ -1305,6 +1662,354 @@ export function applyVoiceCallChat(
     }).params
   }
   return { ...chat, config: out }
+}
+
+// ---------------- voz da persona/chat: herança, disponibilidade e resolução (1.9.0) ----------------
+
+/** De onde vêm as settings de voz efetivas: o chat, a persona de origem ou as deste dispositivo. */
+export type VoiceChoiceSource = 'chat' | 'persona' | 'device'
+
+/**
+ * Camadas de voz de um chat: a `voice` do próprio chat e a da persona de origem (`presetId`, lida
+ * AO VIVO). No editor da persona só há `persona`. Valores crus são aceitos (normalizados aqui).
+ */
+export interface VoiceLayers {
+  chat?: VoiceCallConfig | null
+  persona?: VoiceCallConfig | null
+}
+
+/** Escolha de fala herdada (chat → persona) e de onde veio; `device` = nenhuma (as settings daqui). */
+export function ttsChoiceOf(layers: VoiceLayers | null | undefined): {
+  choice: VoiceTtsChoice | null
+  source: VoiceChoiceSource
+} {
+  const c = normalizeVoiceTtsChoice(layers?.chat?.tts)
+  if (c) return { choice: c, source: 'chat' }
+  const p = normalizeVoiceTtsChoice(layers?.persona?.tts)
+  return p ? { choice: p, source: 'persona' } : { choice: null, source: 'device' }
+}
+
+/** Escolha de transcrição herdada (chat → persona) e de onde veio. */
+export function sttChoiceOf(layers: VoiceLayers | null | undefined): {
+  choice: VoiceSttChoice | null
+  source: VoiceChoiceSource
+} {
+  const c = normalizeVoiceSttChoice(layers?.chat?.stt)
+  if (c) return { choice: c, source: 'chat' }
+  const p = normalizeVoiceSttChoice(layers?.persona?.stt)
+  return p ? { choice: p, source: 'persona' } : { choice: null, source: 'device' }
+}
+
+/**
+ * `ttsSettings` deste dispositivo com a escolha da persona/chat aplicada (null = as do dispositivo).
+ * O que é do dispositivo continua: passos/parâmetros da GPU (`gpu.steps`/`gpu.params`), o
+ * `installed` do mesmo motor local. Motor da GPU desconhecido nesta versão → as do dispositivo
+ * (a resolução já o trata como indisponível). Puro; `api` vem SEM endereço/chave (o main resolve).
+ */
+export function applyTtsChoice(
+  device: TtsSettings,
+  choice: VoiceTtsChoice | null | undefined
+): TtsSettings {
+  if (!choice) return device
+  if (choice.backend === 'api')
+    return {
+      ...device,
+      backend: 'api',
+      api: {
+        providerId: choice.api.providerId,
+        model: choice.api.model,
+        voice: choice.api.voice,
+        ...(choice.api.elevenLabsWs === false ? { elevenLabsWs: false } : {}),
+        ...(choice.api.params ? { params: choice.api.params } : {})
+      }
+    }
+  if (choice.backend === 'local')
+    return {
+      ...device,
+      backend: 'local',
+      local: {
+        engine: choice.local.engine,
+        voice: choice.local.voice,
+        installed: device.local?.engine === choice.local.engine ? device.local.installed : false
+      }
+    }
+  const engine = choice.gpu.engine
+  if (!isGpuTtsEngineId(engine)) return device
+  return {
+    ...device,
+    backend: 'gpu',
+    gpu: {
+      engine,
+      voice: choice.gpu.voice,
+      ...(device.gpu?.steps !== undefined ? { steps: device.gpu.steps } : {}),
+      ...(device.gpu?.params ? { params: device.gpu.params } : {})
+    }
+  }
+}
+
+/**
+ * `sttSettings` deste dispositivo com a escolha da persona/chat aplicada (null = as do
+ * dispositivo). Do dispositivo continuam: parciais ao vivo, "final rápida", os parâmetros da GPU e
+ * o `installed` do mesmo motor+modelo local. Puro; `api` vem SEM endereço/chave.
+ */
+export function applySttChoice(
+  device: SttSettings,
+  choice: VoiceSttChoice | null | undefined
+): SttSettings {
+  if (!choice) return device
+  const dl = device.local
+  return {
+    ...device,
+    mode: choice.mode,
+    api: choice.api
+      ? {
+          providerId: choice.api.providerId,
+          model: choice.api.model,
+          ...(choice.api.params ? { params: choice.api.params } : {})
+        }
+      : device.api,
+    local: choice.local
+      ? {
+          engine: choice.local.engine,
+          model: choice.local.model,
+          installed:
+            !!dl &&
+            dl.engine === choice.local.engine &&
+            dl.model === choice.local.model &&
+            dl.installed
+        }
+      : dl,
+    ...(choice.mode === 'gpu' ? { gpu: device.gpu ?? { ...DEFAULT_STT_GPU } } : {})
+  }
+}
+
+/** A escolha de fala que as settings (do seletor) representam — o inverso de `applyTtsChoice`. */
+export function ttsChoiceFromSettings(s: TtsSettings): VoiceTtsChoice | null {
+  return normalizeVoiceTtsChoice(
+    s.backend === 'api'
+      ? { backend: 'api', api: s.api }
+      : s.backend === 'gpu'
+        ? { backend: 'gpu', gpu: s.gpu ?? DEFAULT_TTS_GPU }
+        : s.local
+          ? { backend: 'local', local: s.local }
+          : null
+  )
+}
+
+/** A escolha de transcrição que as settings (do seletor) representam, com o idioma escolhido. */
+export function sttChoiceFromSettings(
+  s: SttSettings,
+  language?: string | null
+): VoiceSttChoice | null {
+  return normalizeVoiceSttChoice({
+    mode: s.mode,
+    api: s.api,
+    local: s.local,
+    ...(s.mode === 'gpu'
+      ? { gpu: { engine: s.gpu?.engine ?? GPU_STT_ENGINE_ID, model: null } }
+      : {}),
+    language: language ?? null
+  })
+}
+
+/** Resultado de uma checagem de disponibilidade NESTE dispositivo. */
+export interface VoiceCheck {
+  ok: boolean
+  /** Motivo legível (pt-BR, minúsculo, sem ponto final) quando `ok` é false. */
+  reason?: string
+  /** Nada escolhido (falta configurar) × escolhido mas ausente/quebrado aqui. */
+  unconfigured?: boolean
+}
+
+/**
+ * O que ESTE dispositivo tem, para a disponibilidade da voz (protocolo §4.3.6 — DEVE): `api` = o
+ * provedor existe aqui e serve a capacidade; `local` = motor e modelo/voz instalados AQUI; `gpu` =
+ * runtime e motor instalados AQUI e a voz existe nesta máquina. Checagem ausente = o dispositivo
+ * não tem aquele backend (ex.: o celular só tem `provider`).
+ */
+export interface VoiceDeviceCaps {
+  provider(providerId: string, capability: 'tts' | 'stt'): VoiceCheck
+  ttsLocal?(local: { engine: TtsLocalEngine; voice: string }): VoiceCheck
+  ttsGpu?(gpu: { engine: string; voice: string | null }): VoiceCheck
+  sttLocal?(local: { engine: SttLocalEngine; model: string }): VoiceCheck
+  sttGpu?(gpu: { engine: string; model: string | null }): VoiceCheck
+}
+
+const NO_LOCAL = 'este dispositivo não tem motores locais de voz'
+const NO_GPU = 'este dispositivo não tem o modo GPU local'
+
+/** As settings de fala funcionam aqui? (backend escolhido + o que ele exige — `VoiceDeviceCaps`). */
+export function ttsSettingsCheck(s: TtsSettings, caps: VoiceDeviceCaps): VoiceCheck {
+  if (s.backend === 'api') {
+    if (!s.api.providerId)
+      return { ok: false, unconfigured: true, reason: 'nenhum modelo de fala escolhido' }
+    const p = caps.provider(s.api.providerId, 'tts')
+    if (!p.ok) return p
+    if (!s.api.model.trim())
+      return { ok: false, unconfigured: true, reason: 'nenhum modelo de fala escolhido' }
+    return { ok: true }
+  }
+  if (s.backend === 'gpu') {
+    const g = s.gpu ?? DEFAULT_TTS_GPU
+    return caps.ttsGpu
+      ? caps.ttsGpu({ engine: g.engine, voice: g.voice })
+      : { ok: false, reason: NO_GPU }
+  }
+  if (!s.local) return { ok: false, unconfigured: true, reason: 'nenhuma voz local escolhida' }
+  return caps.ttsLocal
+    ? caps.ttsLocal({ engine: s.local.engine, voice: s.local.voice })
+    : { ok: false, reason: NO_LOCAL }
+}
+
+/** As settings de transcrição funcionam aqui? (híbrido: basta a API ou o motor local). */
+export function sttSettingsCheck(s: SttSettings, caps: VoiceDeviceCaps): VoiceCheck {
+  const api = (): VoiceCheck => {
+    if (!s.api.providerId)
+      return { ok: false, unconfigured: true, reason: 'nenhum modelo de transcrição escolhido' }
+    const p = caps.provider(s.api.providerId, 'stt')
+    if (!p.ok) return p
+    if (!s.api.model.trim())
+      return { ok: false, unconfigured: true, reason: 'nenhum modelo de transcrição escolhido' }
+    return { ok: true }
+  }
+  const local = (): VoiceCheck => {
+    if (!s.local)
+      return {
+        ok: false,
+        unconfigured: true,
+        reason: 'nenhum modelo local de transcrição escolhido'
+      }
+    return caps.sttLocal
+      ? caps.sttLocal({ engine: s.local.engine, model: s.local.model })
+      : { ok: false, reason: NO_LOCAL }
+  }
+  if (s.mode === 'api') return api()
+  if (s.mode === 'local') return local()
+  if (s.mode === 'gpu')
+    return caps.sttGpu
+      ? caps.sttGpu({ engine: s.gpu?.engine ?? GPU_STT_ENGINE_ID, model: null })
+      : { ok: false, reason: NO_GPU }
+  const a = api()
+  if (a.ok) return a
+  const l = local()
+  if (l.ok) return l
+  return {
+    ok: false,
+    reason: a.reason,
+    ...(a.unconfigured && l.unconfigured ? { unconfigured: true } : {})
+  }
+}
+
+/**
+ * Voz resolvida de um chat/persona NESTE dispositivo (uma por capacidade — fala e transcrição).
+ * `settings` = as efetivas (a escolha aplicada sobre as do dispositivo, ou as do dispositivo);
+ * `source` = de onde vieram ('device' também quando a escolha caiu no padrão — ver `fallback`);
+ * `available` = funcionam aqui (false → microfone/telefone esmaecidos com `reason`).
+ */
+export interface VoiceResolution<S, C> {
+  settings: S
+  source: VoiceChoiceSource
+  /** A escolha configurada (chat/persona) — null = herda as settings deste dispositivo. */
+  choice: C | null
+  /** De onde veio a escolha configurada (null = nenhuma). */
+  choiceSource: 'chat' | 'persona' | null
+  /** A escolha não está disponível aqui → as settings do dispositivo (com o motivo). */
+  fallback?: { from: 'chat' | 'persona'; reason: string }
+  available: boolean
+  /** Por que as settings efetivas não funcionam aqui (só com `available` false). */
+  reason?: string
+  /** Falta configurar (nada escolhido) — senão "não funciona neste dispositivo". */
+  unconfigured?: boolean
+}
+export type VoiceTtsResolution = VoiceResolution<TtsSettings, VoiceTtsChoice>
+export interface VoiceSttResolution extends VoiceResolution<SttSettings, VoiceSttChoice> {
+  /** Idioma da transcrição: o da escolha (mesmo com fallback — é da persona) ou o do dispositivo. */
+  language: string
+}
+
+/** Marca o motor local como instalado (a checagem acabou de conferir o disco). */
+const withLocalInstalled = <S extends { local: { installed: boolean } | null }>(s: S): S =>
+  s.local && !s.local.installed ? { ...s, local: { ...s.local, installed: true } } : s
+
+/**
+ * Fala de um chat/persona aqui: escolha do chat → da persona → `ttsSettings` deste dispositivo.
+ * Escolha indisponível (provedor que não existe aqui, motor/voz não instalados, GPU ausente, voz
+ * clonada de outro PC) → as do dispositivo, com `fallback.reason`. Puro (caps injetadas).
+ */
+export function resolveTtsVoice(
+  layers: VoiceLayers | null | undefined,
+  device: TtsSettings,
+  caps: VoiceDeviceCaps
+): VoiceTtsResolution {
+  const { choice, source } = ttsChoiceOf(layers)
+  const choiceSource = source === 'device' ? null : source
+  let fallback: VoiceTtsResolution['fallback']
+  if (choice && choiceSource) {
+    const known = choice.backend !== 'gpu' || isGpuTtsEngineId(choice.gpu.engine)
+    const eff = applyTtsChoice(device, choice)
+    const chk: VoiceCheck = known
+      ? ttsSettingsCheck(eff, caps)
+      : {
+          ok: false,
+          reason: `o motor da GPU “${choice.backend === 'gpu' ? choice.gpu.engine : ''}” não existe nesta versão do app`
+        }
+    if (chk.ok)
+      return {
+        settings: withLocalInstalled(eff),
+        source: choiceSource,
+        choice,
+        choiceSource,
+        available: true
+      }
+    fallback = { from: choiceSource, reason: chk.reason ?? 'indisponível neste dispositivo' }
+  }
+  const d = ttsSettingsCheck(device, caps)
+  return {
+    settings: d.ok ? withLocalInstalled(device) : device,
+    source: 'device',
+    choice,
+    choiceSource,
+    ...(fallback ? { fallback } : {}),
+    available: d.ok,
+    ...(d.ok ? {} : { reason: d.reason, ...(d.unconfigured ? { unconfigured: true } : {}) })
+  }
+}
+
+/**
+ * Transcrição de um chat/persona aqui (chamada e ditado): escolha do chat → da persona →
+ * `sttSettings` deste dispositivo, com o mesmo fallback de `resolveTtsVoice`. `deviceLanguage` =
+ * o idioma do ditado deste dispositivo (`audioInput.language`); o da escolha vale mesmo no fallback.
+ */
+export function resolveSttVoice(
+  layers: VoiceLayers | null | undefined,
+  device: SttSettings,
+  deviceLanguage: string,
+  caps: VoiceDeviceCaps
+): VoiceSttResolution {
+  const { choice, source } = sttChoiceOf(layers)
+  const choiceSource = source === 'device' ? null : source
+  const language = choice?.language || deviceLanguage
+  let fallback: VoiceSttResolution['fallback']
+  if (choice && choiceSource) {
+    const eff = applySttChoice(device, choice)
+    const chk = sttSettingsCheck(eff, caps)
+    if (chk.ok) {
+      const settings = eff.mode === 'local' ? withLocalInstalled(eff) : eff
+      return { settings, source: choiceSource, choice, choiceSource, available: true, language }
+    }
+    fallback = { from: choiceSource, reason: chk.reason ?? 'indisponível neste dispositivo' }
+  }
+  const d = sttSettingsCheck(device, caps)
+  return {
+    settings: device,
+    source: 'device',
+    choice,
+    choiceSource,
+    ...(fallback ? { fallback } : {}),
+    available: d.ok,
+    ...(d.ok ? {} : { reason: d.reason, ...(d.unconfigured ? { unconfigured: true } : {}) }),
+    language
+  }
 }
 
 // ---------------- estado da chamada de voz (main → store/UI; canais `voice:call:*`) ----------------

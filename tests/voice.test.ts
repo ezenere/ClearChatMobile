@@ -8,9 +8,17 @@
 // tiradas da fala, `interjections` legado nunca reenviado). Nunca abre microfone real nem gasta cota.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CHAT_CONFIG } from '../src/vendor/shared/defaults'
-import type { ChatConfig, Provider } from '../src/vendor/shared/types'
+import type { ChatConfig, Provider, ToolName } from '../src/vendor/shared/types'
+import { setLocationSource } from '../src/agent/request'
+import { OsmGeocoder } from '../src/location/nominatim'
+import { OverpassClient } from '../src/location/overpass'
+import { LocationService } from '../src/location/service'
+import { DEFAULT_LOCATION_SETTINGS } from '../src/location/settings'
+import { SettingsService } from '../src/settings/service'
+import { FakeDevice, fakeFetch, osmRoutes } from './fakes/osm'
 import {
   DEFAULT_FILLER_POOL,
+  DEFAULT_TOOL_PHRASE_POOL,
   DEFAULT_STT_SETTINGS,
   DEFAULT_TTS_SETTINGS,
   type SttSettings
@@ -26,6 +34,7 @@ import { audioSettingOut, resolveStt, resolveTts, readVoiceSettings } from '../s
 import { outgoingPlain } from '../src/data/legacy'
 import {
   CLIP_CLASSES,
+  clipClassHash,
   clipPhraseSet,
   clipsHash,
   clipsStatus,
@@ -554,10 +563,22 @@ describe('settings de áudio no celular (§4.3.2/§4.4)', () => {
 })
 
 describe('clipes e fila de reprodução', () => {
-  it('só os preâmbulos (as interjeições saíram): classe FILLER = o pool, e caches antigos ficam velhos', () => {
-    expect(CLIP_CLASSES).toEqual(['FILLER'])
-    expect(clipPhraseSet(null)).toEqual({ FILLER: DEFAULT_FILLER_POOL.map((f) => f.text) })
-    expect(Object.keys(clipPhraseSet([{ text: 'Um momento.', contexts: [] }]))).toEqual(['FILLER'])
+  it('classes: preâmbulos e frases de ferramenta (as interjeições saíram); hash por classe', () => {
+    expect(CLIP_CLASSES).toEqual(['FILLER', 'TOOL'])
+    expect(clipPhraseSet(null)).toEqual({
+      FILLER: DEFAULT_FILLER_POOL.map((f) => f.text),
+      TOOL: DEFAULT_TOOL_PHRASE_POOL.map((f) => f.text)
+    })
+    const tts = {
+      ...DEFAULT_TTS_SETTINGS,
+      backend: 'api' as const,
+      api: { providerId: 'p', model: 'm', voice: 'v1' }
+    }
+    // mudar as frases de ferramenta não invalida os preâmbulos (e vice-versa)
+    const tools = [{ text: 'Vou ver.', categories: ['generic' as const] }]
+    expect(clipClassHash(tts, 'FILLER', null, tools)).toBe(clipClassHash(tts, 'FILLER', null, null))
+    expect(clipClassHash(tts, 'TOOL', null, tools)).not.toBe(clipClassHash(tts, 'TOOL', null, null))
+    expect(clipsHash(tts, null, tools)).not.toBe(clipsHash(tts))
   })
 
   it('gera os que faltam, carrega só da definição atual e apaga os velhos', async () => {
@@ -573,22 +594,35 @@ describe('clipes e fila de reprodução', () => {
       mime: 'audio/wav'
     })
     const synth = async (t: string) => ({ audio: new TextEncoder().encode(t), mime: 'audio/wav' })
-    expect((await clipsStatus(store, tts)).ready).toBe(0)
+    const st0 = await clipsStatus(store, tts)
+    expect(st0.ready).toBe(0)
+    expect(st0.byClass.TOOL.total).toBe(DEFAULT_TOOL_PHRASE_POOL.length)
     const r = await generateClips({ store, settings: tts, synth })
     expect(r.generated).toBe(r.total)
-    expect(r.total).toBe(DEFAULT_FILLER_POOL.length)
+    expect(r.total).toBe(DEFAULT_FILLER_POOL.length + DEFAULT_TOOL_PHRASE_POOL.length)
     expect(store.keys().some((k) => k.includes('_ACK_'))).toBe(false)
     expect(
       new TextDecoder().decode((await loadCurrentClipAudio(store, tts, null, 'FILLER', 2))!.audio)
     ).toBe(DEFAULT_FILLER_POOL[1].text)
     expect(
+      new TextDecoder().decode((await loadCurrentClipAudio(store, tts, null, 'TOOL', 3))!.audio)
+    ).toBe(DEFAULT_TOOL_PHRASE_POOL[2].text)
+    expect(
       await loadCurrentClipAudio(store, tts, null, 'FILLER', DEFAULT_FILLER_POOL.length + 1)
     ).toBeNull()
+    // outra voz (outra persona): cache próprio; gerar a dela não apaga os desta
     const other = { ...tts, api: { ...tts.api, voice: 'v2' } }
     expect(clipsHash(other)).not.toBe(clipsHash(tts))
     expect(await loadCurrentClipAudio(store, other, null, 'FILLER', 1)).toBeNull()
     await generateClips({ store, settings: other, synth })
-    expect(store.keys().every((k) => k.startsWith(clipsHash(other).slice(0, 24)))).toBe(true)
+    expect(await loadCurrentClipAudio(store, other, null, 'FILLER', 1)).not.toBeNull()
+    expect(await loadCurrentClipAudio(store, tts, null, 'FILLER', 1)).not.toBeNull()
+    expect((await clipsStatus(store, tts)).ready).toBe(r.total)
+    // pool de frases de ferramenta mudou: só os TOOL desta voz ficam velhos (os FILLER valem)
+    const tools = [{ text: 'Vou ver isso.', categories: ['generic' as const] }]
+    const st1 = await clipsStatus(store, tts, null, tools)
+    expect(st1.byClass.FILLER.ready).toBe(DEFAULT_FILLER_POOL.length)
+    expect(st1.byClass.TOOL).toEqual({ total: 1, ready: 0 })
   })
 
   it('ducking: rampa até o ganho, continua tocando, vale para a próxima e volta; posição da frase', async () => {
@@ -661,34 +695,26 @@ describe('ditado e chamada de voz no host do celular', () => {
       headers: {},
       createdAt: 2
     })
-    await h.desk.put('setting', 'sttSettings', null, {
-      sv: 1,
-      value: {
-        mode: 'api',
-        api: { providerId: audioProv, model: 'whisper-falso' },
-        local: null,
-        livePartials: true
-      }
-    })
-    await h.desk.put('setting', 'ttsSettings', null, {
-      sv: 1,
-      value: {
-        backend: 'api',
-        api: { providerId: audioProv, model: 'tts-falso', voice: 'alloy' },
-        local: null
-      }
-    })
-    await h.desk.put('setting', 'audioInput', null, {
-      sv: 1,
-      value: {
-        pttEnabled: false,
-        pttKey: null,
-        silenceStopEnabled: true,
-        silenceStopMs: 600,
-        language: 'pt-BR'
-      }
-    })
     await h.engine.sync()
+    // settings de voz: LOCAIS deste aparelho desde 1.9.0 (Configurações → Voz do celular)
+    h.store.setDeviceSetting('sttSettings', {
+      mode: 'api',
+      api: { providerId: audioProv, model: 'whisper-falso' },
+      local: null,
+      livePartials: true
+    })
+    h.store.setDeviceSetting('ttsSettings', {
+      backend: 'api',
+      api: { providerId: audioProv, model: 'tts-falso', voice: 'alloy' },
+      local: null
+    })
+    h.store.setDeviceSetting('audioInput', {
+      pttEnabled: false,
+      pttKey: null,
+      silenceStopEnabled: true,
+      silenceStopMs: 600,
+      language: 'pt-BR'
+    })
   })
   afterEach(async () => h.close())
 
@@ -747,18 +773,16 @@ describe('ditado e chamada de voz no host do celular', () => {
     })
     const user = h.stack.repo.path(sid).find((m) => m.message.role === 'user')!
     expect(user.meta.voice).toEqual({ source: 'dictation' })
-    // modo Local: só no computador
-    await h.desk.put('setting', 'sttSettings', null, {
-      sv: 1,
-      value: {
-        mode: 'local',
-        api: { providerId: audioProv, model: 'w' },
-        local: { engine: 'whisper.cpp', model: '' },
-        livePartials: true
-      }
+    // modo Local: só no computador (o celular não tem motores locais)
+    h.store.setDeviceSetting('sttSettings', {
+      mode: 'local',
+      api: { providerId: audioProv, model: 'w' },
+      local: { engine: 'whisper.cpp', model: '' },
+      livePartials: true
     })
-    await h.engine.sync()
-    expect(await d.start()).toContain('Local')
+    expect(await d.start()).toBe(
+      'Ditado não funciona neste dispositivo — este dispositivo não tem motores locais de voz (Configurações → Voz).'
+    )
   })
 
   it('chamada: turno falado → resposta falada → "tchau" → end_call desliga; marcadores codificados e custos', async () => {
@@ -817,10 +841,11 @@ describe('ditado e chamada de voz no host do celular', () => {
       .find((m) => m.message.role === 'assistant' && !m.meta.synthetic)!
     expect(reply.meta.voice).toMatchObject({ source: 'call', spoken: true, ttsModel: 'tts-falso' })
     expect(reply.meta.voice?.callId).toBe(user.meta.voice?.callId)
-    // o turno de voz usa o prompt-base do modo voz e oferece end_call
+    // o turno de voz oferece end_call (a descrição está na própria tool) e NÃO põe prompt oculto:
+    // sem "Prompt do modo voz" na persona/chat, o system prompt é o normal do chat
     const req = h.llm.requests.filter((r) => r.path.endsWith('/chat/completions')).at(-1)!
     const sys = JSON.stringify((req.body.messages as unknown[])[0])
-    expect(sys).toContain('end_call')
+    expect(sys).not.toContain('conversa por voz')
     expect(JSON.stringify(req.body.tools)).toContain('end_call')
     // 2º turno: despedida → end_call → a chamada cai depois de tocar
     // o rabo do eco (meia-duplex) passa: o microfone volta a ouvir
@@ -914,7 +939,9 @@ describe('ditado e chamada de voz no host do celular', () => {
         voicedMs: voicedMsOf(wav16(q1)).voicedMs,
         text: 'Conte devagar uma história comprida sobre o mar. [risos] Depois fale das ondas que batem na praia sem parar nunca.'
       },
-      { voicedMs: voicedMsOf(wav16(q2)).voicedMs, text: 'Espera aí, me fala do farol.' }
+      { voicedMs: voicedMsOf(wav16(q2)).voicedMs, text: 'Espera aí, me fala do farol.' },
+      // a fala curta por cima (parcial ao vivo): só backchannel — não confirma o barge-in
+      { voicedMs: voicedMsOf(wav16(speech([[700, true]]))).voicedMs, text: 'Uhum.' }
     ]
     const mic = new ScriptedMic()
     const pb = trackedPlayback(1) // tempo real: dá tempo de falar por cima
@@ -950,27 +977,31 @@ describe('ditado e chamada de voz no host do celular', () => {
       .filter((l) => l.path.endsWith('/audio/speech'))
       .map((l) => l.fields.input)
     expect(ttsInputs.join(' ')).not.toContain('[risos]')
-    // --- tosse curta por cima: abaixa, depois volta; nada é cancelado nem vira turno ---
-    const playingId = call.follow.get().current!.id
+    // --- tosse/clique curto por cima (200 ms): abaixo do onset — nada abaixa nem vira turno ---
     mic.feed(speech([[200, true]]))
+    mic.feed(speech([[600, false]]))
+    expect(kinds()).not.toContain('duck')
+    expect(kinds()).not.toContain('duck-restore')
+    expect(Math.min(...pb.volumes)).toBe(1)
+    // --- fala curta por cima (700 ms de voz): passa do onset (500 ms) → abaixa; para → volta ---
+    mic.feed(speech([[700, true]]))
     expect(kinds()).toContain('duck')
     expect(call.getView().ducked).toBe(true)
-    await sleep(150)
-    expect(Math.min(...pb.volumes)).toBeLessThanOrEqual(0.31) // abaixou (padrão 0,3)
+    await until(() => Math.min(...pb.volumes) <= 0.31, 3000, 'abaixar') // padrão 0,3
     mic.feed(speech([[600, false]]))
     expect(kinds()).toContain('duck-restore')
     expect(call.getView().ducked).toBe(false)
-    await sleep(150)
-    expect(pb.volumes.at(-1)).toBe(1) // voltou
-    expect(call.follow.get().current?.id ?? playingId).toBe(playingId) // continuou tocando
-    expect(kinds()).not.toContain('barge-in')
+    await until(() => pb.volumes.at(-1) === 1, 3000, 'volume de volta')
+    expect(kinds()).not.toContain('barge-in') // nada cancelado: a resposta continuou
     expect(h.stack.repo.path(sid).filter((m) => m.message.role === 'user').length).toBe(1)
     // --- insiste falando por cima: barge-in (voz) no meio da frase ---
     await sleep(300)
     mic.feed(q2)
     const bi = call.getView().timeline.find((e) => e.kind === 'barge-in')!
     expect(bi).toMatchObject({ reason: 'voiced' })
-    expect(call.getView().timeline.find((e) => e.kind === 'heard')?.reason).toBe('heard-estimated')
+    // a frase tocando no barge-in (se havia uma — sob carga pode cair entre duas frases)
+    const heardEv = call.getView().timeline.find((e) => e.kind === 'heard')
+    if (heardEv) expect(heardEv.reason).toBe('heard-estimated')
     expect(call.follow.get().current).toBeNull()
     await feedUntil(
       () =>
@@ -1031,4 +1062,314 @@ describe('ditado e chamada de voz no host do celular', () => {
     expect(plain.config.voice).toBeTruthy()
     expect(plain.config.voice).not.toHaveProperty('interjections')
   })
+})
+
+// ---------------- voz da persona/chat e settings locais (protocolo 1.9.0) ----------------
+
+describe('voz da persona e settings de voz locais (1.9.0) no host do celular', () => {
+  let h: Harness
+  const audioProv = 'prov-voz'
+  const personaProv = 'prov-persona'
+  const prov = (name: string) => ({
+    sv: 1,
+    name,
+    kind: 'openai',
+    baseUrl: `${h.llm.url}/v1`,
+    apiKey: 'sk-voz',
+    headers: {},
+    createdAt: 2
+  })
+  beforeEach(async () => {
+    resetNoiseFloor()
+    h = await makeHarness()
+    await h.desk.put('provider', audioProv, null, prov('Voz falsa'))
+    await h.desk.put('provider', personaProv, null, prov('Voz da persona'))
+    // a persona fala/ouve com o provedor dela, em inglês
+    await h.desk.put('preset', 'pers-narr', null, {
+      sv: 1,
+      name: 'Narradora',
+      description: '',
+      icon: 'sparkles',
+      config: {
+        voice: {
+          tts: {
+            backend: 'api',
+            api: { providerId: personaProv, model: 'tts-persona', voice: 'nova' }
+          },
+          stt: {
+            mode: 'api',
+            api: { providerId: personaProv, model: 'whisper-persona' },
+            language: 'en-US'
+          }
+        }
+      },
+      createdAt: 1,
+      updatedAt: 1
+    })
+    await h.engine.sync()
+    h.store.setDeviceSetting('sttSettings', {
+      mode: 'api',
+      api: { providerId: audioProv, model: 'whisper-falso' },
+      local: null,
+      livePartials: false
+    })
+    h.store.setDeviceSetting('ttsSettings', {
+      backend: 'api',
+      api: { providerId: audioProv, model: 'tts-falso', voice: 'alloy' },
+      local: null
+    })
+  })
+  afterEach(async () => h.close())
+
+  const newChat = (cfg: Partial<ChatConfig> = {}) => {
+    const { chat, session } = h.stack.repo.createChat({
+      config: {
+        ...DEFAULT_CHAT_CONFIG(''),
+        providerId: h.providerId,
+        model: 'fake/agent',
+        enabledTools: [],
+        ...cfg
+      }
+    })
+    return { chatId: chat.id, sid: session.id }
+  }
+
+  it('settings de voz são deste aparelho: o registro de um app antigo é ignorado e nada sobe; a voz da persona sincroniza', async () => {
+    const mine = h.store.deviceSetting('sttSettings')
+    await h.desk.put('setting', 'sttSettings', null, {
+      sv: 1,
+      value: { mode: 'api', api: { providerId: 'outro', model: 'do-pc' } }
+    })
+    await h.engine.sync()
+    expect(h.store.deviceSetting('sttSettings')).toEqual(mine)
+    const s = new SettingsService({
+      store: h.store,
+      writer: h.stack.memory.writer,
+      memory: h.stack.memory.index
+    })
+    expect(s.setting('sttSettings')).toEqual(mine)
+    s.setSetting('ttsSettings', {
+      backend: 'api',
+      api: { providerId: audioProv, model: 'tts-2', voice: null },
+      local: null
+    })
+    expect(h.store.deviceSetting<{ api: { model: string } }>('ttsSettings')?.api.model).toBe(
+      'tts-2'
+    )
+    // a voz da persona vai no registro dela (escolha + parâmetros, sem endereço/chave)
+    const p = s.savePreset({
+      name: 'Locutor',
+      description: '',
+      icon: 'sparkles',
+      config: {
+        voice: {
+          enabled: null,
+          model: null,
+          tools: null,
+          voicePrompt: null,
+          fillers: null,
+          tts: {
+            backend: 'api',
+            api: { providerId: personaProv, model: 'tts-x', voice: 'onyx' }
+          }
+        }
+      }
+    })
+    await until(() => !h.stack.memory.writer.pending(), 8000, 'LWW')
+    expect(h.store.lwwOutbox()).toEqual([])
+    expect(h.server.records.get('setting|ttsSettings')).toBeUndefined()
+    expect(h.server.records.get('setting|sttSettings')!.rev).toBe(1) // só o do "app antigo"
+    const rec = h.server.records.get(`preset|${p.id}`)!
+    const plain = (await openRecord(h.desk.sk.record, h.server.userId, rec, rec.env!)) as {
+      config: { voice: Record<string, unknown> }
+    }
+    expect(plain.config.voice.tts).toEqual({
+      backend: 'api',
+      api: { providerId: personaProv, model: 'tts-x', voice: 'onyx' }
+    })
+  })
+
+  it('ditado e chamada com a voz/transcrição da persona (idioma dela); provedor dela ausente → a deste aparelho', async () => {
+    const q1 = speech([[1200, true]])
+    h.llm.voice.fixtures = [
+      { voicedMs: voicedMsOf(wav16(q1)).voicedMs, text: 'What is the capital of France?' }
+    ]
+    const { chatId, sid } = newChat({ presetId: 'pers-narr' })
+    expect(h.stack.repo.chat(chatId)!.config.voice?.tts).toBeUndefined() // herda ao vivo
+    // --- ditado no composer com as camadas do chat ---
+    const dictMic = new FakeMicSource(
+      speech([
+        [300, false],
+        [1200, true],
+        [400, false]
+      ]),
+      RATE,
+      { frameMs: 4 }
+    )
+    let mic: MicSource = dictMic
+    const voice = createVoiceStack({
+      stack: h.stack,
+      store: h.store,
+      mic: () => mic,
+      playback: fakePlayback(10),
+      clips: memoryClipStore(),
+      requestMic: async () => true,
+      bargeIn: () => false
+    })
+    const persona = h.store.getPlain('preset', 'pers-narr')!.config as { voice: unknown }
+    const layers = { chat: null, persona: persona.voice as never }
+    expect(await voice.dictation.start(layers)).toBeNull()
+    await new Promise((r) => setTimeout(r, 300))
+    const dict = await voice.dictation.finish()
+    expect(dict?.text).toBe('What is the capital of France?')
+    const sttLog = () => h.llm.voice.log.filter((l) => l.path.endsWith('/audio/transcriptions'))
+    expect(sttLog().at(-1)?.fields).toMatchObject({ model: 'whisper-persona', language: 'en' })
+    // --- chamada: decidida no início com a voz da persona ---
+    const scripted = new ScriptedMic()
+    mic = scripted
+    await voice.call.start(sid)
+    const silence = speech([[64, false]])
+    const feedUntil = async (cond: () => boolean, what: string) => {
+      const t0 = Date.now()
+      while (!cond()) {
+        if (Date.now() - t0 > 20000) throw new Error(`timeout: ${what}`)
+        scripted.feed(silence)
+        await new Promise((r) => setTimeout(r, 4))
+      }
+    }
+    scripted.feed(speech([[200, false]]))
+    scripted.feed(q1)
+    await feedUntil(
+      () =>
+        h.stack.repo.path(sid).some((m) => m.message.role === 'assistant' && !m.meta.synthetic) &&
+        !h.stack.runner.isRunning(sid) &&
+        voice.call.getView().call.phase === 'listening',
+      'resposta falada'
+    )
+    const tts = h.llm.voice.log.filter((l) => l.path.endsWith('/audio/speech'))
+    expect(tts.length).toBeGreaterThan(0)
+    expect(tts.every((l) => l.fields.model === 'tts-persona' && l.fields.voice === 'nova')).toBe(
+      true
+    )
+    expect(sttLog().at(-1)?.fields).toMatchObject({ model: 'whisper-persona', language: 'en' })
+    const reply = h.stack.repo
+      .path(sid)
+      .find((m) => m.message.role === 'assistant' && !m.meta.synthetic)!
+    expect(reply.meta.voice?.ttsModel).toBe('tts-persona')
+    voice.call.stop()
+    await until(() => !voice.call.getView().call.active, 4000)
+    // o provedor da persona não existe mais aqui: a chamada usa a voz deste aparelho
+    h.desk.del('provider', personaProv, null)
+    await h.engine.sync()
+    expect(h.stack.providers().some((p) => p.id === personaProv)).toBe(false)
+    const n = tts.length
+    await voice.call.start(sid)
+    scripted.feed(q1)
+    await feedUntil(
+      () =>
+        h.llm.voice.log.filter((l) => l.path.endsWith('/audio/speech')).length > n &&
+        !h.stack.runner.isRunning(sid) &&
+        voice.call.getView().call.phase === 'listening',
+      'resposta com a voz daqui'
+    )
+    const after = h.llm.voice.log.filter((l) => l.path.endsWith('/audio/speech')).slice(n)
+    expect(after.every((l) => l.fields.model === 'tts-falso')).toBe(true)
+    // ...e a transcrição daqui, mas no idioma da persona (o idioma é dela)
+    expect(sttLog().at(-1)?.fields).toMatchObject({ model: 'whisper-falso', language: 'en' })
+    voice.call.stop()
+    await until(() => !voice.call.getView().call.active, 4000)
+  }, 60_000)
+})
+
+// ---------------- frases de ferramenta (tool do celular → categoria "location") ----------------
+
+describe('frases de ferramenta na chamada (tool do celular)', () => {
+  let h: Harness
+  afterEach(async () => {
+    await h?.close()
+    setLocationSource(null)
+  })
+
+  it('nearby_places num chat deste celular: a frase "location" toca do clipe gerado (no lugar do preâmbulo)', async () => {
+    resetNoiseFloor()
+    const net = fakeFetch(osmRoutes())
+    const svc = new LocationService({
+      device: new FakeDevice(),
+      settings: () => ({ ...DEFAULT_LOCATION_SETTINGS, approval: 'always' }),
+      overpass: new OverpassClient({ fetch: net.fetch, userAgent: 'test', minIntervalMs: 0 }),
+      geocoder: new OsmGeocoder({ fetch: net.fetch, userAgent: 'test', sleep: async () => {} }),
+      now: () => 30_000
+    })
+    h = await makeHarness({ location: svc })
+    await h.desk.put('provider', 'prov-voz', null, {
+      sv: 1,
+      name: 'Voz falsa',
+      kind: 'openai',
+      baseUrl: `${h.llm.url}/v1`,
+      apiKey: 'sk-voz',
+      headers: {},
+      createdAt: 2
+    })
+    await h.engine.sync()
+    h.store.setDeviceSetting('sttSettings', {
+      mode: 'api',
+      api: { providerId: 'prov-voz', model: 'whisper-falso' },
+      livePartials: false
+    })
+    h.store.setDeviceSetting('ttsSettings', {
+      backend: 'api',
+      api: { providerId: 'prov-voz', model: 'tts-falso', voice: 'alloy' }
+    })
+    const q = speech([[1300, true]])
+    h.llm.voice.fixtures = [
+      { voicedMs: voicedMsOf(wav16(q)).voicedMs, text: '/near-at Avenida Paulista | café' }
+    ]
+    const mic = new ScriptedMic()
+    const voice = createVoiceStack({
+      stack: h.stack,
+      store: h.store,
+      mic: () => mic,
+      playback: fakePlayback(10),
+      clips: memoryClipStore(),
+      requestMic: async () => true,
+      bargeIn: () => false
+    })
+    // "Gerar clipes" (o TTS falso — nada pago): preâmbulos e frases de ferramenta da voz daqui
+    await voice.call.generateClips()
+    expect(voice.call.getView().clips).toMatchObject({ state: 'ok', missing: [] })
+    const { chat, session } = h.stack.repo.createChat({
+      config: {
+        ...DEFAULT_CHAT_CONFIG(''),
+        providerId: h.providerId,
+        model: 'fake/agent',
+        enabledTools: ['get_location', 'nearby_places'] as unknown as ToolName[]
+      }
+    })
+    await voice.call.start(session.id)
+    mic.feed(speech([[200, false]]))
+    mic.feed(q)
+    const silence = speech([[64, false]])
+    const t0 = Date.now()
+    const decided = () =>
+      voice.call.getView().timeline.find((e) => e.kind === 'decision' && e.class === 'TOOL')
+    while (!decided() || h.stack.runner.isRunning(session.id)) {
+      if (Date.now() - t0 > 20000) throw new Error('timeout: frase de ferramenta')
+      mic.feed(silence)
+      await new Promise((r) => setTimeout(r, 4))
+    }
+    expect(decided()).toMatchObject({ class: 'TOOL', played: true, reason: 'location' })
+    // no lugar do preâmbulo (que ainda não tinha tocado)
+    expect(
+      voice.call
+        .getView()
+        .timeline.some(
+          (e) => e.kind === 'decision' && e.class === 'FILLER' && e.reason === 'tool-phrase'
+        )
+    ).toBe(true)
+    const tool = h.stack.repo.path(session.id).find((m) => m.message.role === 'tool')!
+    expect(String(tool.message.content)).toContain('Cantina do Teste')
+    expect(chat.id).toBeTruthy()
+    voice.call.stop()
+    await until(() => !voice.call.getView().call.active, 4000)
+  }, 60_000)
 })

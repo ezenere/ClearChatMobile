@@ -62,7 +62,7 @@ export function createVoiceStack(d: VoiceStackDeps): VoiceStack {
       return release
     },
     personaVoice,
-    setting: (id) => store.setting(id),
+    setting: (id) => store.deviceSetting(id),
     provider,
     requestMic: d.requestMic,
     mic: d.mic,
@@ -75,7 +75,7 @@ export function createVoiceStack(d: VoiceStackDeps): VoiceStack {
     ...(d.log ? { log: d.log } : {})
   })
   const dictation = new DictationController({
-    setting: (id) => store.setting(id),
+    setting: (id) => store.deviceSetting(id),
     provider,
     requestMic: d.requestMic,
     mic: d.mic,
