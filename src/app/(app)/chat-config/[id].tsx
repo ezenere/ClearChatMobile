@@ -345,7 +345,7 @@ export default function ChatConfigScreen() {
               <View style={st.ownLine}>
                 <Text style={st.ownText} testID="inherit-own-count">
                   {own.length
-                    ? `${ownCountText(own.length)}${ownLocalTools ? ` (${ownLocalTools === 1 ? '1 ferramenta só do computador desligada' : `${ownLocalTools} ferramentas só do computador desligadas`} para rodar no celular)` : ''}.`
+                    ? `${ownCountText(own.length)}${ownLocalTools ? ` (${ownLocalTools === 1 ? '1 é uma ferramenta só do computador desligada' : `${ownLocalTools} são ferramentas só do computador desligadas`} — sem elas o chat também roda no celular)` : ''}.`
                     : 'Nenhum campo próprio deste chat.'}
                 </Text>
                 {own.length ? (

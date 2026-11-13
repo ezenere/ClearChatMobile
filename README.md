@@ -902,6 +902,52 @@ aparelho (`?do=grace|back|drop|quit|saved|off`). `clearchat://dev/push` aceita `
 E2E, `adb shell input text` só traduz `%s` (espaço): `%3F` chega literal — para `?` use
 `input text '\?'`.
 
+## Herança ao vivo da persona (protocolo 1.10.0)
+
+Contrato: §4.3.6 ("Herança ao vivo da persona") e as notas 1.10.0 em §4.3.3, §7.5, §7.7, §12 e §23.7.
+A lógica é a do desktop, vendorada (`@shared/chatInherit`, `src/vendor/renderer/inherit.ts` com os
+rótulos); aqui só a leitura do cache e a fiação:
+
+- **Config efetiva** (`src/data/inherit.ts`): o registro do chat (próprios + cópia informativa +
+  `overrides`) lido como o desktop (`chatRecordFrom`) e, com persona existente aqui e `overrides`, as
+  unidades herdadas vêm da persona e de "Novos chats" (`defaultModel`, `defaultSystemPrompt`, provedores
+  de chat) **deste aparelho**, lidos na hora. Usam a efetiva: `ChatRepo.chat` (agente, subagentes,
+  compactação, memória, voz), `useChat` (telas, inclusive os chats de outro host), o visualizador dos
+  chats só ao vivo (`useLiveChat`), `listChats` das tools e o `usesLocalTools` (§8.9, com a voz da
+  persona em camadas — `runConfigOf`). Persona/padrão/provedor mudou → as telas abertas recarregam.
+- **Escrita** (`ChatRepo.updateChat` → `applyChatConfigPatch`): edição = as unidades tocadas viram
+  próprias; `overrides` no patch = como enviado ("voltar a herdar"); `presetId` = trocar de persona
+  (`null` = "Nenhuma" = congelar). O registro sai sem `cwd`.
+- **Novo chat**: com persona, `newInheritingChatConfig` (modo diferença) grava como próprias só as
+  unidades em que o formulário difere do valor efetivo da persona — o que o usuário mudou e o que o
+  celular desliga para poder rodar (tools locais, skills); a voz não é copiada (só as tools da chamada,
+  sem as locais, se a persona liga uma).
+- **Migração** (chats com `presetId` sem `overrides`): no fim de cada pull completo/lote ao vivo
+  contíguo (gancho `caughtUp` do motor) e na inicialização sem conta; não mexe no `updatedAt`.
+- **Persona apagada**: aqui (`SettingsService.deletePreset`) ou pelo tombstone/resync (gancho
+  `beforePresetGone`, dentro da transação, antes de a persona sair do cache) → os chats dela congelam
+  (`freezeChat`) e vão à outbox; a outbox LWW segura o tombstone da persona enquanto houver chat
+  congelado dela pendente (`LocalStore.frozenPending`, a base pendente aponta para ela).
+- **Merge sem perder marcas** (§7.5): a outbox guarda a **base** do registro `chat` (migração 7 do
+  cache: a revisão do servidor de quando a edição começou; `{}` = chat novo) e o conflito é o merge
+  3-way do desktop (`src/data/chatMerge.ts` → `mergeChatConfig3` vendorado): `overrides` por unidade,
+  a cópia de uma unidade herdada aqui não sobrescreve um valor próprio do servidor, e um "voltar a
+  herdar" daqui vence. Vale no `rev_mismatch` do push (a linha é relida) e no pull de uma revisão mais
+  nova com edição pendente (`rebaseChatOnPull` — antes o cache ficava com a do servidor e a edição só
+  voltava no push). Linhas antigas sem base caem no merge pelo `patch`.
+- **Telas**: "Configurações do chat…" no menu do chat (e do visualizador ao vivo, que manda cada
+  mudança por `chat.update`): seletor de persona ("Nenhuma" explicada e confirmada na tela), linha de
+  quem os campos sem marca seguem, quantos são deste chat + "Voltar a herdar tudo", e cada campo próprio
+  com "↺ neste chat" (tocar mostra o valor que voltaria e de onde vem — persona “X” ou "Novos chats" —
+  com "Voltar a herdar"); ★ no valor herdado do raciocínio e da assinatura (escolher a ★ volta a
+  herdar); modelo, parâmetros, system prompt, tools, memória, contexto, assinatura, ambiente e "Outros
+  campos" (os sem editor no celular, com o valor efetivo e a origem). Marcas também nas folhas Memória
+  e Compactar. Personas: "N chats seguem" e o aviso de que apagar congela; "Novos chats": a nota da
+  cadeia Novos chats → persona → chat.
+
+Testes: `tests/chatInherit.test.ts` (servidor falso) e `tests/integration/chatInherit.test.ts`
+(servidor local, dois aparelhos).
+
 ## Build iOS no Mac
 
 O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem

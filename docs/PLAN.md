@@ -1,7 +1,7 @@
 # ClearChat Mobile — plano
 
 App Android (iOS depois) em **Expo SDK 58 / React Native 0.88**, com dev build (`expo prebuild`) —
-precisamos de módulos nativos. Implementa o protocolo de sync v1.8.0.
+precisamos de módulos nativos. Implementa o protocolo de sync v1.10.0.
 
 ## Escopo
 
@@ -638,6 +638,23 @@ Pendências / TODO:
 - Logout continua apagando o cache — inclusive os chats "Só neste aparelho" (o diálogo avisa que
   apaga os dados deste aparelho).
 - iOS: não testado (como o resto).
+
+## Herança ao vivo da persona (protocolo 1.10.0) — estado (2026-11-12)
+
+Feito (vendor do desktop a5d91f1): config efetiva em tudo que roda ou exibe um chat, Novo chat com
+`overrides` só do que mudou, editar/voltar a herdar/trocar de persona/"Nenhuma", migração depois do pull
+e na inicialização sem conta, congelamento antes do tombstone da persona (e ao recebê-lo), merge 3-way do
+registro `chat` com a base guardada na outbox, tela "Configurações do chat" (também para chats só ao
+vivo, por `chat.update`), contagem de chats por persona e a nota em "Novos chats". Detalhes: README §
+"Herança ao vivo da persona".
+
+Verificado: typecheck, lint, `npm test`, `vendor:check`, `tests/integration/chatInherit.test.ts` e o
+resto da integração contra o servidor local, e as telas no AVD com uma conta do servidor local.
+
+Pendências / TODO:
+- "Salvar como persona" a partir do chat (o desktop tem) não existe no celular.
+- Os campos sem editor no celular (aprovações, Smart-Approve, skills, tools no prompt…) só aparecem
+  com o valor e a origem (e "voltar a herdar" quando são do chat); editar é no computador.
 
 ## Ideias
 
