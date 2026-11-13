@@ -7,6 +7,8 @@
 // ferramenta e tools próprias. As escolhas com herança seguem o `InheritChoice` (★ na opção igual
 // ao herdado — nunca uma opção "Padrão" duplicando o padrão). As tools da chamada que só rodam no
 // computador ficam na lista, esmaecidas e alternáveis (§4.3.6: o celular não as manda ao modelo).
+// Tools compactadas (1.11.0): as da chamada vão como no chat (a compactação do chat/persona); cada uma
+// mostra a definição que vai.
 import {
   DEFAULT_VOICE_CALL_DEFAULTS,
   VOICE_CALL_PROMPT_MODES,
@@ -26,6 +28,8 @@ import { MOBILE_TOOLS } from '@/agent/request'
 import { toolLabel } from '@/agent/toolLabels'
 import { LOCATION_TOOLS } from '@/location/service'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
+import { ToolSendLine, type CompactCfg } from '@/settings/ToolsSend'
+import { compactToolsOn } from '@shared/compactTools'
 import { ModelField } from '@/settings/ModelPicker'
 import { FieldLabel, Multiline, Note, NumberField } from '@/settings/ui'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
@@ -61,6 +65,7 @@ export function VoiceConfigEditor({
   defaults = DEFAULT_VOICE_CALL_DEFAULTS,
   persona = null,
   chatTools = null,
+  compactCfg = null,
   tagsSupport = { supported: false, model: null },
   device = null,
   testID = 'voice-config'
@@ -76,6 +81,8 @@ export function VoiceConfigEditor({
   persona?: VoicePersonaLayer | null
   /** Tools do chat/persona (ponto de partida de "Tools próprias na chamada"). */
   chatTools?: ToolName[] | null
+  /** Compactação do chat/persona (1.11.0): as tools da chamada vão assim (a definição de cada uma). */
+  compactCfg?: CompactCfg | null
   /** A voz da chamada interpreta tags de voz? */
   tagsSupport?: { supported: boolean; model: string | null }
   /** Settings de voz deste aparelho: com elas, as seções "Fala"/"Transcrição" (voz da persona/chat). */
@@ -304,6 +311,13 @@ export function VoiceConfigEditor({
           testID={`${testID}-tools`}
         />
       </Card>
+      {tools && compactCfg ? (
+        <Note>
+          {compactToolsOn(compactCfg)
+            ? 'Vão compactas como no chat (Tools → “Enviar tools compactadas”); “Definição” mostra o que vai. Encerrar a chamada (end_call) vai sempre completa.'
+            : 'Vão completas como no chat (Tools → “Enviar tools compactadas” desligado).'}
+        </Note>
+      ) : null}
       {tools ? (
         <Card padded={false}>
           {portable.map((t, i) => (
@@ -315,6 +329,15 @@ export function VoiceConfigEditor({
                 onChange={(on) => toggleTool(t, on)}
                 testID={`${testID}-tool-${t}`}
               />
+              {compactCfg ? (
+                <ToolSendLine
+                  name={t}
+                  cfg={compactCfg}
+                  enabled={tools.includes(t)}
+                  chip={false}
+                  testID={`${testID}-tool-send-${t}`}
+                />
+              ) : null}
             </View>
           ))}
         </Card>

@@ -1,7 +1,8 @@
 // Configurações → Personas → editar/criar (= editor do desktop, enxuto): ícone, nome, descrição e
 // as abas Modelo (par provedor + modelo ou "usar o padrão", parâmetros), Chat (system prompt,
 // janela/compactação, assinatura do app, opções do computador), Ferramentas (as que rodam também no
-// celular e, esmaecidas, as só do computador — mesma lista em todo aparelho, §4.3.6) e
+// celular e, esmaecidas, as só do computador — mesma lista em todo aparelho, §4.3.6; e como vão:
+// "Enviar tools compactadas", o chip "compacta"/"completa" e a definição de cada uma — 1.11.0) e
 // Memória (coleções ativas e onde grava — é a persona que define a memória dos chats novos) e
 // Voz (a chamada de voz da persona — `VoiceConfigEditor`).
 // Campos não alterados seguem "Novos chats"; os que o celular não edita ficam como estão.
@@ -22,6 +23,7 @@ import { ChatAvatar } from '@/chat/ChatBits'
 import { followersByPreset } from '@/data/inherit'
 import { store } from '@/data/native'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
+import { CompactToolsCard, OtherToolsGroup, ToolSendLine } from '@/settings/ToolsSend'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
 import { useVoiceCallInheritance } from '@/settings/voiceUi'
@@ -52,7 +54,8 @@ const TOOL_HELP: Partial<Record<ToolName, string>> = {
   ask_user: 'Faz perguntas de múltipla escolha a você.',
   delegate_task: 'Cria subagentes para tarefas paralelas.',
   send_to_chat: 'Manda mensagens a outros chats.',
-  read_history: 'Lê o histórico completo (inclusive o compactado).'
+  read_history: 'Lê o histórico completo (inclusive o compactado).',
+  datetime: 'Data e hora do celular, no fuso dele.'
 }
 
 function loadDefaults() {
@@ -139,6 +142,8 @@ export default function PersonaEditor() {
   const toggleTool = (t: ToolName, on: boolean) => patch({ enabledTools: withTool(tools, t, on) })
   // "também no celular" = as tools que o celular executa (MOBILE_TOOLS); o resto só no computador
   const portable = [...TOOL_NAMES, ...LOCATION_TOOLS].filter((t) => MOBILE_TOOLS.includes(t))
+  // como as tools vão (1.11.0): a persona define, ou segue o padrão do app (compactadas)
+  const ownSend = draft.toolsCompact !== undefined || draft.toolsFull !== undefined
 
   return (
     <SettingsScreen
@@ -291,6 +296,31 @@ export default function PersonaEditor() {
 
       {tab === 'tools' ? (
         <>
+          <FieldLabel
+            right={
+              ownSend ? (
+                <TextButton
+                  title="Usar o padrão"
+                  icon="arrow-undo-outline"
+                  onPress={() => unset('toolsCompact', 'toolsFull')}
+                  testID="persona-tools-send-default"
+                />
+              ) : undefined
+            }
+          >
+            Envio das tools
+          </FieldLabel>
+          <CompactToolsCard
+            cfg={cfg}
+            onChange={(toolsCompact) => patch({ toolsCompact })}
+            sent={portable.filter((t) => tools.includes(t))}
+            testID="persona-tools-compact"
+          />
+          <Note>
+            {ownSend
+              ? 'Definido nesta persona (compactação e as que vão completas).'
+              : 'Segue o padrão do app: compactadas, nenhuma completa.'}
+          </Note>
           <FieldLabel>Também no celular</FieldLabel>
           <Card padded={false}>
             {portable.map((t, i) => (
@@ -303,13 +333,22 @@ export default function PersonaEditor() {
                   onChange={(v) => toggleTool(t, v)}
                   testID={`persona-tool-${t}`}
                 />
+                <ToolSendLine
+                  name={t}
+                  cfg={cfg}
+                  patch={patch}
+                  enabled={tools.includes(t)}
+                  testID={`persona-tool-send-${t}`}
+                />
               </View>
             ))}
           </Card>
+          <OtherToolsGroup cfg={cfg} patch={patch} testID="persona-tools-other" />
           <ComputerToolsGroup
             tools={tools}
             onToggle={toggleTool}
             rowTestID={(t) => `persona-tool-${t}`}
+            send={{ cfg, patch }}
           />
         </>
       ) : null}
@@ -333,6 +372,7 @@ export default function PersonaEditor() {
           tagsSupport={voiceInherit.tagsSupport}
           device={voiceInherit.device}
           chatTools={cfg.enabledTools ?? null}
+          compactCfg={cfg}
         />
       ) : null}
     </SettingsScreen>

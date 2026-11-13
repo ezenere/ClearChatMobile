@@ -1,7 +1,7 @@
 # ClearChat Mobile — plano
 
 App Android (iOS depois) em **Expo SDK 58 / React Native 0.88**, com dev build (`expo prebuild`) —
-precisamos de módulos nativos. Implementa o protocolo de sync v1.10.0.
+precisamos de módulos nativos. Implementa o protocolo de sync v1.11.0.
 
 ## Escopo
 
@@ -669,6 +669,19 @@ migração só marca própria a diferença numa tool do tipo de aparelho em que 
 Ajustes do protocolo (desktop 34de0cd): aviso forte ao assumir só com `hostCwd`; `present_file` em
 `usesLocalTools`; limpeza única das marcas por causa do aparelho (depois do pull completo e, sem conta,
 na inicialização), com a marca de feito no `kv` do aparelho.
+
+## Tools compactadas e `datetime` (protocolo 1.11.0) — estado (2026-11-13)
+
+Feito (vendor do desktop e0733f3, `@shared/compactTools` e `@shared/datetime`): request com o plano das
+tools sobre as definições do celular (compactas, `search_tool` no fim, prompt fixo; subagentes, memória,
+voz com `end_call` completa, texto gerado das tools), `search_tool` e erro de argumentos com a definição
+completa no runner, `datetime` portátil sem aprovação; telas (chat, persona, Novo chat, tools da
+chamada) com "Enviar tools compactadas", "O que vai junto", chip "compacta"/"completa" com a marca da
+herança e a definição que vai. Detalhes: README § "Tools compactadas e `datetime`".
+
+Verificado: typecheck, lint, `npm test`, `vendor:check`; no AVD (Android 15, Hermes): self-test com o
+Intl com fuso (81/81), turnos `datetime` e `search_tool` com o provedor falso, telas e marcas da
+herança (modo sem conta).
 
 ## Ideias
 

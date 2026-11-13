@@ -966,6 +966,38 @@ rótulos); aqui só a leitura do cache e a fiação:
 Testes: `tests/chatInherit.test.ts` (servidor falso) e `tests/integration/chatInherit.test.ts`
 (servidor local, dois aparelhos).
 
+## Tools compactadas e `datetime` (protocolo 1.11.0)
+
+Contrato: §4.3.6 ("Tools compactadas e `datetime`"). A lógica é a do desktop, vendorada
+(`@shared/compactTools`, `@shared/datetime`); aqui só a fiação:
+
+- **Request** (`toolsPlan` em `src/agent/request.ts`, = desktop): parte das definições COMPLETAS como o
+  celular as manda (`toolDefinitions`: as de localização deste aparelho, a descrição do `browse_url` do
+  celular, o `provider` dos provedores) → compactas (nome + descrição curta do app, esquema
+  `{type:'object', properties:{}}`) as que não estão em `toolsFull` com a compactação ligada (padrão),
+  `search_tool` completa por último (depois de `end_call`) e o prompt fixo no fim do system prompt — só
+  com alguma compacta. Vale para turnos normais, subagentes, memória e a chamada de voz (`end_call`
+  sempre completa) e para o texto **gerado** das tools no prompt; sem tools chegando ao modelo nada é
+  compactado. A compactação do histórico (vendorada) estima com o mesmo plano.
+- **Execução** (`executeTool` no runner): a `search_tool` vem antes do portão de disponibilidade e
+  devolve as definições exatas das enviadas (`runSearchTool`); argumentos de uma tool que foi compacta
+  são validados (`validateToolArgs`) e o erro traz a definição completa — antes de qualquer aprovação;
+  as completas seguem como antes. `datetime` é portátil (`MOBILE_TOOLS`), sem aprovação, no fuso do
+  aparelho; `search_tool` e `datetime` não têm frase de ferramenta na chamada.
+- **Telas** (`src/settings/ToolsSend.tsx`): "Envio das tools" → "Enviar tools compactadas" com a linha
+  de estado e "O que vai junto" (o prompt fixo e a definição da `search_tool`, só leitura); em cada tool
+  o chip "compacta"/"completa" (`toolsFull`, marca "↺ neste chat" da unidade `toolsFull.<tool>`) e
+  "</> Definição" (a que vai no modo atual); grupo "Memória e skills — como vão"; as do computador com o
+  chip esmaecido. Nas configurações do chat, persona ("Usar o padrão" volta ao do app), Novo chat
+  (`finalizeNewChat` leva o que mudou) e tools da chamada (a compactação do chat, com a definição).
+- **Hermes**: o `datetime` usa `Intl.DateTimeFormat` com `timeZone`, `hour12: false` e
+  `formatToParts`; os nomes de dia/mês vêm de uma tabela fixa. O self-test do aparelho confere a saída
+  byte a byte com a do Node (fusos com meia hora, meia-noite, horário de verão, fuso inválido).
+
+Testes: `tests/compactTools.test.ts` (plano nas tools do celular, `search_tool` = definição sem
+compactação, argumentos inválidos, `datetime`, voz, herança, Novo chat e o runner com o provedor falso —
+`/now`, `/lookup`, `/badargs`).
+
 ## Build iOS no Mac
 
 O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem

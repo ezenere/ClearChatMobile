@@ -9,7 +9,8 @@
 // Chats só ao vivo de outro host (`?live=1`, §23.7): cada mudança vai ao host por `chat.update`.
 // Tudo que a tela mostra é a config EFETIVA — o mesmo que vai ao modelo (nada escondido). As tools
 // só do computador (§4.3.6) ficam na lista do chat, esmaecidas e alternáveis, com a nota de que o
-// celular não as manda ao modelo.
+// celular não as manda ao modelo. Tools compactadas (1.11.0): "Enviar tools compactadas" com o que vai
+// junto (prompt fixo e search_tool), o chip "compacta"/"completa" e a definição que vai de cada tool.
 import { useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
@@ -46,6 +47,7 @@ import { live } from '@/live/native'
 import { useLiveVersion } from '@/live/react'
 import { remote } from '@/remote/native'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
+import { CompactToolsCard, OtherToolsGroup, ToolSendLine } from '@/settings/ToolsSend'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor } from '@/settings/ParamsEditor'
@@ -71,7 +73,8 @@ const TOOL_HELP: Partial<Record<ToolName, string>> = {
   ask_user: 'Faz perguntas de múltipla escolha a você.',
   delegate_task: 'Cria subagentes para tarefas paralelas.',
   send_to_chat: 'Manda mensagens a outros chats.',
-  read_history: 'Lê o histórico completo (inclusive o compactado).'
+  read_history: 'Lê o histórico completo (inclusive o compactado).',
+  datetime: 'Data e hora do celular, no fuso dele.'
 }
 
 /** Campos sem editor no celular: aparecem com o valor efetivo e de onde ele vem. */
@@ -404,6 +407,18 @@ export default function ChatConfigScreen() {
         </Note>
 
         {/* ---------------- ferramentas ---------------- */}
+        <FieldLabel>Envio das tools</FieldLabel>
+        <CompactToolsCard
+          cfg={eff}
+          onChange={(toolsCompact) => patch({ toolsCompact })}
+          sent={portable.filter((t) => tools.includes(t))}
+          wrap={(row) => (
+            <InheritInline units={['toolsCompact']} testID="inherit-mark-toolsCompact">
+              {row}
+            </InheritInline>
+          )}
+          testID="chat-tools-compact"
+        />
         <FieldLabel>Ferramentas — também no celular</FieldLabel>
         <Card padded={false}>
           {portable.map((t, i) => (
@@ -417,14 +432,23 @@ export default function ChatConfigScreen() {
                   onChange={(v) => toggleTool(t, v)}
                   testID={`chat-tool-${t}`}
                 />
+                <ToolSendLine
+                  name={t}
+                  cfg={eff}
+                  patch={patch}
+                  enabled={tools.includes(t)}
+                  testID={`chat-tool-send-${t}`}
+                />
               </InheritInline>
             </View>
           ))}
         </Card>
+        <OtherToolsGroup cfg={eff} patch={patch} />
         <ComputerToolsGroup
           tools={tools}
           onToggle={toggleTool}
           rowTestID={(t) => `chat-tool-${t}`}
+          send={{ cfg: eff, patch }}
           wrap={(t, row) => (
             <InheritInline units={[`enabledTools.${t}`]} testID={`inherit-mark-tool-${t}`}>
               {row}

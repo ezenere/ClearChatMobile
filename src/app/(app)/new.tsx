@@ -2,6 +2,8 @@
 // sincronizados; modelos pelo /models do provedor, com busca), parâmetros que o modelo aceita
 // (@shared/modelParams) e as tools: as que o celular roda e, esmaecidas, as só do computador — a
 // lista do chat é a mesma em todo aparelho (§4.3.6); o celular só manda ao modelo as que executa.
+// Como vão (1.11.0): "Enviar tools compactadas" com o que vai junto, o chip "compacta"/"completa" e a
+// definição de cada uma.
 // Nada vira próprio do chat por causa do aparelho, só o que o usuário muda aqui. Roda aqui ao enviar.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useRouter } from 'expo-router'
@@ -11,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { providerKind } from '@shared/providerKinds'
 import { ENGINE_META } from '@shared/webSearchSettings'
 import { withTool } from '@shared/deviceTools'
-import type { ChatParams, ToolName } from '@shared/types'
+import type { ChatConfig, ChatParams, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { useSession } from '@/account/react'
 import { settings as settingsService } from '@/settings/react'
@@ -37,6 +39,7 @@ import {
   type NewChatSettings
 } from '@/host/newChat'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
+import { CompactToolsCard, ToolSendLine } from '@/settings/ToolsSend'
 import { ModelPicker, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { Button } from '@/ui/Button'
@@ -49,7 +52,8 @@ const TOOL_HELP: Partial<Record<ToolName, string>> = {
   web_search: 'Pesquisa na web pelos buscadores configurados.',
   browse_url: 'Abre e lê páginas (sem executar JavaScript).',
   list_models: 'Lista os modelos dos seus provedores.',
-  ask_user: 'Faz perguntas de múltipla escolha a você.'
+  ask_user: 'Faz perguntas de múltipla escolha a você.',
+  datetime: 'Data e hora do celular, no fuso dele.'
 }
 
 export default function NewChatScreen() {
@@ -82,6 +86,17 @@ export default function NewChatScreen() {
   const [model, setModel] = useState(base.model)
   const [params, setParams] = useState<ChatParams>(base.params ?? {})
   const [tools, setTools] = useState<ToolName[]>(base.enabledTools)
+  // como as tools vão (1.11.0): o que a persona (ou o padrão do app) define
+  const [send, setSend] = useState<Pick<ChatConfig, 'toolsCompact' | 'toolsFull'>>({
+    toolsCompact: base.toolsCompact,
+    toolsFull: base.toolsFull
+  })
+  const sendCfg = { ...send, nativeTools: base.nativeTools }
+  const patchSend = (p: Partial<ChatConfig>) =>
+    setSend((s) => ({
+      toolsCompact: p.toolsCompact ?? s.toolsCompact,
+      toolsFull: p.toolsFull ?? s.toolsFull
+    }))
   const [picker, setPicker] = useState(false)
   const [creating, setCreating] = useState(false)
   const local = useSession().phase === 'local'
@@ -102,6 +117,7 @@ export default function NewChatScreen() {
     setModel(b.model)
     setParams(b.params ?? {})
     setTools(b.enabledTools)
+    setSend({ toolsCompact: b.toolsCompact, toolsFull: b.toolsFull })
   }
 
   const provider = providers.find((p) => p.id === providerId) ?? null
@@ -119,7 +135,7 @@ export default function NewChatScreen() {
     try {
       const config = finalizeNewChat(
         base,
-        { providerId, model: model.trim(), params, tools, presetId },
+        { providerId, model: model.trim(), params, tools, presetId, ...send },
         providers
       )
       if (noDefault && saveDefault)
@@ -292,16 +308,30 @@ export default function NewChatScreen() {
         ) : null}
 
         <Text style={st.label}>Ferramentas</Text>
+        <CompactToolsCard
+          cfg={sendCfg}
+          onChange={(toolsCompact) => patchSend({ toolsCompact })}
+          sent={MOBILE_TOOLS.filter((t) => tools.includes(t))}
+          testID="new-tools-compact"
+        />
         <View style={st.box}>
           {MOBILE_TOOLS.map((t) => (
-            <ToggleRow
-              key={t}
-              title={toolLabel(t)}
-              subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
-              value={tools.includes(t)}
-              onChange={(v) => setTools((x) => withTool(x, t, v))}
-              testID={`tool-${t}`}
-            />
+            <View key={t}>
+              <ToggleRow
+                title={toolLabel(t)}
+                subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
+                value={tools.includes(t)}
+                onChange={(v) => setTools((x) => withTool(x, t, v))}
+                testID={`tool-${t}`}
+              />
+              <ToolSendLine
+                name={t}
+                cfg={sendCfg}
+                patch={patchSend}
+                enabled={tools.includes(t)}
+                testID={`new-tool-send-${t}`}
+              />
+            </View>
           ))}
           {tools.includes('web_search') ? (
             <Text style={st.hint}>
@@ -311,7 +341,11 @@ export default function NewChatScreen() {
             </Text>
           ) : null}
         </View>
-        <ComputerToolsGroup tools={tools} onToggle={(t, v) => setTools((x) => withTool(x, t, v))} />
+        <ComputerToolsGroup
+          tools={tools}
+          onToggle={(t, v) => setTools((x) => withTool(x, t, v))}
+          send={{ cfg: sendCfg, patch: patchSend }}
+        />
       </ScrollView>
       <BottomBarButton
         title="Começar conversa"
