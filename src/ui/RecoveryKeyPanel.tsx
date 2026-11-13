@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { Share, StyleSheet, Text, View } from 'react-native'
 import { normalizeRecoveryInput } from '@/crypto'
 import { Button } from './Button'
-import { Banner, Card, Checkbox } from './Card'
+import { Banner, Card, ToggleRow } from './Card'
 import { TextField } from './TextField'
 import { useToast } from './Toast'
 import { colors, font, radius, spacing } from './theme'
@@ -85,9 +85,9 @@ export function RecoveryKeyPanel({
         papel).
       </Banner>
       <Card>
-        <Checkbox
+        <ToggleRow
           testID="recovery-saved"
-          label="Guardei minha chave de recuperação em um lugar seguro."
+          title="Guardei minha chave de recuperação em um lugar seguro."
           value={saved}
           onChange={setSaved}
         />

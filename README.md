@@ -987,11 +987,11 @@ Contrato: §4.3.6 ("Tools compactadas e `datetime`"). A lógica é a do desktop,
   são validados (`validateToolArgs`) e o erro traz a definição completa — antes de qualquer aprovação;
   as completas seguem como antes. `datetime` é portátil (`MOBILE_TOOLS`), sem aprovação, no fuso do
   aparelho; `search_tool` e `datetime` não têm frase de ferramenta na chamada.
-- **Telas** (`src/settings/ToolsSend.tsx`): "Envio das tools" → "Enviar tools compactadas" com a linha
-  de estado e "O que vai junto" (o prompt fixo e a definição da `search_tool`, só leitura); em cada tool
-  o chip "compacta"/"completa" (`toolsFull`, marca "↺ neste chat" da unidade `toolsFull.<tool>`) e
-  "</> Definição" (a que vai no modo atual); grupo "Memória e skills — como vão"; as do computador com o
-  chip esmaecido. Nas configurações do chat, persona ("Usar o padrão" volta ao do app), Novo chat
+- **Telas** (`src/settings/ToolsSend.tsx`): "Envio das tools" → "Enviar tools compactadas" (uma linha
+  curta) e "O que vai junto" (no topo a explicação e o estado; depois o prompt fixo e a definição da
+  `search_tool`, só leitura); em cada tool o chip "compacta"/"completa" (`toolsFull`, marca "↺ neste
+  chat" da unidade `toolsFull.<tool>`) e "</> Definição" (a que vai no modo atual); grupo "Memória e
+  skills — como vão"; as do computador com o chip esmaecido. Nas configurações do chat, persona ("Usar o padrão" volta ao do app), Novo chat
   (`finalizeNewChat` leva o que mudou) e tools da chamada (a compactação do chat, com a definição).
 - **Hermes**: o `datetime` usa `Intl.DateTimeFormat` com `timeZone`, `hour12: false` e
   `formatToParts`; os nomes de dia/mês vêm de uma tabela fixa. O self-test do aparelho confere a saída
@@ -1037,9 +1037,10 @@ aqui só a fiação:
   compactação do histórico também cai para a local numa recusa.
 - **Telas**: o modo é calculado no aparelho (`src/settings/toolSearchUi.ts` → `toolSearchViewOf`, o
   mesmo resolvedor) nas configurações do chat, persona, Novo chat e tools da chamada: "Enviar tools
-  compactadas" mostra "Busca nativa da Anthropic" / "Busca nativa do OpenRouter (Messages API)" /
-  "Versão local do app" com o status, o motivo e o aviso da versão local; chips "adiada"/"carregada" nos
-  nativos; "O que vai junto" mostra o prompt fixo nativo exato e a entrada de busca do provedor; a
+  compactadas" só tem a linha curta e, na versão local, a marca curta em aviso; "O que vai junto" traz
+  no topo a explicação e o modo — "Busca nativa da Anthropic" / "Busca nativa do OpenRouter (Messages
+  API)" / "Versão local do app" com o status, o motivo e o aviso da versão local — e depois o prompt
+  fixo nativo exato e a entrada de busca do provedor; chips "adiada"/"carregada" nos nativos; a
   "Definição" de cada tool, o item exato de `tools[]` (uma adiada já usada no histórico sem a busca:
   "carregada nesta request", com o motivo). Na conversa, o chip "buscou tools: …" das buscas do
   provedor (sem a pré-busca do OpenRouter) e o modo no rodapé.

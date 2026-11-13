@@ -2,10 +2,11 @@
 // compactTools) e a busca nativa de tools (1.12.0, @shared/toolSearch) nas listas de tools do
 // celular (configurações do chat, persona, Novo chat, tools da chamada) — = `ToolFullChip`,
 // `CompactToolsInfo`, `ToolDefInfo` e a linha do modo do desktop, no jeito do celular:
-// - "Enviar tools compactadas" (`toolsCompact`) com a linha de estado — o modo efetivo deste chat +
-//   modelo (busca nativa da Anthropic / do OpenRouter / versão local do app), o motivo e, na versão
-//   local, o aviso — e a folha "O que vai junto": na versão local o prompt fixo e a `tool_search`;
-//   num modo nativo a entrada de busca do provedor, exatamente como vão (só leitura);
+// - "Enviar tools compactadas" (`toolsCompact`) com uma linha curta e, na versão local, a marca curta
+//   em aviso; a folha "O que vai junto" traz no topo a explicação, o modo efetivo deste chat + modelo
+//   (busca nativa da Anthropic / do OpenRouter / versão local do app), o motivo e, na versão local, o
+//   aviso (= o (?) do desktop) e depois, na versão local, o prompt fixo e a `tool_search`; num modo
+//   nativo a entrada de busca do provedor, exatamente como vão (só leitura);
 // - em cada tool, o chip "compacta"/"completa" ("adiada"/"carregada" nos modos nativos; `toolsFull`,
 //   com a marca "↺ neste chat" da unidade `toolsFull.<tool>` no chat que herda) e o "</> Definição",
 //   que mostra o que vai no modo atual (compacta, completa como ESTE celular a manda, ou o item exato
@@ -26,7 +27,7 @@ import {
   shortToolDescription,
   withFullTool
 } from '@shared/compactTools'
-import { isNativeMode, SEARCH_ENTRY_NOTE, TOOL_SEARCH_LOCAL_NOTICE } from '@shared/toolSearch'
+import { isNativeMode, SEARCH_ENTRY_NOTE } from '@shared/toolSearch'
 import { MEMORY_TOOL_NAMES, SKILL_TOOL_NAMES, TOOL_LABELS } from '@shared/tools'
 import type { ChatConfig } from '@shared/types'
 import { phoneToolDefinition } from '@/agent/request'
@@ -47,10 +48,14 @@ import { FieldLabel, Note } from './ui'
 export type { CompactCfg, ToolSearchModeView }
 type Patch = (p: Partial<ChatConfig>) => void
 
+/** Explicação de "Enviar tools compactadas" (no topo da folha "O que vai junto"). */
+const COMPACT_TOOLS_EXPLAIN =
+  'Economiza contexto. Onde o provedor tem busca nativa de ferramentas (Anthropic; OpenRouter pela Messages API), cada tool vai completa mas adiada e o modelo a encontra pela busca do provedor. Nos outros endpoints, a versão local do app: cada tool vai só com o nome e uma descrição curta e o modelo lê a definição completa com tool_search. Marque “completa”/“carregada” nas que devem ir inteiras desde o início.'
+
 /**
- * "Enviar tools compactadas": o interruptor (com a marca da herança, via `wrap`), a linha de estado
- * (o modo efetivo: busca nativa do provedor ou versão local, com o motivo e o aviso) e a folha com o
- * que vai junto, exatamente como vai.
+ * "Enviar tools compactadas": o interruptor (com a marca da herança, via `wrap`), na versão local a
+ * marca curta em aviso, e a folha "O que vai junto" — com a explicação e o modo efetivo (busca nativa
+ * do provedor ou versão local, com o motivo e o aviso) no topo e o que vai junto, exatamente como vai.
  */
 export function CompactToolsCard({
   cfg,
@@ -73,11 +78,11 @@ export function CompactToolsCard({
   const [info, setInfo] = useState(false)
   const on = compactToolsOn(cfg)
   const native = on && isNativeMode(view?.mode)
-  const line = on && view ? toolSearchLine(view) : null
+  const local = on && !!view && view.mode !== 'off' && !native
   const row = (
     <ToggleRow
       title="Enviar tools compactadas"
-      subtitle="Economiza contexto. Onde o provedor tem busca nativa de ferramentas (Anthropic; OpenRouter pela Messages API), cada tool vai completa mas adiada e o modelo a encontra pela busca do provedor. Nos outros endpoints, a versão local do app: cada tool vai só com o nome e uma descrição curta e o modelo lê a definição completa com tool_search. Marque “completa”/“carregada” nas que devem ir inteiras desde o início."
+      subtitle="Economiza contexto."
       value={on}
       onChange={onChange}
       testID={testID}
@@ -88,31 +93,12 @@ export function CompactToolsCard({
       <Card padded={false} testID={`${testID}-card`}>
         <View style={st.pad}>
           {wrap ? wrap(row) : row}
-          {line ? (
-            <View style={{ gap: 6 }} testID={`${testID}-mode`}>
-              <Text style={st.status} testID={`${testID}-status`}>
-                <Text style={st.modeLabel} testID={`${testID}-mode-${view!.mode}`}>
-                  {line.label}
-                </Text>
-                {`: ${line.status}`}
-              </Text>
-              {line.reason ? (
-                <Text style={st.status} testID={`${testID}-reason`}>
-                  {line.reason}
-                </Text>
-              ) : null}
-              {line.notice ? (
-                <View style={st.notice} testID={`${testID}-local-notice`}>
-                  <Ionicons name="information-circle-outline" size={15} color={colors.warning} />
-                  <Text style={st.noticeText}>{line.notice}</Text>
-                </View>
-              ) : null}
-            </View>
-          ) : (
-            <Text style={st.status} testID={`${testID}-status`}>
-              {on && view ? 'Todas as ligadas vão completas.' : compactStatusText(cfg, sent)}
+          {local ? (
+            <Text style={st.localMark} testID={`${testID}-local-mark`}>
+              Versão local do app — este endpoint não tem busca nativa (detalhes em “O que vai
+              junto”).
             </Text>
-          )}
+          ) : null}
         </View>
         <Pressable
           onPress={() => setInfo(true)}
@@ -141,25 +127,86 @@ export function CompactToolsCard({
         visible={info}
         onClose={() => setInfo(false)}
         view={on ? (view ?? null) : null}
+        status={
+          on && view ? 'Agora: todas as ligadas vão completas.' : compactStatusText(cfg, sent)
+        }
+        modeTestID={testID}
       />
     </>
   )
 }
 
 /**
- * Folha "Tools compactadas": o que vai, exatamente, no modo efetivo. Versão local (1.11.0): o
- * prompt fixo e a `tool_search` (textos do app, não editáveis). Busca nativa (1.12.0): a entrada de
- * busca do servidor como vai (descrição do provedor) — sem prompt do app e sem `tool_search`.
+ * Topo da folha "O que vai junto" (= o (?) do desktop): a explicação de "Enviar tools compactadas" e
+ * o modo efetivo deste chat + modelo — "Agora — rótulo: estado", o motivo e, na versão local, o aviso
+ * do protocolo (§4.3.6). Sem modo resolvido (ou desligado): só o estado (`status`).
+ */
+function CompactModeDetails({
+  view,
+  status,
+  testID
+}: {
+  view: ToolSearchModeView | null
+  status: string
+  testID: string
+}) {
+  const line = view ? toolSearchLine(view) : null
+  return (
+    <View style={st.details}>
+      <Text style={st.p} testID={`${testID}-explain`}>
+        {COMPACT_TOOLS_EXPLAIN}
+      </Text>
+      {line ? (
+        <View style={{ gap: 6 }} testID={`${testID}-mode`}>
+          <Text style={st.p} testID={`${testID}-status`}>
+            <Text style={st.strong} testID={`${testID}-mode-${view!.mode}`}>
+              {`Agora — ${line.label}`}
+            </Text>
+            {`: ${line.status}`}
+          </Text>
+          {line.reason ? (
+            <Text style={st.p} testID={`${testID}-reason`}>
+              {line.reason}
+            </Text>
+          ) : null}
+          {line.notice ? (
+            <View style={st.notice} testID={`${testID}-local-notice`}>
+              <Ionicons name="information-circle-outline" size={15} color={colors.warning} />
+              <Text style={st.noticeText}>{line.notice}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : (
+        <Text style={[st.p, st.strong]} testID={`${testID}-status`}>
+          {status}
+        </Text>
+      )}
+    </View>
+  )
+}
+
+/**
+ * Folha "Tools compactadas": no topo a explicação e o modo efetivo (`CompactModeDetails`); depois o
+ * que vai, exatamente, nesse modo. Versão local (1.11.0): o prompt fixo e a `tool_search` (textos do
+ * app, não editáveis). Busca nativa (1.12.0): a entrada de busca do servidor como vai (descrição do
+ * provedor) — sem prompt do app e sem `tool_search`.
  */
 export function CompactToolsSheet({
   visible,
   onClose,
-  view = null
+  view = null,
+  status,
+  modeTestID = 'tools-compact'
 }: {
   visible: boolean
   onClose: () => void
   view?: ToolSearchModeView | null
+  /** Estado sem modo resolvido (ou desligado), no lugar do modo. */
+  status: string
+  /** Prefixo dos testIDs do modo (`-mode`, `-status`, `-reason`, `-local-notice`). */
+  modeTestID?: string
 }) {
+  const details = <CompactModeDetails view={view} status={status} testID={modeTestID} />
   if (view && isNativeMode(view.mode)) {
     return (
       <Sheet
@@ -171,6 +218,7 @@ export function CompactToolsSheet({
         testID="compact-tools-sheet"
       >
         <View style={st.sheetBody}>
+          {details}
           <Text style={st.p} testID="compact-tools-native">
             {NATIVE_TOOL_SEARCH_HELP}
           </Text>
@@ -212,13 +260,8 @@ export function CompactToolsSheet({
       testID="compact-tools-sheet"
     >
       <View style={st.sheetBody}>
+        {details}
         <Text style={st.p}>{COMPACT_TOOLS_HELP}</Text>
-        {view?.mode === 'local' ? (
-          <Text style={st.p} testID="compact-tools-local">
-            {TOOL_SEARCH_LOCAL_NOTICE}
-            {view.reason ? ` Motivo: ${view.reason}.` : ''}
-          </Text>
-        ) : null}
         <Text style={st.p}>
           Cada tool que não está marcada “completa” vai só com o nome e a descrição curta do app,
           com parâmetros vazios. Havendo pelo menos uma compacta, vão também a tool_search (abaixo)
@@ -551,9 +594,14 @@ function NativeToolDefinitionSheet({
 }
 
 const st = StyleSheet.create({
-  pad: { paddingHorizontal: spacing.lg, paddingTop: 2, paddingBottom: 10 },
-  status: { color: colors.subtle, fontSize: 12.5, lineHeight: 17 },
-  modeLabel: { color: colors.fg, fontWeight: '600' },
+  pad: { paddingHorizontal: spacing.lg, paddingTop: 2, paddingBottom: 10, gap: 4 },
+  localMark: { color: colors.warning, fontSize: 12.5, lineHeight: 17 },
+  details: {
+    gap: 10,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border
+  },
   notice: {
     flexDirection: 'row',
     gap: 6,

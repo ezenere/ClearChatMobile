@@ -1,4 +1,4 @@
-// Cartões, linhas de lista, banner de aviso, interruptor, caixa de seleção, carregando e a marca.
+// Cartões, linhas de lista, banner de aviso, interruptor, carregando e a marca.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import type { ReactNode } from 'react'
 import {
@@ -200,35 +200,6 @@ export function ToggleRow({
   )
 }
 
-export function Checkbox({
-  label,
-  value,
-  onChange,
-  testID
-}: {
-  label: string
-  value: boolean
-  onChange: (v: boolean) => void
-  testID?: string
-}) {
-  return (
-    <Pressable
-      testID={testID}
-      onPress={() => onChange(!value)}
-      accessibilityRole="checkbox"
-      accessibilityLabel={label}
-      accessibilityState={{ checked: value }}
-      style={styles.check}
-      hitSlop={6}
-    >
-      <View style={[styles.checkBox, value && styles.checkBoxOn]}>
-        {value ? <Ionicons name="checkmark" size={15} color={colors.onAccent} /> : null}
-      </View>
-      <Text style={styles.checkLabel}>{label}</Text>
-    </Pressable>
-  )
-}
-
 export function Spinner({ label, testID }: { label?: string; testID?: string }) {
   return (
     <View testID={testID} style={styles.spinner} accessibilityLiveRegion="polite">
@@ -329,19 +300,6 @@ const styles = StyleSheet.create({
   bannerText: { color: colors.fg, fontSize: 14, lineHeight: 20, opacity: 0.92 },
   toggle: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 6 },
   toggleTitle: { color: colors.fg, fontSize: 15, fontWeight: '500' },
-  check: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
-  checkBox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: colors.faint,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1
-  },
-  checkBoxOn: { backgroundColor: colors.accent, borderColor: colors.accent },
-  checkLabel: { flex: 1, color: colors.fg, fontSize: 14.5, lineHeight: 21 },
   spinner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
   spinnerText: { color: colors.muted, fontSize: 13.5 },
   pill: {

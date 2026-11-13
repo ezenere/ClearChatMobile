@@ -19,7 +19,7 @@ import {
   toggleCategory,
   toggleCollection
 } from '@vendor/renderer/memory'
-import { Checkbox, ToggleRow } from '@/ui/Card'
+import { ToggleRow } from '@/ui/Card'
 import { colors, radius } from '@/ui/theme'
 
 export function MemoryConfigEditor({
@@ -95,8 +95,8 @@ export function MemoryConfigEditor({
               return (
                 <View key={c.id} style={[st.row, (!cfg.enabled || !catOn) && st.dim]}>
                   <View style={{ flex: 1 }}>
-                    <Checkbox
-                      label={`${c.name} (${counts[c.id] ?? 0})`}
+                    <ToggleRow
+                      title={`${c.name} (${counts[c.id] ?? 0})`}
                       value={active}
                       onChange={(v) => toggleCol(c, v)}
                       testID={`memory-col-${c.id}`}
