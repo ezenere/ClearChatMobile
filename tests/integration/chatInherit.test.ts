@@ -96,7 +96,10 @@ describe.skipIf(!enabled)('herança ao vivo da persona contra o servidor real', 
       'wait_subagents',
       'cancel_subagent',
       'message_subagent',
-      'ask_user'
+      'ask_user',
+      // as listas já trazem a datetime (1.11.0) — sem ela, a datetime desligada viraria própria na
+      // migração (regra geral da migração: unidade diferente da persona)
+      'datetime'
     ]
     const desktopOld = [
       'list_dir',

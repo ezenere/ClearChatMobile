@@ -309,7 +309,8 @@ describe.skipIf(!enabled)('host no celular contra o servidor real (provedor fals
     const reqLocal = llm.requests.filter((r) => r.path.endsWith('/chat/completions')).pop()!
     expect(
       ((reqLocal.body.tools as { function: { name: string } }[]) ?? []).map((t) => t.function.name)
-    ).toEqual(['web_search'])
+      // (compactadas por padrão, 1.11.0: a search_tool automática vai no fim)
+    ).toEqual(['web_search', 'search_tool'])
     expect((await serverState(cLocal.id))?.host?.device_id).toBe(phoneId)
     expect(repo.chat(cLocal.id)!.config.enabledTools).toEqual(['shell', 'web_search'])
 
