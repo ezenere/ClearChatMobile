@@ -5,6 +5,7 @@
 import { SyncApiError, SyncNetworkError } from '@vendor/desktop/sync/http'
 import { openRecord, sealRecord, type Subkeys, UnsupportedEnvelopeError } from '@/crypto'
 import { UserError } from '@/account/errors'
+import { mergeChatRecord } from './chatMerge'
 import { outgoingPlain } from './legacy'
 import { RecordState, type LocalStore, type RecordStateCode } from './store'
 import {
@@ -51,6 +52,25 @@ export interface EngineDeps {
    * aparelho) NÃO é aplicado — só avança o cursor e marca o chat "precisa rebaixar".
    */
   holdContent?: (chatId: string) => boolean
+}
+
+/**
+ * Ganchos do host no celular sobre o que o motor aplica (herança ao vivo da persona, protocolo
+ * 1.10.0 — §4.3.6, §7.5, §7.7). Chamados dentro da transação da aplicação (síncronos).
+ */
+export interface EngineHooks {
+  /**
+   * Uma persona vai sumir do cache (tombstone ou ausente no resync): congelar ANTES os chats
+   * locais dela e devolvê-los (vão de novo ao servidor com a nova revisão).
+   */
+  beforePresetGone?: (presetId: string) => string[]
+  /** Um `chat` com edição local pendente foi mesclado com a revisão do servidor: reenviar. */
+  chatRebased?: (chatId: string) => void
+  /**
+   * O cache alcançou o servidor (fim de um pull completo ou um lote ao vivo contíguo): persona e
+   * padrões em dia — a migração única dos chats antigos para a herança roda aqui.
+   */
+  caughtUp?: () => void
 }
 
 export type SyncPhase = 'locked' | 'idle' | 'syncing' | 'offline' | 'error'
@@ -105,6 +125,7 @@ export class SyncEngine {
   private gen = 0
   private statesLoaded = false
   private status: SyncStatus
+  private hooks: EngineHooks = {}
 
   constructor(deps: EngineDeps) {
     this.d = deps
@@ -126,6 +147,19 @@ export class SyncEngine {
   /** O host liga a regra do §9.2 depois de montado. */
   setHoldContent(fn: ((chatId: string) => boolean) | undefined): void {
     this.d.holdContent = fn
+  }
+
+  /** O host liga os ganchos da herança da persona (congelar, reenviar, migrar) depois de montado. */
+  setHooks(hooks: EngineHooks): void {
+    this.hooks = hooks
+  }
+
+  private caughtUp(): void {
+    try {
+      this.hooks.caughtUp?.()
+    } catch (e) {
+      this.log(`herança da persona: ${(e as Error).message}`)
+    }
   }
 
   // ---------------- observável ----------------
@@ -282,7 +316,9 @@ export class SyncEngine {
       })
     } catch {
       void this.sync()
+      return
     }
+    if (this.running && !this.syncing) this.caughtUp()
   }
 
   // ---------------- pull (§7.3) ----------------
@@ -303,6 +339,8 @@ export class SyncEngine {
           if (!this.statesLoaded) await this.loadChatStates().catch(() => undefined)
         } while (this.again && this.running)
         if (!this.running) return
+        // herança ao vivo (1.10.0, §4.3.6): chats antigos migram depois de um pull completo
+        this.caughtUp()
         const at = this.now()
         this.d.store.setMeta('last_sync_at', at)
         this.setStatus({ phase: 'idle', progress: null, lastSyncAt: at, initial: false })
@@ -374,6 +412,8 @@ export class SyncEngine {
         const chatOf = l.type === 'chat' ? l.id : l.scope
         if ((l.type === 'chat' || l.type === 'session' || l.type === 'message') && chatOf)
           if (this.d.store.isLocalOnly(chatOf)) continue
+        // persona que sumiu (§7.7): os chats dela congelam antes
+        if (l.type === 'preset') this.presetGone(l.id)
         this.d.store.removeRecord(l.type, l.id, l.scope)
         if (l.type === 'chat') gone.push(l.id)
       }
@@ -458,6 +498,7 @@ export class SyncEngine {
     const chats = new Set<string>()
     let list_ = false
     let settings = false
+    this.touched = chats
     store.sql.tx(() => {
       for (const c of list) {
         const touched = this.applyOne(c, opened.get(c))
@@ -476,8 +517,23 @@ export class SyncEngine {
         list_ = true
       }
     })
+    this.touched = null
     if (chats.size || list_ || settings)
       this.emit({ kind: 'data', chats: [...chats], list: list_, ...(settings ? { settings } : {}) })
+  }
+
+  /** Chats tocados pelos ganchos durante a aplicação de um lote. */
+  private touched: Set<string> | null = null
+
+  /** Persona saindo do cache: o host congela os chats dela antes (§4.3.6, §7.7). */
+  private presetGone(presetId: string): void {
+    let ids: string[] = []
+    try {
+      ids = this.hooks.beforePresetGone?.(presetId) ?? []
+    } catch (e) {
+      this.log(`herança da persona: congelamento falhou (${(e as Error).message})`)
+    }
+    for (const id of ids) this.touched?.add(id)
   }
 
   /** Aplica uma mudança (dentro da transação). true = algo mudou no cache. */
@@ -509,6 +565,7 @@ export class SyncEngine {
       return false
     }
     if (c.deleted) {
+      if (c.type === 'preset' && local && !local.deleted) this.presetGone(c.id)
       store.deleteRecord(c)
       return true
     }
@@ -517,6 +574,13 @@ export class SyncEngine {
       return false
     }
     if (!opened) return false
+    // `chat` com edição local pendente (§7.5): merge 3-way em vez de perder a edição
+    const pending = c.type === 'chat' && opened.plain ? store.chatOutboxRow(c.id) : null
+    if (pending && !pending.deleted && pending.plain && opened.plain) {
+      store.rebaseChatOnPull(c, opened.plain, mergeChatRecord(opened.plain, pending))
+      this.hooks.chatRebased?.(c.id)
+      return true
+    }
     store.putRecord(c, opened.plain, opened.state)
     return true
   }

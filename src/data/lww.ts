@@ -20,6 +20,11 @@ export interface LwwDeps {
   debounceMs?: number
   retryMs?: number
   uuid?: () => string
+  /**
+   * Registro que ainda não pode subir (fica na outbox e tenta de novo): o tombstone de uma persona
+   * espera os chats congelados dela chegarem antes ao servidor (§4.3.6, §7.7, desde 1.10.0).
+   */
+  hold?: (row: LwwRow) => boolean
 }
 
 /** Tipos que passam por aqui, na ordem de envio (coleção antes da memória). */
@@ -166,6 +171,10 @@ export class LwwWriter {
     const rows = store.lwwOutbox().sort((a, b) => (ORDER[a.type] ?? 9) - (ORDER[b.type] ?? 9))
     let waiting = false
     for (const row of rows) {
+      if (this.d.hold?.(row)) {
+        waiting = true
+        continue
+      }
       const ok = await this.pushOne(keys, row)
       if (!ok) waiting = true
     }

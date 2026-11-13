@@ -54,6 +54,13 @@ export interface OutboxRow {
   deleted: boolean
   plain: Plain | null
   patch: Plain | null
+  /**
+   * Registro `chat`: o plaintext da revisão `baseRev` (a última que o servidor tinha quando a
+   * edição local começou) — o merge 3-way do §7.5 (`mergeChatRecord`) aplica sobre a versão do
+   * servidor só o que mudou daqui desde ela (e `config.overrides` por unidade, §4.3.6). `{}` = chat
+   * novo; null = linha de antes da versão 7 do cache (merge pelos campos de `patch`).
+   */
+  base: Plain | null
   mark: number
 }
 
@@ -77,7 +84,7 @@ export interface LoadedChat {
   broken: number
 }
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -164,7 +171,11 @@ CREATE TABLE IF NOT EXISTS chat_storage (
 CREATE TABLE IF NOT EXISTS device_settings (id TEXT PRIMARY KEY, value TEXT);
 DELETE FROM lww_outbox WHERE type = 'setting' AND id IN ('audioInput', 'sttSettings', 'ttsSettings', 'voiceCallDefaults');
 INSERT OR REPLACE INTO meta (key, value) VALUES ('device_settings_seed', '1');
-`
+`,
+  // 1.10.0 (§4.3.6, §7.5): base do merge 3-way do registro `chat` pendente (herança ao vivo da
+  // persona — `config.overrides` mesclado por unidade; a cópia de uma unidade herdada não
+  // sobrescreve um valor próprio do servidor). Linhas antigas ficam NULL (merge pelo `patch`)
+  7: `ALTER TABLE outbox ADD COLUMN base TEXT;`
 }
 
 /**
@@ -847,6 +858,11 @@ export class LocalStore {
       const meta = this.recordMeta(w.type, w.id)
       const base = row ? row.base_rev : (meta?.rev ?? 0)
       const rev = base + 1
+      // base do merge 3-way do `chat` (§7.5): a revisão que o servidor tinha antes desta edição
+      const basePlain =
+        w.type === 'chat' && !row
+          ? JSON.stringify((meta && !meta.deleted ? this.getPlain(w.type, w.id) : null) ?? {})
+          : null
       const change: Change = {
         type: w.type,
         id: w.id,
@@ -873,8 +889,8 @@ export class LocalStore {
         patch.config = { ...(prev && typeof prev === 'object' ? prev : {}), ...w.patch.config }
       }
       this.sql.run(
-        `INSERT INTO outbox (type, id, scope, chat_id, base_rev, deleted, plain, patch, mark)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        `INSERT INTO outbox (type, id, scope, chat_id, base_rev, deleted, plain, patch, mark, base)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
          ON CONFLICT(type, id) DO UPDATE SET deleted = excluded.deleted, plain = excluded.plain,
            patch = excluded.patch, mark = outbox.mark + 1`,
         [
@@ -885,7 +901,8 @@ export class LocalStore {
           base,
           w.plain ? 0 : 1,
           w.plain ? JSON.stringify(w.plain) : null,
-          patch ? JSON.stringify(patch) : null
+          patch ? JSON.stringify(patch) : null,
+          basePlain
         ]
       )
       this.refreshDirtyChats()
@@ -988,6 +1005,7 @@ export class LocalStore {
         deleted: number
         plain: string | null
         patch: string | null
+        base: string | null
         mark: number
       }>('SELECT * FROM outbox WHERE chat_id = ?', [chatId])
       .map((r) => ({
@@ -999,8 +1017,31 @@ export class LocalStore {
         deleted: !!r.deleted,
         plain: parse(r.plain),
         patch: parse(r.patch),
+        base: parse(r.base),
         mark: r.mark
       }))
+  }
+
+  /** Linha pendente do registro `chat` (null = nada a subir dele). */
+  chatOutboxRow(chatId: string): OutboxRow | null {
+    return this.outbox(chatId).find((r) => r.type === 'chat' && r.id === chatId) ?? null
+  }
+
+  /**
+   * Chats congelados de uma persona ainda não aceitos pelo servidor (§7.7, desde 1.10.0): a base
+   * pendente aponta para ela e a revisão local não. O tombstone da persona espera por eles.
+   */
+  frozenPending(presetId: string): string[] {
+    return this.sql
+      .all<{ id: string; base: string | null; plain: string | null }>(
+        "SELECT id, base, plain FROM outbox WHERE type = 'chat' AND deleted = 0 AND base IS NOT NULL"
+      )
+      .filter((r) => {
+        const b = parse(r.base)?.config as Plain | undefined
+        const p = parse(r.plain)?.config as Plain | undefined
+        return b?.presetId === presetId && p?.presetId !== presetId
+      })
+      .map((r) => r.id)
   }
 
   /** Chats com conteúdo local ainda não aceito. */
@@ -1023,7 +1064,16 @@ export class LocalStore {
    * envio (`mark` diferente): aí a base passa a ser a revisão aceita e a local fica rev + 1.
    */
   commitOutbox(
-    rows: { type: string; id: string; mark: number; rev: number; seq: number; blobs: string[] }[]
+    rows: {
+      type: string
+      id: string
+      mark: number
+      rev: number
+      seq: number
+      blobs: string[]
+      /** `chat`: o plaintext enviado (vira a base do merge da edição feita durante o envio). */
+      sent?: Plain | null
+    }[]
   ): void {
     this.sql.tx(() => {
       for (const r of rows) {
@@ -1042,11 +1092,11 @@ export class LocalStore {
             r.id
           ])
         } else {
-          this.sql.run('UPDATE outbox SET base_rev = ?, patch = NULL WHERE type = ? AND id = ?', [
-            r.rev,
-            r.type,
-            r.id
-          ])
+          this.sql.run(
+            `UPDATE outbox SET base_rev = ?, patch = NULL,
+               base = CASE WHEN ? IS NULL THEN base ELSE ? END WHERE type = ? AND id = ?`,
+            [r.rev, r.sent ? 1 : null, r.sent ? JSON.stringify(r.sent) : null, r.type, r.id]
+          )
           this.sql.run('UPDATE records SET seq = ?, rev = ? WHERE type = ? AND id = ?', [
             r.seq,
             r.rev + 1,
@@ -1058,21 +1108,45 @@ export class LocalStore {
     })
   }
 
-  /** Conflito LWW: a base passa a ser a revisão do servidor (o plaintext local já foi mesclado). */
-  rebaseOutbox(type: string, id: string, baseRev: number, plain: Plain): void {
+  /**
+   * Conflito LWW: a base passa a ser a revisão do servidor (o plaintext local já foi mesclado).
+   * `server` (registro `chat`) = o plaintext daquela revisão — a base do próximo merge 3-way.
+   */
+  rebaseOutbox(type: string, id: string, baseRev: number, plain: Plain, server?: Plain): void {
     this.sql.tx(() => {
-      this.sql.run('UPDATE outbox SET base_rev = ?, plain = ? WHERE type = ? AND id = ?', [
-        baseRev,
-        JSON.stringify(plain),
-        type,
-        id
-      ])
+      this.sql.run(
+        `UPDATE outbox SET base_rev = ?, plain = ?,
+           base = CASE WHEN ? IS NULL THEN base ELSE ? END WHERE type = ? AND id = ?`,
+        [
+          baseRev,
+          JSON.stringify(plain),
+          server ? 1 : null,
+          server ? JSON.stringify(server) : null,
+          type,
+          id
+        ]
+      )
       this.sql.run('UPDATE records SET rev = ?, plain = ? WHERE type = ? AND id = ?', [
         baseRev + 1,
         JSON.stringify(plain),
         type,
         id
       ])
+    })
+  }
+
+  /**
+   * Pull de uma revisão mais nova de um `chat` com edição local pendente (§7.5): o cache e a
+   * outbox ficam com o merge 3-way (`merged`) sobre a revisão do servidor, que vira a nova base —
+   * a edição local não se perde e o próximo envio parte dela.
+   */
+  rebaseChatOnPull(c: Change, server: Plain, merged: Plain): void {
+    this.sql.tx(() => {
+      this.putRecord({ ...c, rev: c.rev + 1 }, merged, RecordState.Ok)
+      this.sql.run(
+        "UPDATE outbox SET base_rev = ?, plain = ?, base = ? WHERE type = 'chat' AND id = ?",
+        [c.rev, JSON.stringify(merged), JSON.stringify(server), c.id]
+      )
     })
   }
 
@@ -1495,12 +1569,13 @@ export class LocalStore {
     const content = w.type === 'chat' || w.type === 'session' || w.type === 'message'
     if (content) {
       const chatId = w.type === 'chat' ? w.id : (w.scope ?? '')
+      // `chat`: base vazia = todo o registro local conta como mudado (vence no merge, §12.6)
       this.sql.run(
-        `INSERT INTO outbox (type, id, scope, chat_id, base_rev, deleted, plain, patch, mark)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        `INSERT INTO outbox (type, id, scope, chat_id, base_rev, deleted, plain, patch, mark, base)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
          ON CONFLICT(type, id) DO UPDATE SET scope = excluded.scope, chat_id = excluded.chat_id,
            base_rev = excluded.base_rev, deleted = excluded.deleted, plain = excluded.plain,
-           patch = excluded.patch, mark = outbox.mark + 1`,
+           patch = excluded.patch, base = excluded.base, mark = outbox.mark + 1`,
         [
           w.type,
           w.id,
@@ -1509,7 +1584,8 @@ export class LocalStore {
           w.baseRev,
           w.plain ? 0 : 1,
           w.plain ? JSON.stringify(w.plain) : null,
-          w.type === 'chat' && w.plain ? JSON.stringify(w.plain) : null
+          w.type === 'chat' && w.plain ? JSON.stringify(w.plain) : null,
+          w.type === 'chat' ? '{}' : null
         ]
       )
     } else {
