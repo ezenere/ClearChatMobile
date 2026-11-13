@@ -1510,3 +1510,35 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
     expect(JSON.stringify((saved.message as any).native)).toContain('"tool_name":"shell"')
   })
 })
+
+describe('(D) provedor falso padrão dos testes/E2E (fakeLlm na Messages API)', () => {
+  let h: Harness
+  afterEach(async () => {
+    await h?.close()
+    resetSources()
+  })
+
+  it('"/now" com tools adiadas: busca do servidor + datetime num turno; native e o chip "buscou tools"', async () => {
+    h = await makeHarness({ kind: 'anthropic' })
+    setNativeTestHosts(['127.0.0.1'])
+    const { session } = h.stack.repo.createChat({
+      config: {
+        ...DEFAULT_CHAT_CONFIG(''),
+        providerId: h.providerId,
+        model: 'claude-haiku-4-5',
+        enabledTools: ['web_search', 'datetime'] as ToolName[]
+      },
+      title: ''
+    })
+    await h.stack.runner.send(session.id, '/now %H:%M')
+    await until(() => !h.stack.runner.isRunning(session.id), 10_000, 'turno')
+    const msgs = h.stack.repo.path(session.id)
+    const a = msgs.find((m) => (m.message as any).native)!
+    expect(a.meta.toolSearch).toEqual({ mode: 'native-anthropic' })
+    expect(nativeSearches((a.message as any).native).map(nativeSearchChip)).toEqual([
+      'buscou tools: datetime'
+    ])
+    expect(msgs.filter((m) => m.message.role === 'tool').pop()!.meta.toolStatus).toBe('ok')
+    expect(String(msgs.at(-1)!.message.content)).toContain('Resultado recebido (datetime)')
+  })
+})

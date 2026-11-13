@@ -15,6 +15,8 @@
 //   1.11.0: "/now [formato]" → datetime;  "/lookup <nomes…>" → tool_search (tools compactadas;
 //   "/lookup-old <nomes…>" com o nome antigo search_tool);
 //   "/badargs" → web_search com argumentos inválidos ({ q } em vez de { query });
+//   1.12.0: na Messages API com tools adiadas (`defer_loading`), "/now" faz antes a busca do servidor
+//   (server_tool_use + tool_search_tool_result com a referência ao datetime) — o chip na conversa;
 //   requests laterais: compactação (prompt de resumo) → <conversation_summary>…; título (prompt do
 //   título) → "Título: <palavras>"; extração de memórias → memory_write com "meu nome é X" (ou "meu nome e X", sem acento: o adb não digita "é");
 //   resto → "ok: <texto>" (com raciocínio e usage com custo).
@@ -287,6 +289,70 @@ export function startFakeLlm(
       res.end('data: [DONE]\n\n')
     }
 
+    /** Busca nativa de tools (1.12.0): texto + busca do servidor + a tool achada, num turno só. */
+    const nativeSearchCall = async (
+      name: string,
+      args: Record<string, unknown>,
+      lead: string
+    ): Promise<void> => {
+      const id = `toolu_${Date.now().toString(36)}`
+      const srv = `srvtoolu_${Date.now().toString(36)}`
+      write(
+        ev('message_start', {
+          message: { id: 'm', model, usage: { input_tokens: 100, output_tokens: 1 } }
+        })
+      )
+      write(ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }))
+      write(ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: lead } }))
+      write(ev('content_block_stop', { index: 0 }))
+      write(
+        ev('content_block_start', {
+          index: 1,
+          content_block: { type: 'server_tool_use', id: srv, name: 'tool_search_tool_regex' }
+        })
+      )
+      write(
+        ev('content_block_delta', {
+          index: 1,
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify({ pattern: name }) }
+        })
+      )
+      write(ev('content_block_stop', { index: 1 }))
+      await sleep(delay)
+      write(
+        ev('content_block_start', {
+          index: 2,
+          content_block: {
+            type: 'tool_search_tool_result',
+            tool_use_id: srv,
+            content: {
+              type: 'tool_search_tool_search_result',
+              tool_references: [{ type: 'tool_reference', tool_name: name }]
+            }
+          }
+        })
+      )
+      write(ev('content_block_stop', { index: 2 }))
+      write(
+        ev('content_block_start', {
+          index: 3,
+          content_block: { type: 'tool_use', id, name, input: {} }
+        })
+      )
+      write(
+        ev('content_block_delta', {
+          index: 3,
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify(args) }
+        })
+      )
+      write(ev('content_block_stop', { index: 3 }))
+      write(
+        ev('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 30 } })
+      )
+      write(ev('message_stop', {}))
+      res.end()
+    }
+
     // depois de um resultado de tool: responde citando o resultado
     const toolResult = anthropic
       ? (() => {
@@ -464,6 +530,8 @@ export function startFakeLlm(
     // tools compactadas e datetime (1.11.0)
     if (text.startsWith('/now')) {
       const format = text.slice(4).trim()
+      if (anthropic && raw.includes('"defer_loading":true'))
+        return nativeSearchCall('datetime', format ? { format } : {}, 'Vou ver a hora. ')
       return toolCall('datetime', format ? { format } : {}, 'Vou ver a hora. ')
     }
     // 1.12.0: a tool se chama tool_search; "/lookup-old" usa o nome antigo (histórico ≤ 1.11.0)

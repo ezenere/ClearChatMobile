@@ -5,7 +5,7 @@ import { AppState, Platform } from 'react-native'
 import { account, kv } from '@/account/native'
 import { attachments, engine, isLocalMode, onAfterMerge, store, syncKeys } from '@/data/native'
 import { hex, sha256 } from '@/crypto'
-import { setEnvSource } from '@/agent/request'
+import { setEnvSource, setNativeTestHosts } from '@/agent/request'
 import { setSearchBases } from '@/agent/tools/web'
 import { location } from '@/location/native'
 import { openNativeSql } from '@/data/sqlNative'
@@ -32,6 +32,14 @@ setEnvSource(() => ({
 // desenvolvimento/E2E: buscador falso local (nunca em produção — só com a variável definida)
 if (process.env.EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG)
   setSearchBases({ ddg: process.env.EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG })
+// desenvolvimento/E2E: provedor FALSO local tratado como o host oficial na busca nativa de tools
+// (1.12.0; = CLEARCHAT_E2E_NATIVE_HOSTS do desktop) — lista por vírgula, só com a variável definida
+if (process.env.EXPO_PUBLIC_CLEARCHAT_E2E_NATIVE_HOSTS)
+  setNativeTestHosts(
+    process.env.EXPO_PUBLIC_CLEARCHAT_E2E_NATIVE_HOSTS.split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+  )
 
 const listeners = new Set<
   (n: { chatId: string; tone: 'info' | 'danger' | 'success'; text: string }) => void
