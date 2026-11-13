@@ -31,10 +31,12 @@ import {
   filterToolReferences,
   forceLoadedTools,
   isNativeRejection,
+  isRouterPreSearch,
   messagesBlockers,
   nativeConsistent,
   nativeSearchChip,
   nativeSearches,
+  nativeToolSearchPrompt,
   nativeToolsArray,
   nativeTurnFrom,
   normalizeToolSearchCaps,
@@ -235,18 +237,10 @@ describe('(A) lógica pura vendorada', () => {
     expect(anthropicToolSearchSupport('meu-alias')).toBe('unknown')
   })
 
-  it('bloqueios da Messages API do OpenRouter e mídia do histórico enviado', () => {
+  it('bloqueios da Messages API do OpenRouter (áudio, parâmetros, extraBody; PDF não bloqueia)', () => {
     const cfg = (params: Record<string, unknown>): any => ({ params })
     expect(messagesBlockers({ cfg: cfg({}) })).toEqual([])
     expect(messagesBlockers({ cfg: cfg({}), sent: { audio: true } })[0]).toMatch(/áudio/)
-    expect(messagesBlockers({ cfg: cfg({}), sent: { pdf: true } })).toEqual([])
-    expect(
-      messagesBlockers({
-        cfg: cfg({}),
-        sent: { pdf: true },
-        info: { inputModalities: ['text'] }
-      })[0]
-    ).toMatch(/PDF/)
     expect(messagesBlockers({ cfg: cfg({ seed: 1, frequency_penalty: 0.2 }) })[0]).toMatch(
       /frequency_penalty, seed/
     )
@@ -267,10 +261,39 @@ describe('(A) lógica pura vendorada', () => {
           ]
         }
       ] as ApiMessage[])
-    ).toEqual({ audio: true, pdf: true })
+    ).toEqual({ audio: true })
+    // PDF (mesmo num modelo sem leitura nativa) não tira da Messages API — o OpenRouter converte
+    const pdfChat = {
+      role: 'user',
+      content: [
+        { type: 'file', file: { filename: 'a.pdf', file_data: 'data:application/pdf;base64,x' } }
+      ]
+    } as ApiMessage
+    expect(sentMediaOf([pdfChat])).toEqual({})
+    expect(
+      resolveToolSearchMode(
+        mi({
+          kind: 'openrouter',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          model: 'openai/gpt-5.1-codex-mini',
+          info: { inputModalities: ['image', 'text'], endpoints: ['/api/v1/messages'] },
+          sent: sentMediaOf([pdfChat])
+        })
+      ).mode
+    ).toBe('native-openrouter')
   })
 
-  it('plano: nativo completas e adiadas (sem tool_search, sem prompt); local renomeado; off', () => {
+  it('prompt fixo nativo: nomeia a busca do modo e lista as adiadas na ordem dada; nenhuma → nada', () => {
+    expect(nativeToolSearchPrompt([])).toBeNull()
+    expect(nativeToolSearchPrompt(['web_search', 'datetime'], 'native-anthropic')).toBe(
+      'Algumas ferramentas deste chat estão adiadas e só aparecem depois de buscadas: use tool_search_tool_regex antes de dizer que não tem uma ferramenta. Adiadas: web_search, datetime.'
+    )
+    expect(nativeToolSearchPrompt(['web_search'], 'native-openrouter')).toBe(
+      'Algumas ferramentas deste chat estão adiadas e só aparecem depois de buscadas: use a busca de ferramentas (openrouter:tool_search) antes de dizer que não tem uma ferramenta. Adiadas: web_search.'
+    )
+  })
+
+  it('plano: nativo completas e adiadas (sem tool_search, com o prompt fixo nativo); local renomeado; off', () => {
     const full = defs(['web_search', 'browse_url', 'datetime'])
     const cfg = { toolsFull: ['web_search' as const] }
     const nat = planTools([...full, TOOL_DEFINITIONS.end_call], cfg, 'native-anthropic')
@@ -282,7 +305,7 @@ describe('(A) lógica pura vendorada', () => {
       'end_call'
     ])
     expect(nat.deferred).toEqual(['browse_url', 'datetime'])
-    expect(nat.prompt).toBeNull()
+    expect(nat.prompt).toBe(nativeToolSearchPrompt(['browse_url', 'datetime'], 'native-anthropic'))
     expect(nat.searchEntry).toEqual(ANTHROPIC_SEARCH_TOOL)
     expect(planTools(full, cfg, 'native-openrouter').searchEntry).toEqual(OPENROUTER_SEARCH_TOOL)
     expect(
@@ -488,6 +511,66 @@ describe('(A) lógica pura vendorada', () => {
       ]
     })
     expect(nativeSearchChip(opaque[0])).toBe('buscou tools (resultado do OpenRouter)')
+    // OpenRouter (forma vista no smoke do desktop): pré-busca do roteador (orpresearch…, input
+    // vazio) fora do chip; a busca do modelo com tool_names
+    const orNative = {
+      v: 1 as const,
+      api: 'anthropic-messages' as const,
+      providerId: 'p',
+      kind: 'openrouter' as const,
+      model: 'm',
+      content: [
+        { type: 'server_tool_use', id: 'orpresearch_2', name: 'openrouter:tool_search', input: {} },
+        {
+          type: 'openrouter_tool_search_result',
+          tool_use_id: 'orpresearch_2',
+          content: {
+            matches: [],
+            tool_names: [],
+            pattern: '{}',
+            catalog_index: 'Tools: datetime, web_search.'
+          }
+        },
+        {
+          type: 'server_tool_use',
+          id: 'call_UHW',
+          name: 'openrouter:tool_search',
+          input: { query: 'select:datetime' }
+        },
+        {
+          type: 'openrouter_tool_search_result',
+          tool_use_id: 'call_UHW',
+          content: {
+            matches: [
+              {
+                tool_id: 'datetime',
+                schema_digest: 'x',
+                definition: { type: 'function', name: 'datetime', parameters: {} }
+              }
+            ],
+            tool_names: ['datetime']
+          }
+        },
+        { type: 'tool_use', id: 'call_d', name: 'datetime', input: {} }
+      ]
+    }
+    expect(isRouterPreSearch(orNative.content[0])).toBe(true)
+    expect(isRouterPreSearch(orNative.content[2])).toBe(false)
+    expect(nativeSearches(orNative)).toEqual([
+      { query: 'select:datetime', tools: ['datetime'], opaque: false }
+    ])
+    expect(discoveredByNative(orNative.content)).toEqual(['datetime'])
+    // o que o app grava de uma resposta do OpenRouter: sem redacted_thinking, pré-busca inclusa
+    const gravado = nativeTurnFrom(
+      [
+        orNative.content[0],
+        orNative.content[1],
+        { type: 'redacted_thinking', data: 'x' },
+        ...orNative.content.slice(2)
+      ],
+      { providerId: 'p', kind: 'openrouter', model: 'm' }
+    )!
+    expect(gravado.content).toEqual(orNative.content)
     expect(toolSearchMetaLabel({ mode: 'native-anthropic' })).toBe('busca nativa · Anthropic')
     expect(toolSearchMetaLabel({ mode: 'native-openrouter' })).toBe('busca nativa · OpenRouter')
     expect(toolSearchMetaLabel({ mode: 'local', fallbackFrom: 'native-openrouter' })).toBe(
@@ -584,7 +667,10 @@ describe('(B) request do celular', () => {
     expect(b.tools[1].input_schema).toEqual(toolDefinitions(['browse_url'])[0].function.parameters)
     expect(b.tools[1].description).toBe(toolDefinitions(['browse_url'])[0].function.description)
     expect(b.tools.at(-1)).toEqual(ANTHROPIC_SEARCH_TOOL)
-    expect(b.system[0].text).toBe('SYS')
+    // o prompt fixo nativo no fim do system prompt, com as adiadas DESTA request (nunca o da local)
+    expect(b.system[0].text).toBe(
+      `SYS\n\n${nativeToolSearchPrompt(['browse_url', 'datetime'], 'native-anthropic')}`
+    )
     expect(JSON.stringify(b)).not.toContain(COMPACT_TOOLS_PROMPT)
     expect(b.tools.some((t: any) => t.name === 'tool_search')).toBe(false)
     expect(req.notes![0]).toMatch(/Busca nativa da Anthropic — 1 carregada, 2 adiadas/)
@@ -612,6 +698,13 @@ describe('(B) request do celular', () => {
     expect(b.stream_options).toBeUndefined()
     expect(b.stream).toBe(true)
     expect(b.thinking).toEqual({ type: 'disabled' })
+    expect(b.system).toEqual([
+      {
+        type: 'text',
+        text: `SYS\n\n${nativeToolSearchPrompt(['browse_url', 'datetime'], 'native-openrouter')}`,
+        cache_control: { type: 'ephemeral' }
+      }
+    ])
     const mt = buildRequest(
       mkChat({ providerId: 'po', params: { max_tokens: 500 } }),
       { depth: 0, model: 'openai/gpt-5.6-luna' },
@@ -728,6 +821,10 @@ describe('(B) request do celular', () => {
     expect(ob.tools.find((t: any) => t.name === 'datetime').defer_loading).toBeUndefined()
     expect(other.notes!.join('\n')).toMatch(
       /Carregadas por já terem sido usadas sem a busca no histórico enviado: datetime/
+    )
+    // o prompt fixo nativo lista só as adiadas de fato (datetime foi carregada)
+    expect(ob.system[0].text).toBe(
+      `SYS\n\n${nativeToolSearchPrompt(['browse_url'], 'native-anthropic')}`
     )
     const edited = buildRequest(
       mkChat(),
@@ -1038,24 +1135,37 @@ describe('(C) SSE e custo', () => {
     expect(a3.usage!.cost).toBe(0.1)
   })
 
-  it('custo pelo GET /generation: espera o 404 inicial, lê total_cost; erro → null', async () => {
+  it('custo pelo GET /generation: espera o 404 e o "ainda não fechou" (0 com 0 tokens), lê total_cost; erro → null', async () => {
     let calls = 0
     const fake = (async (url: string, init: any) => {
       calls++
       expect(url).toBe('https://openrouter.ai/api/v1/generation?id=gen-1')
       expect(init.headers.Authorization).toBe('Bearer k')
       if (calls === 1) return new Response('{}', { status: 404 })
-      return new Response(JSON.stringify({ data: { total_cost: 0.0123 } }), { status: 200 })
+      if (calls === 2)
+        return new Response(
+          JSON.stringify({ data: { total_cost: 0, tokens_prompt: 0, tokens_completion: 0 } }),
+          { status: 200 }
+        )
+      return new Response(JSON.stringify({ data: { total_cost: 0.0123, tokens_prompt: 9 } }), {
+        status: 200
+      })
     }) as unknown as typeof fetch
     expect(
       await fetchGenerationCost(
         'https://openrouter.ai/api/v1/',
         { Authorization: 'Bearer k' },
         'gen-1',
-        { waits: [0, 0], fetchImpl: fake }
+        { waits: [0, 0, 0], fetchImpl: fake }
       )
     ).toBe(0.0123)
-    expect(calls).toBe(2)
+    expect(calls).toBe(3)
+    // custo 0 de verdade (modelo grátis: tokens > 0) vale
+    const free = (async () =>
+      new Response(JSON.stringify({ data: { total_cost: 0, tokens_prompt: 5 } }), {
+        status: 200
+      })) as unknown as typeof fetch
+    expect(await fetchGenerationCost('https://x', {}, 'g', { waits: [0], fetchImpl: free })).toBe(0)
     const bad = (async () => new Response('x', { status: 500 })) as unknown as typeof fetch
     expect(
       await fetchGenerationCost('https://x', {}, 'g', { waits: [0], fetchImpl: bad })

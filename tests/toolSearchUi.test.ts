@@ -7,7 +7,9 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ANTHROPIC_SEARCH_TOOL,
   TOOL_SEARCH_LOCAL_NOTICE,
-  capsKey
+  capsKey,
+  nativeToolSearchPrompt,
+  nativeTurnFrom
 } from '../src/vendor/shared/toolSearch'
 import { DEFAULT_CHAT_CONFIG } from '../src/vendor/shared/defaults'
 import type {
@@ -24,7 +26,7 @@ import {
   toolDefinitions
 } from '../src/agent/request'
 import {
-  nativeToolItem,
+  nativeToolState,
   toolChipText,
   toolSearchLine,
   toolSearchViewOf
@@ -101,15 +103,91 @@ describe('(E) telas de tools: o modo efetivo calculado no aparelho', () => {
     expect(toolChipText(true, false)).toBe('adiada')
     expect(toolChipText(true, true)).toBe('carregada')
     expect(toolChipText(false, false)).toBe('compacta')
-    // a mesma request (o item exato que vai)
+    // a mesma request (o item exato que vai e o prompt fixo nativo exato)
     const req = buildRequest(mkChat(), S, [], ANTH, ENV).body as any
     expect(view.items.datetime).toEqual(req.tools.find((t: any) => t.name === 'datetime'))
-    // tool desligada: o item que iria
+    expect(view.prompt).toBe(nativeToolSearchPrompt(['browse_url', 'datetime'], 'native-anthropic'))
+    expect(req.system[0].text).toBe(`SYS\n\n${view.prompt}`)
+    expect(view.forceLoaded).toEqual([])
+    // tool desligada: o item que iria pela config
     const [ask] = toolDefinitions(['ask_user'])
-    expect(nativeToolItem(view, 'ask_user', ask, true)).toMatchObject({
-      name: 'ask_user',
-      defer_loading: true
+    expect(nativeToolState(view, 'ask_user', ask, true)).toMatchObject({
+      deferred: true,
+      forced: false,
+      item: { name: 'ask_user', defer_loading: true }
     })
+  })
+
+  it('adiada já usada no histórico sem a busca: "carregada nesta request" e fora do prompt — a mesma conta da request; noReplay idem', () => {
+    // resposta de OUTRO modelo com a busca (não reenviada) que chamou o datetime
+    const native = nativeTurnFrom(
+      [
+        { type: 'text', text: 'Vou ver.' },
+        { type: 'server_tool_use', id: 'srv', name: 'tool_search_tool_regex', input: {} },
+        {
+          type: 'tool_search_tool_result',
+          tool_use_id: 'srv',
+          content: {
+            type: 'tool_search_tool_search_result',
+            tool_references: [{ type: 'tool_reference', tool_name: 'datetime' }]
+          }
+        },
+        { type: 'tool_use', id: 'tu', name: 'datetime', input: {} }
+      ],
+      { providerId: 'pa', kind: 'anthropic', model: 'claude-opus-5-5' }
+    )!
+    const history: StoredMessage[] = [
+      { ...sm({ role: 'user', content: 'hora?' }), id: 'u1', seq: 1 },
+      {
+        ...sm({
+          role: 'assistant',
+          content: 'Vou ver.',
+          tool_calls: [
+            { id: 'tu', type: 'function', function: { name: 'datetime', arguments: '{}' } }
+          ],
+          native
+        }),
+        id: 'a1',
+        seq: 2
+      },
+      { ...sm({ role: 'tool', tool_call_id: 'tu', content: '14:05' }), id: 't1', seq: 3 }
+    ]
+    const view = toolSearchViewOf({
+      cfg: cfgOf(),
+      provider: ANTH,
+      model: 'claude-sonnet-5-5',
+      history
+    })
+    expect(view.forceLoaded).toEqual(['datetime'])
+    expect(view.deferred).toEqual(['browse_url'])
+    expect(view.items.datetime.defer_loading).toBeUndefined()
+    expect(view.prompt).toBe(nativeToolSearchPrompt(['browse_url'], 'native-anthropic'))
+    const [dt] = toolDefinitions(['datetime'])
+    expect(nativeToolState(view, 'datetime', dt, true)).toMatchObject({
+      deferred: false,
+      forced: true
+    })
+    const req = buildRequest(mkChat(), S, history, ANTH, ENV).body as any
+    expect(req.system[0].text).toBe(`SYS\n\n${view.prompt}`)
+    expect(req.tools.find((t: any) => t.name === 'datetime')).toEqual(view.items.datetime)
+    // mesmo modelo: reenviada → datetime descoberta, continua adiada; com noReplay, carregada
+    const same = { ...native, model: 'claude-sonnet-5-5' }
+    const h2 = history.map((m) =>
+      m.id === 'a1' ? { ...m, message: { ...m.message, native: same } as ApiMessage } : m
+    )
+    expect(
+      toolSearchViewOf({ cfg: cfgOf(), provider: ANTH, model: 'claude-sonnet-5-5', history: h2 })
+        .deferred
+    ).toEqual(['browse_url', 'datetime'])
+    expect(
+      toolSearchViewOf({
+        cfg: cfgOf(),
+        provider: ANTH,
+        model: 'claude-sonnet-5-5',
+        history: h2,
+        noReplay: new Set(['a1'])
+      }).forceLoaded
+    ).toEqual(['datetime'])
   })
 
   it('OpenRouter: Messages API; versão local num genérico com o motivo e o aviso; sem compactação; sem provedor', () => {

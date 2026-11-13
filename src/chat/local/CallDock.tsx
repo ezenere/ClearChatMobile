@@ -187,7 +187,8 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
       model: chat.config.model,
       chatId,
       sessionId: chat.mainSessionId,
-      history: hostStack.repo.path(chat.mainSessionId)
+      history: hostStack.repo.path(chat.mainSessionId),
+      noReplay: hostStack.runner.noReplayIds(chat.mainSessionId)
     })
   })
   const [value, setValue] = useState<VoiceCallConfig | null>(

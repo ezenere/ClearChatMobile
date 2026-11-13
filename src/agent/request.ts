@@ -14,10 +14,11 @@
 //   fim + o prompt fixo no fim do system prompt, nos turnos normais, subagentes e chamada de voz;
 // - busca nativa de tools (protocolo 1.12.0, @shared/toolSearch — = desktop): o modo de cada request
 //   (Anthropic nativa, Messages API do OpenRouter, versão local ou sem compactação) sai do mesmo
-//   resolvedor; nos nativos as mesmas tools vão completas e adiadas, os blocos do provedor das
-//   respostas anteriores são reenviados (mesmo canal e ainda batendo com o texto) com as referências
-//   filtradas às tools que ESTE aparelho manda (um chat do computador hospedado aqui, sem as tools
-//   dele, continua válido) e uma adiada já usada sem a descoberta junto vai carregada.
+//   resolvedor; nos nativos as mesmas tools vão completas e adiadas (com o prompt fixo nativo, que
+//   nomeia a busca e lista as adiadas da request), os blocos do provedor das respostas anteriores são
+//   reenviados (mesmo canal e ainda batendo com o texto) com as referências filtradas às tools que
+//   ESTE aparelho manda (um chat do computador hospedado aqui, sem as tools dele, continua válido) e
+//   uma adiada já usada sem a descoberta junto vai carregada.
 // É o módulo que o shim `src/vendor/desktop/agent/request.ts` reexporta (BuiltRequest, maskRequest,
 // modelInfoFor para llm.ts / smartApprove.ts vendorados).
 import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
@@ -27,6 +28,7 @@ import {
   TOOL_SEARCH_MODE_LABEL,
   forceLoadedTools,
   isNativeMode,
+  nativeToolSearchPrompt,
   nativeToolsArray,
   prepareNativeReplay,
   resolveToolSearchMode,
@@ -467,15 +469,17 @@ export function resolveToolMode(
 
 /**
  * System prompt → <environment> → memória (índice + help, só a principal) → texto das tools (o
- * gerado segue a compactação) → prompt fixo das tools compactadas (só na versão local com alguma
- * compacta; nos modos nativos, nenhum texto do app).
+ * gerado segue a compactação) → prompt fixo das tools compactadas (versão local com alguma
+ * compacta) ou o prompt fixo NATIVO (busca nativa com alguma adiada) — = desktop.
  */
 export function systemContent(
   chat: Chat,
   session: Pick<Session, 'depth'> & { id?: string },
   env: EnvInfo = envSource(),
   history?: StoredMessage[],
-  mode: ToolSearchMode = 'local'
+  mode: ToolSearchMode = 'local',
+  /** Prompt fixo no lugar do do plano (buildRequest: o nativo com as adiadas efetivas). */
+  promptOverride?: string | null
 ): string {
   const cfg = chat.config
   let s = session.depth === 0 ? (cfg.systemPrompt ?? '') : (cfg.subagentSystemPrompt ?? '')
@@ -496,7 +500,63 @@ export function systemContent(
         defaultToolsPrompt(plan.definitions, cfg.nativeTools, { subagent: session.depth > 0 })
     )
   }
-  return withCompactPrompt(s, plan)
+  return withCompactPrompt(s, promptOverride === undefined ? plan : { prompt: promptOverride })
+}
+
+/** Reenvio de blocos nativos + adiadas efetivas de uma request nativa (ver nativeDeferral). */
+export interface NativeDeferral {
+  /** Histórico (sanitizado) com `native` só nas mensagens reenviadas. */
+  messages: ApiMessage[]
+  replayed: number
+  skipped: number
+  /** Fora de `toolsFull`, mas carregadas: usadas no histórico enviado sem a descoberta junto. */
+  forceLoaded: string[]
+  /** As que vão de fato com `defer_loading` (o prompt fixo nativo lista estas). */
+  deferred: string[]
+}
+
+/**
+ * Num modo nativo (= desktop): quais respostas vão com os blocos do provedor (mesmo canal, ainda
+ * batendo com o texto; referências filtradas às tools da request — as que ESTE aparelho manda) e
+ * quais adiadas vão carregadas por já terem sido usadas sem a descoberta junto. A mesma conta da
+ * request serve as telas de tools (a "Definição" mostra o que vai).
+ */
+export function nativeDeferral(
+  plan: Pick<ToolsPlan, 'mode' | 'full' | 'deferred'>,
+  sanitized: ApiMessage[],
+  channel: { providerId: string; model: string } | null
+): NativeDeferral {
+  if (!isNativeMode(plan.mode))
+    return { messages: sanitized, replayed: 0, skipped: 0, forceLoaded: [], deferred: [] }
+  const names = new Set(plan.full.map((d) => d.function.name))
+  const r = prepareNativeReplay(sanitized, channel ? { mode: plan.mode, ...channel } : null, names)
+  const forceLoaded = forceLoadedTools(r.messages, plan.deferred, r.discovered)
+  return {
+    messages: r.messages,
+    replayed: r.replayed,
+    skipped: r.skipped,
+    forceLoaded,
+    deferred: plan.deferred.filter((n) => !forceLoaded.includes(n))
+  }
+}
+
+/** Histórico que vai na request (sanitizado; `noReplay` tira o `native` dessas mensagens). */
+export function sentHistory(
+  history: StoredMessage[],
+  kind: ProviderKind,
+  keepNative: boolean,
+  noReplay?: ReadonlySet<string>
+): ApiMessage[] {
+  const stored = sentMessages(history).map((m) =>
+    noReplay?.has(m.id) && m.message.role === 'assistant' && m.message.native
+      ? { ...m, message: { ...m.message, native: undefined } }
+      : m
+  )
+  return sanitizeHistory(
+    stored.map((m) => m.message),
+    kind === 'openrouter',
+    keepNative
+  )
 }
 
 export function parseExtraBody(extra: string | undefined): Record<string, unknown> | null {
@@ -680,40 +740,31 @@ export function buildRequest(
   const mode = plan.mode
   const native = isNativeMode(mode)
 
-  const sys = systemContent(chat, session, opts.env ?? envSource(), history, mode)
-  const sentStored = sentMessages(history).map((m) =>
-    opts.noReplay?.has(m.id) && m.message.role === 'assistant' && m.message.native
-      ? { ...m, message: { ...m.message, native: undefined } }
-      : m
+  // reenvio dos blocos nativos (mesmo provedor/API/modelo, ainda batendo com o texto; referências
+  // só às tools que ESTE aparelho manda) e as adiadas já usadas sem a descoberta → carregadas
+  const nd = nativeDeferral(
+    plan,
+    sentHistory(history, kind, native, opts.noReplay),
+    opts.replay === false ? null : { providerId: provider.id, model: session.model }
   )
-  let hist = sanitizeHistory(
-    sentStored.map((m) => m.message),
-    openRouter,
-    native
+  const hist = nd.messages
+  // prompt fixo: o da versão local, ou o nativo com as adiadas EFETIVAS desta request
+  const sys = systemContent(
+    chat,
+    session,
+    opts.env ?? envSource(),
+    history,
+    mode,
+    isNativeMode(mode) ? nativeToolSearchPrompt(nd.deferred, mode) : undefined
   )
   const toolSearch: RequestToolSearch = {
     mode,
     ...(resolved.reason && mode === 'local' ? { reason: resolved.reason } : {}),
     ...(resolved.failure && mode === 'local' ? { failure: resolved.failure } : {}),
-    deferred: [],
-    forceLoaded: [],
-    replayed: 0,
-    skipped: 0
-  }
-  if (native) {
-    // reenvio dos blocos nativos (mesmo provedor/API/modelo, ainda batendo com o texto; referências
-    // só às tools que ESTE aparelho manda) e as adiadas já usadas sem a descoberta → carregadas
-    const names = new Set(plan.full.map((d) => d.function.name))
-    const r = prepareNativeReplay(
-      hist,
-      opts.replay === false ? null : { mode, providerId: provider.id, model: session.model },
-      names
-    )
-    hist = r.messages
-    toolSearch.replayed = r.replayed
-    toolSearch.skipped = r.skipped
-    toolSearch.forceLoaded = forceLoadedTools(hist, plan.deferred, r.discovered)
-    toolSearch.deferred = plan.deferred.filter((n) => !toolSearch.forceLoaded.includes(n))
+    deferred: nd.deferred,
+    forceLoaded: nd.forceLoaded,
+    replayed: nd.replayed,
+    skipped: nd.skipped
   }
   const messages: ApiMessage[] = []
   if (sys) messages.push({ role: 'system', content: sys })

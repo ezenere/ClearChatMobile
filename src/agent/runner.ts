@@ -458,7 +458,7 @@ export class Runner {
    */
   private toolModes = new Map<string, ToolSearchMode>()
   /** Mensagens cujo `native` o provedor recusou nesta sessão (não são mais reenviadas). Só memória. */
-  private noReplayIds = new Map<string, Set<string>>()
+  private rejectedReplays = new Map<string, Set<string>>()
 
   constructor(deps: RunnerDeps) {
     this.d = deps
@@ -942,9 +942,17 @@ export class Runner {
     })
   }
 
+  /**
+   * Busca nativa (1.12.0): respostas desta sessão cujo `native` o provedor recusou (não são mais
+   * reenviadas) — as telas de tools mostram as adiadas efetivas com a mesma conta da request.
+   */
+  noReplayIds(sessionId: string): ReadonlySet<string> | undefined {
+    return this.rejectedReplays.get(sessionId)
+  }
+
   /** Busca nativa (1.12.0): mensagens cujo `native` o provedor já recusou nesta sessão. */
   private noReplayOf(sessionId: string): BuildOptions {
-    const ids = this.noReplayIds.get(sessionId)
+    const ids = this.rejectedReplays.get(sessionId)
     return ids ? { noReplay: ids } : {}
   }
 
@@ -1077,10 +1085,10 @@ export class Runner {
             try {
               await redo({ replay: false })
               // o reenvio era o problema: esses blocos não vão mais nesta sessão
-              const ids = this.noReplayIds.get(session.id) ?? new Set<string>()
+              const ids = this.rejectedReplays.get(session.id) ?? new Set<string>()
               for (const m of this.repo.path(session.id))
                 if (m.message.role === 'assistant' && m.message.native) ids.add(m.id)
-              this.noReplayIds.set(session.id, ids)
+              this.rejectedReplays.set(session.id, ids)
               return
             } catch (e2) {
               if (

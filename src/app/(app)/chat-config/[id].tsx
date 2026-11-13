@@ -252,7 +252,13 @@ export default function ChatConfigScreen() {
       provider,
       model: eff.model,
       chatId: id,
-      ...(sid ? { sessionId: sid, history: hostStack.repo.path(sid) } : {}),
+      ...(sid
+        ? {
+            sessionId: sid,
+            history: hostStack.repo.path(sid),
+            noReplay: hostStack.runner.noReplayIds(sid)
+          }
+        : {}),
       models: models.list
     })
   })

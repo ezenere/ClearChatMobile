@@ -37,7 +37,7 @@ import { Sheet } from '@/ui/Sheet'
 import { colors, font, radius, spacing } from '@/ui/theme'
 import { compactStatusText, type CompactCfg } from './compactUi'
 import {
-  nativeToolItem,
+  nativeToolState,
   toolChipText,
   toolSearchLine,
   type ToolSearchModeView
@@ -166,7 +166,7 @@ export function CompactToolsSheet({
         visible={visible}
         onClose={onClose}
         title={`Tools compactadas · ${view.label}`}
-        subtitle="O que vai, exatamente — nenhum texto do app no system prompt."
+        subtitle="O que vai, exatamente."
         maxHeight="90%"
         testID="compact-tools-sheet"
       >
@@ -178,12 +178,22 @@ export function CompactToolsSheet({
             Cada tool que não está marcada “carregada” vai com a definição completa e defer_loading:
             true; as marcadas (e end_call) vão carregadas, e a última carregada leva o ponto de
             cache. A entrada de busca abaixo vai por último. {SEARCH_ENTRY_NOTE[view.mode]} Não há
-            tool_search do app nem instrução no system prompt.
+            tool_search do app. Havendo alguma adiada, vai o prompt fixo nativo no fim do system
+            prompt (depois de uma linha em branco; texto do app que nomeia a busca e lista as tools
+            adiadas desta request, exatamente como vai).
             {view.mode === 'native-openrouter'
               ? ' Enquanto houver tools adiadas, a request vai para /messages (Messages API do OpenRouter) em vez de /chat/completions.'
               : ''}{' '}
             A “Definição” de cada tool mostra o item exato.
           </Text>
+          {view.prompt ? (
+            <>
+              <Text style={st.codeLabel}>
+                Prompt fixo nativo — no fim do system prompt, depois de uma linha em branco:
+              </Text>
+              <Code testID="compact-tools-native-prompt">{view.prompt}</Code>
+            </>
+          ) : null}
           <Text style={st.codeLabel}>Entrada de busca — último item do array tools:</Text>
           <Code testID="compact-tools-search-entry">
             {JSON.stringify(view.searchEntry, null, 2)}
@@ -426,7 +436,7 @@ export function ToolDefinitionSheet({
       <NativeToolDefinitionSheet
         name={name}
         fullDef={fullDef}
-        deferred={compact}
+        configDeferred={compact}
         nativeTools={native}
         view={view}
         visible={visible}
@@ -480,7 +490,7 @@ export function ToolDefinitionSheet({
 function NativeToolDefinitionSheet({
   name,
   fullDef,
-  deferred,
+  configDeferred,
   nativeTools,
   view,
   visible,
@@ -488,13 +498,15 @@ function NativeToolDefinitionSheet({
 }: {
   name: string
   fullDef: NonNullable<ReturnType<typeof phoneToolDefinition>>
-  deferred: boolean
+  /** Adiada pela config (`toolsFull`); vale quando a tool não está na request. */
+  configDeferred: boolean
   nativeTools: boolean
   view: ToolSearchModeView
   visible: boolean
   onClose: () => void
 }) {
-  const item = nativeToolItem(view, name, fullDef, deferred)
+  // o estado DESTA request (uma adiada já usada no histórico sem a busca vai carregada)
+  const { deferred, forced, item } = nativeToolState(view, name, fullDef, configDeferred)
   const who = view.mode === 'native-anthropic' ? 'da Anthropic' : 'do OpenRouter'
   return (
     <Sheet
@@ -514,8 +526,14 @@ function NativeToolDefinitionSheet({
               Marque “carregada” para ele vê-la desde o início.
             </Text>
           ) : (
-            <Text style={st.p} testID="tool-def-mode-loaded">
-              <Text style={st.strong}>Vai carregada</Text> desde o início (sem defer_loading).
+            <Text
+              style={st.p}
+              testID={forced ? 'tool-def-mode-force-loaded' : 'tool-def-mode-loaded'}
+            >
+              <Text style={st.strong}>Vai carregada</Text> desde o início (sem defer_loading)
+              {forced
+                ? ' nesta request: já foi usada no histórico enviado sem a busca que a encontrou junto.'
+                : '.'}
               {item.cache_control
                 ? ' Leva o ponto de cache (cache_control): é a última tool carregada.'
                 : ''}
