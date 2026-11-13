@@ -225,16 +225,23 @@ describe('request no celular', () => {
       'delegate_task'
     ])
     expect(availableTools(c, { depth: 2 })).toEqual(['web_search', 'browse_url', 'list_models'])
-    const req = buildRequest(c, { depth: 0, model: 'm' }, [], provider())
+    // OpenAI-compatible genérico: a versão local das tools compactadas (1.11.0; o OpenRouter iria
+    // pela busca nativa, 1.12.0 — tests/toolSearch.test.ts)
+    const req = buildRequest(
+      c,
+      { depth: 0, model: 'm' },
+      [],
+      provider({ baseUrl: 'https://api.x.com/v1' })
+    )
     const names = (req.body.tools as { function: { name: string } }[]).map((t) => t.function.name)
-    // tools compactadas (padrão, 1.11.0): a search_tool automática vai no fim
+    // tools compactadas (padrão, 1.11.0): a tool_search automática vai no fim
     expect(names).toEqual([
       'web_search',
       'browse_url',
       'list_models',
       'delegate_task',
       'ask_user',
-      'search_tool'
+      'tool_search'
     ])
   })
 
@@ -251,7 +258,13 @@ describe('request no celular', () => {
   })
 
   it('OpenRouter: cache_control, usage incluído, reasoning; sem reasoning no histórico de outros provedores', () => {
-    const c = chat({ cacheEnabled: true, params: { reasoning_effort: 'low' } })
+    // Chat Completions do OpenRouter: sem tools compactadas (com elas, a busca nativa usaria a
+    // Messages API — tests/toolSearch.test.ts)
+    const c = chat({
+      cacheEnabled: true,
+      params: { reasoning_effort: 'low' },
+      toolsCompact: false
+    })
     const h = [
       msg('u1', 1, { role: 'user', content: 'oi' }, null),
       msg('a1', 2, { role: 'assistant', content: 'olá', reasoning: 'r' }, 'u1'),

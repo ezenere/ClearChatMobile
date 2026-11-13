@@ -8,8 +8,10 @@
 // entre chats (list_chats, get_chat_info, send_to_chat — local ou por comando ao host do destino);
 // read_history; compactação (pedida, automática pelo contexto e "compactar e tentar de novo") e
 // título automático; chamada de voz (overrides do turno, `end_call`, `meta.voice`, marcadores e o
-// histórico só com o que foi ouvido — `amendVoiceTurn`) e a coleta automática de contexto do
-// Smart-Approve (resumidor vendorado). Sem React Native.
+// histórico só com o que foi ouvido — `amendVoiceTurn`), a coleta automática de contexto do
+// Smart-Approve (resumidor vendorado) e a busca nativa de tools (protocolo 1.12.0 — `native` e
+// `meta.toolSearch` gravados, queda para a versão local lembrada no aparelho, `pause_turn`, custo pelo
+// /generation do OpenRouter). Sem React Native.
 import {
   approvalRoute,
   blockedText,
@@ -89,6 +91,14 @@ import {
 import { buildJudgeExtras, isTypedUserMessage } from '@shared/smartApproveContext'
 import { MEMORY_TOOL_NAMES, SEARCH_TOOL, type ToolDefinition } from '@shared/tools'
 import { compactToolErrorText, runSearchTool, withFullDefinition } from '@shared/compactTools'
+import {
+  isNativeMode,
+  isNativeRejection,
+  nativeTurnFrom,
+  withoutStaleNative,
+  type NativeToolSearchMode,
+  type ToolSearchCaps
+} from '@shared/toolSearch'
 import { runDatetimeTool } from '@shared/datetime'
 import type {
   AgentEvent,
@@ -110,9 +120,11 @@ import type {
   SmartApproveRecord,
   StoredMessage,
   ToolCall,
-  ToolName
+  ToolName,
+  ToolSearchMode
 } from '@shared/types'
 import { TOOL_ALIASES } from '@shared/types'
+import { adapterFor } from '@vendor/desktop/agent/adapters'
 import { runAutoTitle, type AutoTitleDeps } from '@vendor/desktop/agent/autoTitle'
 import {
   buildCompactionRequest,
@@ -122,7 +134,9 @@ import {
 } from '@vendor/desktop/agent/compaction'
 import {
   accToDraft,
+  fetchGenerationCost,
   finalizeToolCalls,
+  LlmHttpError,
   markReasoning,
   newAccumulator,
   reasoningDuration,
@@ -184,6 +198,7 @@ import {
   modelInfoFor,
   toolsPlan,
   voiceCallContextFor,
+  type BuildOptions,
   type BuiltRequest
 } from './request'
 import { resolveAskUserQuestions } from './tools/askUser'
@@ -202,6 +217,8 @@ import { isLocationTool, type LocationService } from '@/location/service'
 export const CANCELLED_TEXT = '[Interrompido pelo usuário antes de concluir]'
 export const DENIED_TEXT = 'O usuário negou a execução desta ferramenta.'
 const MAX_DEPTH = 2
+/** Máximo de `pause_turn` seguidos (a busca do servidor pausou o turno) antes de encerrar. */
+const MAX_PAUSE_TURNS = 3
 
 /**
  * Entrega de send_to_chat (o host decide pelo estado do chat de destino, §8): executado/executável
@@ -295,6 +312,21 @@ export interface RunnerDeps {
     call?: ConstructorParameters<typeof ContextCaptureService>[0]['call']
     debounceMs?: number
   }
+  /**
+   * Busca nativa de tools (1.12.0): falhas lembradas DESTE aparelho (`toolSearchCaps`, local, nunca
+   * sincronizado — src/agent/toolSearchCaps.ts). Ausente = a queda acontece, mas não é lembrada.
+   */
+  toolSearchCaps?: {
+    get(): ToolSearchCaps
+    markFailure(
+      providerId: string,
+      model: string,
+      mode: NativeToolSearchMode,
+      error: string
+    ): ToolSearchCaps
+  }
+  /** Espera do custo pelo GET /generation do OpenRouter (testes: [0]). Padrão do desktop. */
+  generationWaits?: number[]
 }
 
 /** Entrada de `amendVoiceTurn` (= desktop `VoiceTurnAmend`). */
@@ -327,6 +359,8 @@ type StepResult =
   | { kind: 'error'; error: string; networkCancelled?: boolean }
 
 interface RunState {
+  /** Respostas seguidas com `stop_reason: pause_turn` (busca do servidor pausada) — máx. 3. */
+  pauseTurns?: number
   sessionId: string
   chatId: string
   depth: number
@@ -417,6 +451,14 @@ export class Runner {
   private compactionState = new Map<string, { state: 'scheduled' | 'running'; text?: string }>()
   /** Smart-Approve → coleta automática de contexto (resumidor; `contextCapture.ts` vendorado). */
   readonly capture: ContextCaptureService
+  /**
+   * Modo das tools da última request bem-sucedida de cada sessão (@shared/toolSearch): a execução
+   * das tools segue o MESMO modo (na versão local a `tool_search` existe e uma compacta com
+   * argumentos inválidos ganha a definição; nos nativos, não). Só memória (= desktop).
+   */
+  private toolModes = new Map<string, ToolSearchMode>()
+  /** Mensagens cujo `native` o provedor recusou nesta sessão (não são mais reenviadas). Só memória. */
+  private noReplayIds = new Map<string, Set<string>>()
 
   constructor(deps: RunnerDeps) {
     this.d = deps
@@ -881,16 +923,58 @@ export class Runner {
     return out
   }
 
-  private async buildFor(chat: Chat, session: Session, provider: Provider): Promise<BuiltRequest> {
+  private async buildFor(
+    chat: Chat,
+    session: Session,
+    provider: Provider,
+    more: BuildOptions = {}
+  ): Promise<BuiltRequest> {
     const history = this.repo.path(session.id)
     const data = await this.loadAttachments(history)
     return buildRequest(chat, session, history, provider, {
+      ...this.noReplayOf(session.id),
+      ...more,
       read: (file, name) => {
         const v = data.get(file)
         if (v === undefined) throw new Error(`Anexo não encontrado no aparelho: "${name ?? file}".`)
         return v
       }
     })
+  }
+
+  /** Busca nativa (1.12.0): mensagens cujo `native` o provedor já recusou nesta sessão. */
+  private noReplayOf(sessionId: string): BuildOptions {
+    const ids = this.noReplayIds.get(sessionId)
+    return ids ? { noReplay: ids } : {}
+  }
+
+  /**
+   * Custo de uma resposta da Messages API do OpenRouter cujo stream não trouxe `usage.cost`: GET
+   * /generation (grátis) em segundo plano e atualiza o meta da mensagem (nunca lança) — = desktop.
+   */
+  private async fillGenerationCost(
+    provider: Provider,
+    messageId: string,
+    genId: string
+  ): Promise<void> {
+    try {
+      const cost = await fetchGenerationCost(
+        provider.baseUrl,
+        adapterFor(providerKind(provider)).getHeaders(provider),
+        genId,
+        this.d.generationWaits ? { waits: this.d.generationWaits } : {}
+      )
+      if (cost == null) return
+      const m = this.repo.get(messageId)
+      if (!m?.meta.usage || m.meta.usage.cost != null) return
+      const updated = this.repo.update(m.id, m.message, {
+        ...m.meta,
+        usage: { ...m.meta.usage, cost }
+      })
+      this.emit({ type: 'message-updated', message: updated })
+    } catch (e) {
+      this.log(`custo pelo /generation: ${errMsg(e)}`)
+    }
   }
 
   private async step(st: RunState, signal: AbortSignal): Promise<StepResult> {
@@ -930,6 +1014,8 @@ export class Runner {
     } catch (e) {
       return { kind: 'error', error: errMsg(e) }
     }
+    /** Queda da busca nativa nesta chamada (o modo nativo recusado e por quê). */
+    let fallback = null as { from: NativeToolSearchMode; reason: string } | null
     let acc: StreamAccumulator = newAccumulator()
     const draft = throttle(
       () => this.emit({ type: 'draft', sessionId: session.id, draft: accToDraft(acc) }),
@@ -938,6 +1024,22 @@ export class Runner {
     const stream = this.d.stream ?? streamChat
     let t0 = Date.now()
     let first = true
+    const send = async (): Promise<void> => {
+      await stream(req, signal, acc, () => {
+        markReasoning(acc, Date.now())
+        draft.call()
+      })
+    }
+    /** Refaz a chamada com outra request (o parcial é descartado — nada foi persistido). */
+    const redo = async (more: BuildOptions): Promise<void> => {
+      const next = await this.buildFor(reqChat, reqSession, provider, more)
+      draft.cancel()
+      this.emit({ type: 'draft', sessionId: session.id, draft: null })
+      req = next
+      acc = newAccumulator()
+      t0 = Date.now()
+      await send()
+    }
     const r = await callWithNetworkRetry({
       signal,
       attempt: async () => {
@@ -946,16 +1048,59 @@ export class Runner {
           req = await this.buildFor(
             call ? applyVoiceCallChat(fresh, call, { kind: providerKind(provider) }) : fresh,
             reqSession,
-            provider
+            provider,
+            fallback ? { modeOverride: 'local' } : {}
           )
           acc = newAccumulator()
           t0 = Date.now()
         }
         first = false
-        await stream(req, signal, acc, () => {
-          markReasoning(acc, Date.now())
-          draft.call()
-        })
+        try {
+          await send()
+        } catch (e) {
+          // Busca nativa recusada pelo provedor (1.12.0, §4.3.6 "Queda"; = desktop): uma repetição
+          // sem o reenvio dos blocos nativos (se houve) e, se ainda recusar, UMA na versão local. A
+          // falha só é lembrada (24 h, neste aparelho) se a versão local der certo; erro que também
+          // acontece na local é do pedido, não da busca nativa.
+          const ts = req.toolSearch
+          if (
+            signal.aborted ||
+            !ts ||
+            !isNativeMode(ts.mode) ||
+            !(e instanceof LlmHttpError) ||
+            !isNativeRejection(e.status, e.message)
+          )
+            throw e
+          const nativeMode = ts.mode
+          let nativeErr: LlmHttpError = e
+          if (ts.replayed > 0) {
+            try {
+              await redo({ replay: false })
+              // o reenvio era o problema: esses blocos não vão mais nesta sessão
+              const ids = this.noReplayIds.get(session.id) ?? new Set<string>()
+              for (const m of this.repo.path(session.id))
+                if (m.message.role === 'assistant' && m.message.native) ids.add(m.id)
+              this.noReplayIds.set(session.id, ids)
+              return
+            } catch (e2) {
+              if (
+                signal.aborted ||
+                !(e2 instanceof LlmHttpError) ||
+                !isNativeRejection(e2.status, e2.message)
+              )
+                throw e2
+              nativeErr = e2
+            }
+          }
+          await redo({ modeOverride: 'local' })
+          const short = nativeErr.message.replace(/^Erro HTTP /, 'HTTP ').slice(0, 200)
+          fallback = { from: nativeMode, reason: `a busca nativa foi recusada: ${short}` }
+          try {
+            this.d.toolSearchCaps?.markFailure(provider.id, reqSession.model, nativeMode, short)
+          } catch (err) {
+            this.log(`toolSearchCaps: ${errMsg(err)}`)
+          }
+        }
       },
       isNetwork: isConnectionFailure,
       onDiscard: () => {
@@ -1004,11 +1149,20 @@ export class Runner {
       type: 'function',
       function: { name: t.name, arguments: t.arguments }
     }))
+    // busca nativa (1.12.0, §4.3.8): os blocos da resposta (sem pensamento) só quando vieram blocos
+    // de ferramenta do servidor — reenviados no próximo request ao mesmo provedor/modelo
+    const ts = req.toolSearch
+    const kind = providerKind(provider)
+    const native =
+      ts && isNativeMode(ts.mode) && (kind === 'anthropic' || kind === 'openrouter')
+        ? nativeTurnFrom(acc.blocks, { providerId: provider.id, kind, model: reqSession.model })
+        : null
     const assistant: ApiMessage = {
       role: 'assistant',
       content: acc.content ? acc.content : calls.length ? null : '',
       ...(calls.length ? { tool_calls: calls } : {}),
-      ...(acc.reasoning.trim() ? { reasoning: acc.reasoning } : {})
+      ...(acc.reasoning.trim() ? { reasoning: acc.reasoning } : {}),
+      ...(native ? { native } : {})
     }
     const meta: MessageMeta = {
       model: acc.model ?? reqSession.model,
@@ -1016,8 +1170,31 @@ export class Runner {
       ...withReasoningMs()
     }
     if (acc.usage) meta.usage = acc.usage
+    if (ts && ts.mode !== 'off') {
+      meta.toolSearch = fallback
+        ? { mode: 'local', fallbackFrom: fallback.from, reason: fallback.reason }
+        : { mode: ts.mode, ...(ts.reason ? { reason: ts.reason } : {}) }
+    }
+    if (ts) this.toolModes.set(session.id, ts.mode)
     Object.assign(meta, this.voiceReplyMeta(chat, session, acc.content))
-    this.append(session.id, assistant, meta)
+    const saved = this.append(session.id, assistant, meta)
+    // Messages API do OpenRouter sem `usage.cost` no stream: o custo vem do GET /generation (grátis)
+    if (
+      req.api === 'messages' &&
+      kind === 'openrouter' &&
+      acc.generationId &&
+      meta.usage &&
+      meta.usage.cost == null
+    )
+      void this.fillGenerationCost(provider, saved.id, acc.generationId)
+
+    // busca do servidor pausada (`pause_turn`): pede de novo, sem mensagem nova do usuário — o
+    // provedor retoma do `server_tool_use` no fim do turno (máx. MAX_PAUSE_TURNS seguidos)
+    if (acc.finishReason === 'pause_turn' && !calls.length) {
+      st.pauseTurns = (st.pauseTurns ?? 0) + 1
+      if (st.pauseTurns <= MAX_PAUSE_TURNS) return { kind: 'continue' }
+    }
+    st.pauseTurns = 0
 
     if (calls.length) {
       /** `end_call` rodou: o turno termina aqui (sem nova chamada ao modelo — a chamada vai cair). */
@@ -1061,7 +1238,8 @@ export class Runner {
     const history = this.repo.path(session.id)
     const avail = availableTools(reqChat, session, history)
     if (!reqChat.config.nativeTools && avail.length && acc.content) {
-      // a `search_tool` (tools compactadas, 1.11.0) também vale no fallback do JSON sem as tags
+      // a `tool_search` (tools compactadas, 1.11.0; o modo texto é sempre a versão local) também
+      // vale no fallback do JSON sem as tags
       const known: string[] = [...avail]
       if (toolsPlan(reqChat, session, history).compacted.length) known.push(SEARCH_TOOL)
       const parsed = parseTextToolCalls(acc.content, known)
@@ -1249,11 +1427,14 @@ export class Runner {
     const voiceCall = voiceCallContextFor(chat, session)
     const gateChat = voiceCall ? applyVoiceCallChat(chat, voiceCall) : chat
     // tools compactadas (protocolo 1.11.0, @shared/compactTools — = desktop): o mesmo plano da
-    // request — a `search_tool` devolve as definições completas das enviadas (as do celular como o
+    // request — a `tool_search` devolve as definições completas das enviadas (as do celular como o
     // celular as manda); uma tool que foi compacta roda com os argumentos como vierem e, se falhar
-    // fora do esquema, o erro ganha a definição completa (sem o histórico: compacta ou não só depende da config; a
-    // search_tool o lê para listar exatamente as enviadas)
-    const plan = toolsPlan(gateChat, session)
+    // fora do esquema, o erro ganha a definição completa (sem o histórico: compacta ou não só
+    // depende da config; a tool_search o lê para listar exatamente as enviadas). Busca nativa
+    // (1.12.0): o modo da última request da sessão — nos nativos não há tool_search (uma chamada a
+    // ela vinda do histórico → "não está disponível") nem tools compactas.
+    const toolMode = this.toolModes.get(session.id) ?? 'local'
+    const plan = toolsPlan(gateChat, session, undefined, undefined, toolMode)
     if (name === SEARCH_TOOL && plan.compacted.length) {
       let sargs: Record<string, unknown>
       try {
@@ -1261,7 +1442,7 @@ export class Runner {
       } catch (e) {
         return done({ content: `Erro: ${errMsg(e)}`, status: 'error' })
       }
-      const sent = toolsPlan(gateChat, session, this.repo.path(session.id))
+      const sent = toolsPlan(gateChat, session, this.repo.path(session.id), undefined, toolMode)
       return done(runSearchTool(sargs, sent.full))
     }
     if (!availableTools(gateChat, session).includes(name))
@@ -1963,7 +2144,8 @@ export class Runner {
   editMessage(id: string, message: ApiMessage): StoredMessage {
     const cur = this.repo.get(id)
     if (!cur) throw new Error('Mensagem não encontrada.')
-    const m = this.repo.update(id, message)
+    // `native` (blocos do provedor, 1.12.0) que não bate mais com o texto editado sai (§4.3.8)
+    const m = this.repo.update(id, withoutStaleNative(message))
     this.emit({ type: 'message-updated', message: m })
     return m
   }
@@ -2028,9 +2210,10 @@ export class Runner {
             }
           : {}
       if (voice.voice && !spoken.trim()) delete voice.voice.spoken
+      // `native` (busca nativa, 1.12.0) que não bate mais com o texto ouvido sai (§4.3.8)
       const updated = this.repo.update(
         m.id,
-        { ...m.message, content: hasCalls && !spoken ? null : heard },
+        withoutStaleNative({ ...m.message, content: hasCalls && !spoken ? null : heard }),
         { ...m.meta, interrupted: true, ...voice }
       )
       this.emit({ type: 'message-updated', message: updated })
@@ -2349,6 +2532,9 @@ export class Runner {
       let acc = newAccumulator()
       let toolChoiceNone = false
       let emptyRetries = 0
+      /** Busca nativa recusada nesta compactação → as próximas tentativas vão na versão local. */
+      let toolMode: ToolSearchMode | undefined
+      let usedMode: ToolSearchMode = 'local'
       for (let i = 0; i < COMPACTION_MODES.length;) {
         let req: BuiltRequest
         try {
@@ -2358,12 +2544,18 @@ export class Runner {
             history,
             provider,
             prompt,
-            { mode: COMPACTION_MODES[i], window, toolChoiceNone },
+            {
+              mode: COMPACTION_MODES[i],
+              window,
+              toolChoiceNone,
+              ...(toolMode ? { toolMode } : {})
+            },
             env
           )
         } catch (e) {
           return { kind: 'error', error: errMsg(e) }
         }
+        usedMode = req.toolSearch?.mode ?? 'local'
         acc = newAccumulator()
         const cur = acc
         const tick = throttle(
@@ -2382,6 +2574,16 @@ export class Runner {
           tick.cancel()
           if (signal.aborted) return { kind: 'aborted' }
           const error = errMsg(e)
+          // busca nativa recusada (1.12.0): repete na versão local (sem lembrar — é a compactação)
+          if (
+            !toolMode &&
+            isNativeMode(usedMode) &&
+            e instanceof LlmHttpError &&
+            isNativeRejection(e.status, e.message)
+          ) {
+            toolMode = 'local'
+            continue
+          }
           if (isContextLengthError(error) && i < COMPACTION_MODES.length - 1) {
             i++
             continue
@@ -2415,7 +2617,15 @@ export class Runner {
       }
       if (signal.aborted) return { kind: 'aborted' }
       const summary = cleanSummary(acc.content)
-      const m = compactionMeta(chat, reqSession, history, summary, acc.usage?.completionTokens, env)
+      const m = compactionMeta(
+        chat,
+        reqSession,
+        history,
+        summary,
+        acc.usage?.completionTokens,
+        env,
+        usedMode
+      )
       const meta: MessageMeta = {
         synthetic: true,
         kind: 'compaction',

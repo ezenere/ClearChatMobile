@@ -91,7 +91,12 @@ export interface Harness {
 }
 
 export async function makeHarness(
-  opts: { kind?: 'openai' | 'anthropic'; location?: LocationService } = {}
+  opts: {
+    kind?: 'openai' | 'anthropic'
+    location?: LocationService
+    /** Espera do custo pelo /generation do OpenRouter (busca nativa, 1.12.0). */
+    generationWaits?: number[]
+  } = {}
 ): Promise<Harness> {
   const server = new FakeSync()
   const desk = await new DesktopWriter(server).init()
@@ -152,7 +157,8 @@ export async function makeHarness(
     remoteSend: (c, s, t, m) =>
       box.remoteSend ? box.remoteSend(c, s, t, m) : Promise.reject(new Error('sem host remoto')),
     interChatPollMs: 30,
-    location: opts.location
+    location: opts.location,
+    ...(opts.generationWaits ? { generationWaits: opts.generationWaits } : {})
   })
   stack.host.onConnection(true)
   stack.host.start()

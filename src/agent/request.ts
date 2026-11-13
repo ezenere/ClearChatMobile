@@ -10,13 +10,33 @@
 //   como no desktop — `setVoiceCallSource`);
 // - tools compactadas (protocolo 1.11.0, @shared/compactTools — = `toolsPlan` do desktop): o plano
 //   parte das definições COMPLETAS como o celular as mandaria (as de localização deste aparelho e a
-//   descrição do `browse_url` do celular inclusive); compactas + `search_tool` no fim + o prompt
-//   fixo no fim do system prompt, nos turnos normais, subagentes e chamada de voz.
+//   descrição do `browse_url` do celular inclusive); na versão local, compactas + `tool_search` no
+//   fim + o prompt fixo no fim do system prompt, nos turnos normais, subagentes e chamada de voz;
+// - busca nativa de tools (protocolo 1.12.0, @shared/toolSearch — = desktop): o modo de cada request
+//   (Anthropic nativa, Messages API do OpenRouter, versão local ou sem compactação) sai do mesmo
+//   resolvedor; nos nativos as mesmas tools vão completas e adiadas, os blocos do provedor das
+//   respostas anteriores são reenviados (mesmo canal e ainda batendo com o texto) com as referências
+//   filtradas às tools que ESTE aparelho manda (um chat do computador hospedado aqui, sem as tools
+//   dele, continua válido) e uma adiada já usada sem a descoberta junto vai carregada.
 // É o módulo que o shim `src/vendor/desktop/agent/request.ts` reexporta (BuiltRequest, maskRequest,
 // modelInfoFor para llm.ts / smartApprove.ts vendorados).
 import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
 import { activeHistory, isDisplayOnly } from '@shared/context'
 import { planTools, withCompactPrompt, type ToolsPlan } from '@shared/compactTools'
+import {
+  TOOL_SEARCH_MODE_LABEL,
+  forceLoadedTools,
+  isNativeMode,
+  nativeToolsArray,
+  prepareNativeReplay,
+  resolveToolSearchMode,
+  sentMediaOf,
+  wireToolName,
+  type ToolSearchCaps,
+  type ToolSearchFailure,
+  type ToolSearchModeResult,
+  type WireApi
+} from '@shared/toolSearch'
 import { defaultToolsPrompt } from '@shared/defaults'
 import { paramSupport, type ParamSupport } from '@shared/modelParams'
 import { providerKind, type ProviderKind } from '@shared/providerKinds'
@@ -40,10 +60,15 @@ import type {
   Session,
   StoredMessage,
   ToolCall,
-  ToolName
+  ToolName,
+  ToolSearchMode
 } from '@shared/types'
 import { adapterFor, buildHeaders, chatCompletionsUrl } from '@vendor/desktop/agent/adapters'
-import { buildAnthropicBody, dropAudioParts } from '@vendor/desktop/agent/adapters/anthropic'
+import {
+  buildAnthropicBody,
+  dropAudioParts,
+  messagesUrl
+} from '@vendor/desktop/agent/adapters/anthropic'
 import { expandAttachments, hoistToolMedia, type AttachmentReader } from './attachments'
 import { LOCATION_TOOLS } from '@/location/service'
 import { cachedModelInfo } from './providers'
@@ -53,7 +78,28 @@ export interface BuiltRequest {
   headers: Record<string, string>
   body: Record<string, unknown>
   kind?: ProviderKind
+  /**
+   * Formato da request: 'messages' = Messages API (Anthropic nativa, ou o OpenRouter na busca
+   * nativa de tools — o stream é o SSE nativo); 'chat' = Chat Completions. Ausente = pelo `kind`.
+   */
+  api?: WireApi
   notes?: string[]
+  /** Busca de ferramentas desta request (protocolo 1.12.0 — @shared/toolSearch). */
+  toolSearch?: RequestToolSearch
+}
+
+/** Como as tools foram nesta request (modo, motivo, adiadas/carregadas, reenvio de blocos). */
+export interface RequestToolSearch {
+  mode: ToolSearchMode
+  reason?: string
+  failure?: ToolSearchFailure
+  /** Adiadas (`defer_loading`). */
+  deferred: string[]
+  /** Fora de `toolsFull`, mas carregadas por já terem sido usadas sem a busca no histórico enviado. */
+  forceLoaded: string[]
+  /** Respostas reenviadas com os blocos do provedor / que foram pela conversão normal. */
+  replayed: number
+  skipped: number
 }
 
 export { buildHeaders, chatCompletionsUrl }
@@ -100,6 +146,33 @@ export function setModelInfoSource(
 }
 export function modelInfoFor(providerId: string, model: string): ModelInfo | undefined {
   return modelInfoSource(providerId, model)
+}
+
+/** Item do /models com fallback para o id sem `:variante` (OpenRouter: `x/y:free` → `x/y`). */
+export function modelInfoLoose(providerId: string, model: string): ModelInfo | undefined {
+  const info = modelInfoFor(providerId, model)
+  if (info || !model.includes(':')) return info
+  return modelInfoFor(providerId, model.replace(/:[^/:]*$/, ''))
+}
+
+// ---------------- busca nativa de tools (protocolo 1.12.0 — @shared/toolSearch) ----------------
+
+/**
+ * Falhas lembradas da busca nativa (`toolSearchCaps`, local DESTE aparelho — §4.4, nunca
+ * sincronizado). O host registra (src/agent/toolSearchCaps.ts); sem registro = nenhuma.
+ */
+let capsSource: () => ToolSearchCaps = () => ({})
+export function setToolSearchCapsSource(fn: () => ToolSearchCaps): void {
+  capsSource = fn
+}
+
+/**
+ * Hosts extras tratados como o host oficial (só testes: provedor FALSO local fazendo papel da
+ * Anthropic/OpenRouter). Sem registro = nenhum.
+ */
+let nativeTestHosts: string[] = []
+export function setNativeTestHosts(hosts: string[]): void {
+  nativeTestHosts = hosts.map((h) => h.toLowerCase())
 }
 
 export function filterParams(
@@ -342,32 +415,67 @@ function toolsReachModel(cfg: ChatConfig): boolean {
 /**
  * Tools da request com a compactação (protocolo 1.11.0 — @shared/compactTools; = desktop): as
  * disponíveis da sessão, completas como o celular as manda (`toolDefinitions`: localização deste
- * aparelho, `browse_url` do celular) → compactas as que não estão em `toolsFull` (com a compactação
- * ligada), `search_tool` no fim e o prompt fixo, se alguma foi compacta. Vale para os turnos
- * normais, subagentes e a chamada de voz (`end_call` sempre completa). Sem tools chegando ao modelo
- * (sem tools nativas e sem o texto gerado) → nada é compactado. Usado na request, na execução
- * (`search_tool`, erro de argumentos) e na estimativa da compactação do histórico.
+ * aparelho, `browse_url` do celular) → na versão local, compactas as que não estão em `toolsFull`
+ * (com a compactação ligada), `tool_search` no fim e o prompt fixo, se alguma foi compacta; nos
+ * modos de busca nativa (1.12.0), as mesmas vão completas e ADIADAS. Vale para os turnos normais,
+ * subagentes e a chamada de voz (`end_call` sempre completa). Sem tools chegando ao modelo (sem
+ * tools nativas e sem o texto gerado) → nada é compactado. Usado na request, na execução
+ * (`tool_search`, erro de argumentos), na estimativa da compactação do histórico e nas telas.
+ * `mode` padrão 'local' (o de 1.11.0) — quem monta a request passa o modo resolvido.
  */
 export function toolsPlan(
   chat: Chat,
   session: SessionRef,
   history?: StoredMessage[],
-  providerNames?: string[]
+  providerNames?: string[],
+  mode: ToolSearchMode = 'local'
 ): ToolsPlan {
   const full = toolDefinitions(availableTools(chat, session, history), providerNames)
-  if (!toolsReachModel(chat.config)) return { definitions: full, full, compacted: [], prompt: null }
-  return planTools(full, chat.config)
+  if (!toolsReachModel(chat.config)) return planTools(full, chat.config, 'off')
+  return planTools(full, chat.config, mode)
+}
+
+/** Mensagens que vão na request (fronteira em diante, sem as só de exibição). */
+const sentMessages = (history: StoredMessage[]): StoredMessage[] =>
+  activeHistory(history).filter((m) => !isDisplayOnly(m.meta))
+
+/**
+ * Modo de envio das tools para esta sessão/provedor/modelo (@shared/toolSearch →
+ * resolveToolSearchMode; = desktop): o mesmo na request, na execução e nas telas de tools. A
+ * compactação compara com as tools que ESTE aparelho manda; as falhas lembradas são as daqui.
+ */
+export function resolveToolMode(
+  chat: Chat,
+  session: SessionRef & { model: string },
+  history: StoredMessage[] | undefined,
+  provider: Pick<Provider, 'id' | 'baseUrl' | 'kind'>
+): ToolSearchModeResult {
+  const local = toolsPlan(chat, session, history, undefined, 'local')
+  return resolveToolSearchMode({
+    kind: providerKind(provider),
+    baseUrl: provider.baseUrl,
+    providerId: provider.id,
+    model: session.model,
+    info: modelInfoLoose(provider.id, session.model),
+    cfg: chat.config,
+    wouldCompact: local.compacted.length > 0,
+    sent: history ? sentMediaOf(sentMessages(history).map((m) => m.message)) : null,
+    caps: capsSource(),
+    extraHosts: nativeTestHosts
+  })
 }
 
 /**
  * System prompt → <environment> → memória (índice + help, só a principal) → texto das tools (o
- * gerado segue a compactação) → prompt fixo das tools compactadas (só com alguma compacta).
+ * gerado segue a compactação) → prompt fixo das tools compactadas (só na versão local com alguma
+ * compacta; nos modos nativos, nenhum texto do app).
  */
 export function systemContent(
   chat: Chat,
   session: Pick<Session, 'depth'> & { id?: string },
   env: EnvInfo = envSource(),
-  history?: StoredMessage[]
+  history?: StoredMessage[],
+  mode: ToolSearchMode = 'local'
 ): string {
   const cfg = chat.config
   let s = session.depth === 0 ? (cfg.systemPrompt ?? '') : (cfg.subagentSystemPrompt ?? '')
@@ -381,7 +489,7 @@ export function systemContent(
     add(memory.index ?? '')
     add(memory.help ?? '')
   }
-  const plan = toolsPlan(chat, session, history)
+  const plan = toolsPlan(chat, session, history, undefined, mode)
   if (cfg.toolsInPrompt) {
     add(
       cfg.toolsPromptText ??
@@ -405,8 +513,17 @@ export function parseExtraBody(extra: string | undefined): Record<string, unknow
   return v as Record<string, unknown>
 }
 
-/** Igual ao desktop: tool órfã fora, tool_call sem resposta ganha placeholder, reasoning só no OpenRouter. */
-export function sanitizeHistory(messages: ApiMessage[], keepReasoning: boolean): ApiMessage[] {
+/**
+ * Igual ao desktop: tool órfã fora, tool_call sem resposta ganha placeholder, reasoning só no
+ * OpenRouter; `native` (blocos do provedor, 1.12.0) só com `keepNative` (modo de busca nativa — quem
+ * monta confere o reenvio em prepareNativeReplay), nunca para outro formato de API; chamadas antigas
+ * de `search_tool` vão como `tool_search` (o nome novo — só na cópia; o histórico salvo não muda).
+ */
+export function sanitizeHistory(
+  messages: ApiMessage[],
+  keepReasoning: boolean,
+  keepNative = false
+): ApiMessage[] {
   const out: ApiMessage[] = []
   let pending: string[] = []
   const flush = (): void => {
@@ -435,6 +552,21 @@ export function sanitizeHistory(messages: ApiMessage[], keepReasoning: boolean):
         const { tool_calls: _t, ...rest } = a
         void _t
         a = rest
+      }
+      if (!keepNative && 'native' in a) {
+        const { native: _n, ...rest } = a
+        void _n
+        a = rest
+      }
+      if (a.tool_calls?.some((t) => wireToolName(t.function.name) !== t.function.name)) {
+        a = {
+          ...a,
+          tool_calls: a.tool_calls.map((t) =>
+            wireToolName(t.function.name) === t.function.name
+              ? t
+              : { ...t, function: { ...t.function, name: wireToolName(t.function.name) } }
+          )
+        }
       }
       out.push(a)
       pending = (a.tool_calls ?? []).map((t) => t.id)
@@ -503,34 +635,86 @@ export interface BuildOptions {
   env?: EnvInfo
   /** base64 dos anexos citados (já no aparelho). */
   read?: AttachmentReader
+  /** Força o modo (queda para a versão local; repetição da compactação sem tools) — = desktop. */
+  modeOverride?: ToolSearchMode
+  /** false = nenhum `native` reenviado (repetição depois de uma recusa do reenvio). */
+  replay?: boolean
+  /** Ids de mensagens cujo `native` não é mais reenviado nesta sessão (recusado antes). */
+  noReplay?: ReadonlySet<string>
 }
 
 /**
  * Request EXATA da próxima chamada, no formato do adaptador do provedor (mesma lógica do desktop):
  * só o histórico desde a última compactação, sem mensagens só de exibição; params não aceitos pelo
- * modelo ficam de fora (notas em `notes`).
+ * modelo ficam de fora (notas em `notes`). Modo das tools (@shared/toolSearch): resolvido aqui (ou
+ * `modeOverride`); nos nativos, as fora de `toolsFull` vão com `defer_loading` + a busca do servidor
+ * por último, os blocos nativos das respostas anteriores são reenviados (mesmo canal e ainda batendo
+ * com o texto) e uma adiada usada no histórico sem a descoberta junto vai carregada; o OpenRouter vai
+ * para `{baseUrl}/messages` (Messages API, Bearer). `options` = as opções ou só o `env` (a
+ * compactação vendorada repassa `env` e, depois, as opções da busca nativa em `more`).
  */
 export function buildRequest(
   chat: Chat,
   session: Pick<Session, 'depth' | 'model'> & { id?: string },
   history: StoredMessage[],
   provider: Provider,
-  options: BuildOptions | EnvInfo = {}
+  options: BuildOptions | EnvInfo = {},
+  more: BuildOptions = {}
 ): BuiltRequest {
   // a compactação (vendorada) repassa só `env` — o leitor dos anexos vem dentro dele
-  const opts: BuildOptions = 'os' in options ? { env: options, read: options.read } : options
+  const opts: BuildOptions = {
+    ...('os' in options ? { env: options, read: options.read } : options),
+    ...more
+  }
   const cfg = chat.config
   const kind = providerKind(provider)
   const openRouter = kind === 'openrouter'
   const read = opts.read ?? opts.env?.read ?? noAttachments
 
-  const sys = systemContent(chat, session, opts.env ?? envSource(), history)
-  const hist = sanitizeHistory(
-    activeHistory(history)
-      .filter((m) => !isDisplayOnly(m.meta))
-      .map((m) => m.message),
-    openRouter
+  const resolved: ToolSearchModeResult = opts.modeOverride
+    ? { mode: opts.modeOverride, api: kind === 'anthropic' ? 'messages' : 'chat' }
+    : resolveToolMode(chat, session, history, provider)
+  // as definições como vão (1.11.0: compactas + tool_search; 1.12.0: completas e adiadas nos
+  // modos nativos). planTools rebaixa para 'off' quando não há o que compactar/adiar.
+  const plan = toolsPlan(chat, session, history, undefined, resolved.mode)
+  const mode = plan.mode
+  const native = isNativeMode(mode)
+
+  const sys = systemContent(chat, session, opts.env ?? envSource(), history, mode)
+  const sentStored = sentMessages(history).map((m) =>
+    opts.noReplay?.has(m.id) && m.message.role === 'assistant' && m.message.native
+      ? { ...m, message: { ...m.message, native: undefined } }
+      : m
   )
+  let hist = sanitizeHistory(
+    sentStored.map((m) => m.message),
+    openRouter,
+    native
+  )
+  const toolSearch: RequestToolSearch = {
+    mode,
+    ...(resolved.reason && mode === 'local' ? { reason: resolved.reason } : {}),
+    ...(resolved.failure && mode === 'local' ? { failure: resolved.failure } : {}),
+    deferred: [],
+    forceLoaded: [],
+    replayed: 0,
+    skipped: 0
+  }
+  if (native) {
+    // reenvio dos blocos nativos (mesmo provedor/API/modelo, ainda batendo com o texto; referências
+    // só às tools que ESTE aparelho manda) e as adiadas já usadas sem a descoberta → carregadas
+    const names = new Set(plan.full.map((d) => d.function.name))
+    const r = prepareNativeReplay(
+      hist,
+      opts.replay === false ? null : { mode, providerId: provider.id, model: session.model },
+      names
+    )
+    hist = r.messages
+    toolSearch.replayed = r.replayed
+    toolSearch.skipped = r.skipped
+    toolSearch.forceLoaded = forceLoadedTools(hist, plan.deferred, r.discovered)
+    toolSearch.deferred = plan.deferred.filter((n) => !toolSearch.forceLoaded.includes(n))
+  }
   const messages: ApiMessage[] = []
   if (sys) messages.push({ role: 'system', content: sys })
   messages.push(...hist)
@@ -540,12 +724,43 @@ export function buildRequest(
     cfg.appSignatureCustom
   )
   const adapter = adapterFor(kind)
-  // compactação (1.11.0): as definições como vão (compactas + search_tool, ou completas)
-  const tools = toolsPlan(chat, session, history).definitions
+  const tools = plan.definitions
   const params = cfg.params ?? {}
   const extra = parseExtraBody(params.extraBody)
   const support = filterParams(params, kind, provider.id, session.model, extra)
-  const notes = support.notes.length ? { notes: support.notes } : {}
+  const notes = [...toolSearchNotes(toolSearch, plan.full.length), ...support.notes]
+  const extras = { ...(notes.length ? { notes } : {}), toolSearch }
+
+  if (native) {
+    // Messages API: Anthropic nativa ou o /messages do OpenRouter (Bearer, assinatura de app)
+    const sent = expandAttachments(dropAudioParts(messages), read)
+    const toolsArray = cfg.nativeTools
+      ? nativeToolsArray(plan.full, {
+          deferred: new Set(toolSearch.deferred),
+          entry: plan.searchEntry,
+          cache: cfg.cacheEnabled
+        })
+      : undefined
+    return {
+      url: openRouter ? messagesUrl(provider.baseUrl) : adapter.chatUrl(provider.baseUrl),
+      headers: openRouter
+        ? buildHeaders(provider, signature)
+        : adapter.headers(provider, signature),
+      body: buildAnthropicBody({
+        model: session.model,
+        messages: sent,
+        toolsArray,
+        params: support.send,
+        cacheEnabled: cfg.cacheEnabled,
+        extra,
+        flavor: openRouter ? 'openrouter' : 'anthropic',
+        replayNative: true
+      }),
+      kind,
+      api: 'messages',
+      ...extras
+    }
+  }
 
   if (kind === 'anthropic') {
     const sent = expandAttachments(dropAudioParts(messages), read)
@@ -561,7 +776,8 @@ export function buildRequest(
         extra
       }),
       kind,
-      ...notes
+      api: 'messages',
+      ...extras
     }
   }
 
@@ -592,8 +808,30 @@ export function buildRequest(
     headers: adapter.headers(provider, signature),
     body,
     kind,
-    ...notes
+    api: 'chat',
+    ...extras
   }
+}
+
+/** Notas da request sobre a busca de ferramentas (só quando há o que dizer) — = desktop. */
+function toolSearchNotes(t: RequestToolSearch, total: number): string[] {
+  const out: string[] = []
+  if (isNativeMode(t.mode)) {
+    const loaded = total - t.deferred.length
+    out.push(
+      `Busca de ferramentas: ${TOOL_SEARCH_MODE_LABEL[t.mode]} — ${loaded} carregada${loaded === 1 ? '' : 's'}, ${t.deferred.length} adiada${t.deferred.length === 1 ? '' : 's'} (defer_loading).`
+    )
+    if (t.replayed || t.skipped)
+      out.push(
+        `${t.replayed} resposta${t.replayed === 1 ? '' : 's'} reenviada${t.replayed === 1 ? '' : 's'} com os blocos nativos do provedor${t.skipped ? `; ${t.skipped} pela conversão normal (outro provedor/modelo, editada ou reenvio recusado)` : ''}.`
+      )
+    if (t.forceLoaded.length)
+      out.push(
+        `Carregadas por já terem sido usadas sem a busca no histórico enviado: ${t.forceLoaded.join(', ')}.`
+      )
+  } else if (t.mode === 'local' && t.reason)
+    out.push(`Busca de ferramentas: ${TOOL_SEARCH_MODE_LABEL.local} — ${t.reason}.`)
+  return out
 }
 
 /** `sk-or-v1-abc…a3b9` → `sk-or-…a3b9`. */

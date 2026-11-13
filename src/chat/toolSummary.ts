@@ -134,7 +134,8 @@ export function toolSummary(name: string, args: Record<string, unknown> | null):
     // tools compactadas e datetime (protocolo 1.11.0)
     case 'datetime':
       return pick('format')
-    case 'search_tool':
+    case 'tool_search':
+    case 'search_tool': // nome até 1.11.0 (chamadas antigas no histórico)
       return Array.isArray(args.names)
         ? args.names.filter((n) => typeof n === 'string').join(', ')
         : pick('names')
@@ -194,6 +195,7 @@ const ICONS: Record<string, IconName> = {
   get_location: 'location-outline',
   nearby_places: 'map-outline',
   datetime: 'calendar-outline',
+  tool_search: 'book-outline',
   search_tool: 'book-outline'
 }
 

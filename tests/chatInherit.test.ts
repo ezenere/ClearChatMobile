@@ -129,8 +129,8 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     // só as tools que o celular executa vão ao modelo (as do computador ficam de fora, §4.3.6)
     const sent = (r: { body: Record<string, unknown> }) =>
       ((r.body.tools as { function: { name: string } }[]) ?? []).map((t) => t.function.name)
-    // (compactadas por padrão, 1.11.0: a search_tool automática vai no fim)
-    expect(sent(req)).toEqual(['web_search', 'ask_user', 'search_tool'])
+    // (compactadas por padrão, 1.11.0: a tool_search automática — antes search_tool — vai no fim)
+    expect(sent(req)).toEqual(['web_search', 'ask_user', 'tool_search'])
     // seguir a persona conta para "N chats seguem"
     expect(followersByPreset(h.store).get('p1')).toBe(1)
 
@@ -143,8 +143,8 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     await h.stack.host.local(chat.id, 'send', { sessionId: session.id, text: 'de novo' })
     await until(() => !h.stack.runner.isRunning(session.id), 10_000, 'turno 2')
     const req2 = h.llm.requests.filter((r) => r.path.endsWith('/chat/completions')).pop()!
-    expect(sent(req2)).toEqual(['web_search', 'search_tool'])
-    // nenhuma definição delas (a descrição da search_tool só cita nomes como exemplo)
+    expect(sent(req2)).toEqual(['web_search', 'tool_search'])
+    // nenhuma definição delas (a descrição da tool_search só cita nomes como exemplo)
     expect(JSON.stringify(req2.body)).not.toMatch(/"name":"(read_file|shell)"/)
     expect(JSON.stringify(req2.body.messages)).not.toMatch(/read_file|"shell"/)
     // nada virou próprio por causa do aparelho

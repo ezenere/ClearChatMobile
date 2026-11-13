@@ -9,6 +9,7 @@ import { toolContentText } from '@shared/attachments'
 import { approxTokens } from '@shared/limits'
 import { toolLabel } from '@/agent/toolLabels'
 import type { AskUserRecord, ContentPart, Session, StoredMessage } from '@shared/types'
+import { TOOL_ALIASES } from '@shared/types'
 import { approvalOutcome, type ApprovalOutcome } from '@vendor/renderer/approvalOutcome'
 import type { ToolRun } from '@/remote/mirror'
 import type { IconName } from '@/ui/Button'
@@ -186,7 +187,8 @@ export const ToolCard = memo(function ToolCard({
   const [overriding, setOverriding] = useState(false)
   const [details, setDetails] = useState(false)
   const args = parseArgs(call.arguments)
-  const name = call.name
+  // nomes antigos (`search_tool` → `tool_search`, 1.12.0) com o rótulo/ícone do atual (= desktop)
+  const name = TOOL_ALIASES[call.name] === 'tool_search' ? 'tool_search' : call.name
   const label = toolLabel(name)
   const isDelegate = name === 'delegate_task'
   const resultText =

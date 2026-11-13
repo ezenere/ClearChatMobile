@@ -37,8 +37,10 @@ import {
   setLocationSource,
   setMemorySources,
   setProviderNamesSource,
-  setSiblingsSource
+  setSiblingsSource,
+  setToolSearchCapsSource
 } from '@/agent/request'
+import { ToolSearchCapsStore } from '@/agent/toolSearchCaps'
 import type { LocationService } from '@/location/service'
 import { Runner, type RunnerFiles } from '@/agent/runner'
 import { createMemorySystem, type MemorySystem } from '@/memory/system'
@@ -85,9 +87,12 @@ export interface HostStackDeps {
   location?: LocationService
   /**
    * Marcas locais do aparelho que sobrevivem ao logout (o `kv` da conta no app; ausente = a tabela
-   * `meta` do cache) — ex.: a limpeza única das tools por aparelho (§4.3.6).
+   * `meta` do cache) — ex.: a limpeza única das tools por aparelho (§4.3.6) e as falhas lembradas
+   * da busca nativa de tools (`toolSearchCaps`, §4.4 — local, nunca sincronizado).
    */
   flags?: { get(key: string): string | null; set(key: string, value: string | null): void }
+  /** Testes: espera do custo pelo /generation do OpenRouter. */
+  generationWaits?: number[]
 }
 
 /** Registro `provider` (§4.3.1) → Provider (a chave fica só em memória/no cache privado). */
@@ -143,6 +148,8 @@ export interface HostStack {
    * — os frozen sobem antes do tombstone (a outbox LWW espera por eles). Devolve os ids.
    */
   freezePresetChats: (presetId: string) => string[]
+  /** Falhas lembradas da busca nativa de tools neste aparelho (1.12.0, §4.4). */
+  toolSearchCaps: ToolSearchCapsStore
 }
 
 export function createHostStack(d: HostStackDeps): HostStack {
@@ -153,6 +160,14 @@ export function createHostStack(d: HostStackDeps): HostStack {
       .sort((a, b) => a.createdAt - b.createdAt)
   const chatProviders = () => providers().filter(isChatProvider)
   setProviderNamesSource(() => chatProviders().map((p) => p.name))
+  const flags = d.flags ?? {
+    get: (k: string) => d.store.getMeta(k),
+    set: (k: string, v: string | null) => d.store.setMeta(k, v)
+  }
+  // busca nativa de tools (1.12.0): falhas lembradas deste aparelho — a request, a execução e as
+  // telas de tools leem a mesma fonte
+  const toolSearchCaps = new ToolSearchCapsStore(flags)
+  setToolSearchCapsSource(toolSearchCaps.get)
   let host: HostService | null = null
   const ensureBlobs = async (list: string[]): Promise<void> => {
     const keys = d.keys()
@@ -267,7 +282,9 @@ export function createHostStack(d: HostStackDeps): HostStack {
       })
     },
     interChat: bridge,
-    location
+    location,
+    toolSearchCaps,
+    ...(d.generationWaits ? { generationWaits: d.generationWaits } : {})
   })
   const addListEntries = async (
     entries: { item: ApprovalListItem; list: 'allow' | 'deny'; entry: string }[]
@@ -352,10 +369,6 @@ export function createHostStack(d: HostStackDeps): HostStack {
       return []
     }
   }
-  const flags = d.flags ?? {
-    get: (k: string) => d.store.getMeta(k),
-    set: (k: string, v: string | null) => d.store.setMeta(k, v)
-  }
   const cleanupDeviceOverrides = (scope: 'local' | 'account'): string[] => {
     const key = `deviceToolsCleanup.${scope}`
     if (flags.get(key)) return []
@@ -422,6 +435,7 @@ export function createHostStack(d: HostStackDeps): HostStack {
     saveOnline,
     migrateInheritance,
     cleanupDeviceOverrides,
-    freezePresetChats
+    freezePresetChats,
+    toolSearchCaps
   }
 }

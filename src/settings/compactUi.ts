@@ -11,8 +11,8 @@ export type CompactCfg = Pick<ChatConfig, 'toolsCompact' | 'toolsFull'> & {
 
 /** Linha de estado da compactação sobre as tools ligadas que o celular manda. */
 export function compactStatusText(cfg: CompactCfg, sent: readonly string[]): string {
-  if (!compactToolsOn(cfg)) return 'Desligado: todas vão completas, sem search_tool nem instrução.'
+  if (!compactToolsOn(cfg)) return 'Desligado: todas vão completas, sem tool_search nem instrução.'
   const n = sent.filter((t) => sendsCompact(t, cfg)).length
-  if (!n) return 'Todas as ligadas vão completas (sem search_tool nem instrução).'
-  return `${n === 1 ? '1 das ligadas vai compacta' : `${n} das ligadas vão compactas`} (+ search_tool e uma instrução curta no fim do system prompt).`
+  if (!n) return 'Todas as ligadas vão completas (sem tool_search nem instrução).'
+  return `${n === 1 ? '1 das ligadas vai compacta' : `${n} das ligadas vão compactas`} (+ tool_search e uma instrução curta no fim do system prompt).`
 }

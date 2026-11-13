@@ -100,7 +100,10 @@ const GROUPS = {
       // 1.11.0: tools compactadas (plano da request, search_tool, erro de argumentos com a definição
       // completa, textos do app mostrados na UI) e a tool datetime (strftime no fuso do aparelho)
       'compactTools.ts',
-      'datetime.ts'
+      'datetime.ts',
+      // 1.12.0: busca nativa de ferramentas (modo por request, array tools da Messages API,
+      // `native` gravação/reenvio/filtro, carregadas à força, toolSearchCaps, textos da UI)
+      'toolSearch.ts'
     ]
   },
   desktop: {

@@ -1,7 +1,8 @@
 // Tools compactadas e `datetime` no celular (protocolo 1.11.0, SYNC_PROTOCOL.md §4.3.6 — "Tools
 // compactadas e `datetime`"): o plano da request sobre as tools que o CELULAR manda (as de
-// localização deste aparelho e o `browse_url` do celular inclusive), a `search_tool` devolvendo
-// exatamente as definições sem compactação, o erro de argumentos com a definição completa, o
+// localização deste aparelho e o `browse_url` do celular inclusive) na VERSÃO LOCAL (provedor
+// genérico; a busca nativa de 1.12.0 em toolSearch.test.ts), a `tool_search` (antes `search_tool`)
+// devolvendo exatamente as definições sem compactação, o erro de argumentos com a definição completa, o
 // `datetime` (nomes em pt-BR, fuso America/Sao_Paulo), o turno de voz com `end_call` sempre completa
 // e as unidades da herança (`toolsCompact`, `toolsFull.<tool>`). Runner contra o provedor falso.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -71,10 +72,11 @@ import { makeHarness, until, type Harness } from './hostHarness'
 
 const UA = 'ClearChat/0.0.0-test (+https://clear.ezenere.com)'
 
+/** OpenAI-compatible genérico: a VERSÃO LOCAL (a busca nativa de 1.12.0 em toolSearch.test.ts). */
 const provider: Provider = {
   id: 'p',
   name: 'P',
-  baseUrl: 'https://openrouter.ai/api/v1',
+  baseUrl: 'https://llm.example.com/v1',
   apiKey: 'k',
   headers: {},
   createdAt: 0
@@ -146,7 +148,9 @@ describe('plano das tools do celular (request)', () => {
     expect(DEFAULT_CHAT_CONFIG('').toolsCompact).toBe(true)
     expect(DEFAULT_CHAT_CONFIG('').toolsFull).toEqual([])
     expect(TOOL_LABELS.datetime).toBe('Data e hora')
-    // a search_tool não é escolhível
+    // a tool_search (e o nome antigo search_tool) não é escolhível
+    expect(APP_TOOL_NAMES).not.toContain('tool_search')
+    expect(COMPACTABLE_TOOL_NAMES).not.toContain('tool_search')
     expect(APP_TOOL_NAMES).not.toContain('search_tool')
     expect(COMPACTABLE_TOOL_NAMES).not.toContain('search_tool')
     expect(COMPACTABLE_TOOL_NAMES).not.toContain('end_call')
@@ -159,11 +163,11 @@ describe('plano das tools do celular (request)', () => {
     }
   })
 
-  it('padrão (compactação ligada): compactas com esquema vazio, search_tool completa no fim e o prompt fixo no fim do system', () => {
+  it('padrão (compactação ligada): compactas com esquema vazio, tool_search completa no fim e o prompt fixo no fim do system', () => {
     const c = chat({ ...ALL, systemPrompt: 'SYS' })
     const req = buildRequest(c, { depth: 0, model: 'm' }, [], provider)
     const tools = req.body.tools as Def[]
-    expect(namesOf(tools)).toEqual([...PHONE_SENT, 'search_tool'])
+    expect(namesOf(tools)).toEqual([...PHONE_SENT, 'tool_search'])
     for (const t of tools.slice(0, -1)) {
       expect(t.function.parameters).toEqual({ type: 'object', properties: {} })
       expect(t.function.description).toBe(TOOL_SHORT_DESCRIPTIONS[t.function.name])
@@ -184,7 +188,7 @@ describe('plano das tools do celular (request)', () => {
     expect(JSON.stringify(again.body)).toBe(JSON.stringify(req.body))
   })
 
-  it('toolsFull: essas vão completas (as do celular como o celular as manda); todas completas → sem search_tool nem prompt', () => {
+  it('toolsFull: essas vão completas (as do celular como o celular as manda); todas completas → sem tool_search nem prompt', () => {
     const c = chat({ ...ALL, toolsFull: ['browse_url', 'get_location'] as ToolName[] })
     const tools = buildRequest(c, { depth: 0, model: 'm' }, [], provider).body.tools as Def[]
     const browse = tools.find((t) => t.function.name === 'browse_url')!
@@ -196,7 +200,7 @@ describe('plano das tools do celular (request)', () => {
       type: 'object',
       properties: {}
     })
-    expect(namesOf(tools).at(-1)).toBe('search_tool')
+    expect(namesOf(tools).at(-1)).toBe('tool_search')
 
     const allFull = chat({
       enabledTools: ['web_search', 'datetime'],
@@ -207,7 +211,7 @@ describe('plano das tools do celular (request)', () => {
     expect(sysOf(r2.body)).not.toContain(COMPACT_TOOLS_PROMPT)
   })
 
-  it('compactação desligada: as definições completas de antes, sem search_tool nem prompt', () => {
+  it('compactação desligada: as definições completas de antes, sem tool_search nem prompt', () => {
     const off = chat({ ...ALL, toolsCompact: false })
     const req = buildRequest(off, { depth: 0, model: 'm' }, [], provider)
     expect(req.body.tools).toEqual(toolDefinitions(availableTools(off, { depth: 0 })))
@@ -216,7 +220,7 @@ describe('plano das tools do celular (request)', () => {
   })
 
   it('sem tools chegando ao modelo nada é compactado; o texto GERADO segue a compactação; o do usuário vai como está', () => {
-    // sem tools nativas e sem o texto: nada vai — nem search_tool nem o prompt
+    // sem tools nativas e sem o texto: nada vai — nem tool_search nem o prompt
     const none = chat({ enabledTools: ['web_search'], nativeTools: false, toolsInPrompt: false })
     const r0 = buildRequest(none, { depth: 0, model: 'm' }, [], provider)
     expect(r0.body.tools).toBeUndefined()
@@ -226,7 +230,7 @@ describe('plano das tools do celular (request)', () => {
     const empty = chat({ enabledTools: [] })
     expect(buildRequest(empty, { depth: 0, model: 'm' }, [], provider).body.tools).toBeUndefined()
     expect(systemContent(empty, { depth: 0 })).not.toContain(COMPACT_TOOLS_PROMPT)
-    // modo texto com o texto gerado: compactas com a descrição curta + a search_tool completa
+    // modo texto com o texto gerado: compactas com a descrição curta + a tool_search completa
     const text = chat({
       enabledTools: ['web_search', 'datetime'],
       nativeTools: false,
@@ -235,7 +239,7 @@ describe('plano das tools do celular (request)', () => {
     const sys = systemContent(text, { depth: 0 })
     expect(sys).toContain(`## web_search\n${TOOL_SHORT_DESCRIPTIONS.web_search}`)
     expect(sys).toContain('Parâmetros (JSON Schema): {"type":"object","properties":{}}')
-    expect(sys).toContain(`## search_tool\n${SEARCH_TOOL_DEFINITION.function.description}`)
+    expect(sys).toContain(`## tool_search\n${SEARCH_TOOL_DEFINITION.function.description}`)
     expect(sys.endsWith(COMPACT_TOOLS_PROMPT)).toBe(true)
     // texto do usuário sem tools nativas: vai como está, nada compactado
     const custom = chat({
@@ -256,7 +260,7 @@ describe('plano das tools do celular (request)', () => {
       'web_search',
       'delegate_task',
       ...MEMORY_TOOL_NAMES,
-      'search_tool'
+      'tool_search'
     ])
     const mem = (sub.body.tools as Def[]).find((t) => t.function.name === 'memory_write')!
     expect(mem.function.parameters).toEqual({ type: 'object', properties: {} })
@@ -267,17 +271,17 @@ describe('plano das tools do celular (request)', () => {
     expect(mw).toEqual(toolDefinitions(['memory_write'])[0])
   })
 
-  it('turno de voz: end_call sempre completa (depois das outras) e a search_tool depois dela', () => {
+  it('turno de voz: end_call sempre completa (depois das outras) e a tool_search depois dela', () => {
     const call = { endCall: true, tools: null, model: null } as unknown as ResolvedVoiceCall
     setVoiceCallSource((_c, s) => (s.id === 's1' ? call : null))
     const c = chat({ enabledTools: ['web_search', 'datetime'] })
     const req = buildRequest(c, { id: 's1', depth: 0, model: 'm' }, [], provider)
     const tools = req.body.tools as Def[]
-    expect(namesOf(tools)).toEqual(['web_search', 'datetime', 'end_call', 'search_tool'])
+    expect(namesOf(tools)).toEqual(['web_search', 'datetime', 'end_call', 'tool_search'])
     expect(tools[2]).toEqual(toolDefinitions(['end_call'])[0])
     expect(tools[0].function.parameters).toEqual({ type: 'object', properties: {} })
     expect(toolsPlan(c, { id: 's1', depth: 0 }).compacted).toEqual(['web_search', 'datetime'])
-    // só end_call (as tools da chamada desligadas): nada compacto → sem search_tool nem prompt
+    // só end_call (as tools da chamada desligadas): nada compacto → sem tool_search nem prompt
     const only = chat({ enabledTools: [] })
     const r2 = buildRequest(only, { id: 's1', depth: 0, model: 'm' }, [], provider)
     expect(namesOf(r2.body.tools)).toEqual(['end_call'])
@@ -285,11 +289,11 @@ describe('plano das tools do celular (request)', () => {
   })
 })
 
-describe('search_tool e argumentos inválidos (puro)', () => {
+describe('tool_search e argumentos inválidos (puro)', () => {
   beforeEach(() => setLocationSource(locationService()))
   afterEach(() => setLocationSource(null))
 
-  it('search_tool devolve exatamente as definições sem compactação (localização e browse_url do celular)', () => {
+  it('tool_search devolve exatamente as definições sem compactação (localização e browse_url do celular)', () => {
     const c = chat(ALL)
     const plan = toolsPlan(c, { depth: 0 })
     const off = buildRequest(
@@ -527,7 +531,7 @@ describe('Novo chat e linha de estado', () => {
 
   it('linha de estado da compactação', () => {
     expect(compactStatusText({}, ['web_search', 'datetime'])).toBe(
-      '2 das ligadas vão compactas (+ search_tool e uma instrução curta no fim do system prompt).'
+      '2 das ligadas vão compactas (+ tool_search e uma instrução curta no fim do system prompt).'
     )
     expect(compactStatusText({ toolsFull: ['web_search'] }, ['web_search', 'datetime'])).toMatch(
       /^1 das ligadas vai compacta/
@@ -540,19 +544,23 @@ describe('Novo chat e linha de estado', () => {
 })
 
 describe('cards e frases', () => {
-  it('ícone e resumo de datetime/search_tool; sem frase de ferramenta na chamada', () => {
+  it('ícone e resumo de datetime/tool_search; sem frase de ferramenta na chamada', () => {
     expect(toolIcon('datetime')).toBe('calendar-outline')
-    expect(toolIcon('search_tool')).toBe('book-outline')
+    expect(toolIcon('tool_search')).toBe('book-outline')
     expect(toolSummary('datetime', { format: '%H:%M' })).toBe('%H:%M')
-    expect(toolSummary('search_tool', { names: ['browse_url', 'get_location'] })).toBe(
+    expect(toolSummary('tool_search', { names: ['browse_url', 'get_location'] })).toBe(
       'browse_url, get_location'
     )
+    // nome até 1.11.0 (chamadas antigas no histórico): mesmo ícone e resumo
+    expect(toolIcon('search_tool')).toBe('book-outline')
+    expect(toolSummary('search_tool', { names: ['web_search'] })).toBe('web_search')
     expect(toolPhraseCategory('datetime')).toBeNull()
+    expect(toolPhraseCategory('tool_search')).toBeNull()
     expect(toolPhraseCategory('search_tool')).toBeNull()
   })
 })
 
-describe('runner (provedor falso): search_tool, argumentos inválidos e datetime', () => {
+describe('runner (provedor falso): tool_search, argumentos inválidos e datetime', () => {
   let h: Harness
   afterEach(async () => {
     await h?.close()
@@ -583,7 +591,7 @@ describe('runner (provedor falso): search_tool, argumentos inválidos e datetime
       .filter((m) => m.message.role === 'tool')
       .pop()!
 
-  it('search_tool → as definições completas como iriam sem compactação (as do celular inclusive)', async () => {
+  it('tool_search → as definições completas como iriam sem compactação (as do celular inclusive)', async () => {
     const loc = locationService()
     h = await makeHarness({ location: loc })
     const { sid } = newChat()
@@ -592,14 +600,14 @@ describe('runner (provedor falso): search_tool, argumentos inválidos e datetime
     const t = lastTool(sid)
     expect(t.meta.toolStatus).toBe('ok')
     const req = h.llm.requests.find((r) => Array.isArray(r.body.tools))!
-    expect(namesOf(req.body.tools).at(-1)).toBe('search_tool')
+    expect(namesOf(req.body.tools).at(-1)).toBe('tool_search')
     // o mesmo chat sem compactação: as definições que iriam
     const { sid: sid2 } = newChat({ toolsCompact: false })
     await h.stack.runner.send(sid2, 'oi')
     await idle(sid2)
     const full = h.llm.requests.filter((r) => Array.isArray(r.body.tools)).pop()!
     const byName = new Map((full.body.tools as Def[]).map((d) => [d.function.name, d.function]))
-    expect(namesOf(full.body.tools)).not.toContain('search_tool')
+    expect(namesOf(full.body.tools)).not.toContain('tool_search')
     expect(JSON.parse(String(t.message.content))).toEqual(
       ['browse_url', 'nearby_places', 'get_location'].map((n) => byName.get(n))
     )
@@ -636,7 +644,7 @@ describe('runner (provedor falso): search_tool, argumentos inválidos e datetime
     expect(t2).not.toContain('foi enviada compactada')
   })
 
-  it('datetime roda sem aprovação, no fuso do aparelho; a search_tool sem compactação não existe', async () => {
+  it('datetime roda sem aprovação, no fuso do aparelho; a tool_search sem compactação não existe', async () => {
     h = await makeHarness()
     const { sid } = newChat({ toolsCompact: false })
     await h.stack.runner.send(sid, '/now %Y-%m-%d')
@@ -650,7 +658,7 @@ describe('runner (provedor falso): search_tool, argumentos inválidos e datetime
     await h.stack.runner.send(sid, '/lookup web_search')
     await idle(sid)
     expect(String(lastTool(sid).message.content)).toBe(
-      'Erro: a ferramenta "search_tool" não está disponível nesta sessão.'
+      'Erro: a ferramenta "tool_search" não está disponível nesta sessão.'
     )
   })
 })
