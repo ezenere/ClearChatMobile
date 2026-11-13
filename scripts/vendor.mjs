@@ -90,7 +90,10 @@ const GROUPS = {
       'voicePolicy.ts',
       // 1.7.0: textos dos avisos push (trecho sem Markdown, aprovação/pergunta/retry) — os avisos
       // locais dos chats executados no celular usam os mesmos do host do desktop
-      'push.ts'
+      'push.ts',
+      // 1.10.0: herança ao vivo da persona (config efetiva, edição/voltar a herdar, migração,
+      // congelamento, troca de persona, merge por unidade de `overrides`)
+      'chatInherit.ts'
     ]
   },
   desktop: {
@@ -152,6 +155,8 @@ const GROUPS = {
       // ícones esmaecidos, `withoutVoiceChoice` do Novo chat — protocolo 1.9.0)
       'voice/toolPhrases.ts',
       'voice/voiceChoice.ts',
+      // 1.10.0: rótulos das unidades da herança, texto do valor herdado e o ambiente da herança
+      'inherit.ts',
       'audio/silence.ts',
       'audio/pcm.ts'
     ]
