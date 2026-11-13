@@ -64,6 +64,8 @@ export const hostStack = createHostStack({
   ws: { request: (t, f, ms) => account.wsRequest(t, f, ms) },
   deviceId: () => account.getState().device?.id ?? null,
   deviceName: () => account.getState().device?.name ?? 'Celular',
+  // marcas do aparelho que sobrevivem ao logout (o cache é apagado nele): limpeza única (§4.3.6)
+  flags: kv,
   files: {
     ensure: async (f) => {
       await attachments.ensure(f)
@@ -105,7 +107,11 @@ export function startHost(): void {
   bindHost(account, host, hostStack.runner)
   // sem conta (§4.3.6): os chats antigos migram para a herança ao vivo já na inicialização (com
   // conta, depois de cada pull completo — o motor chama)
-  if (isLocalMode()) hostStack.migrateInheritance()
+  if (isLocalMode()) {
+    hostStack.migrateInheritance()
+    // limpeza única das tools marcadas por causa do aparelho (§4.3.6) — com conta, depois do pull
+    hostStack.cleanupDeviceOverrides('local')
+  }
   // dados sem conta unidos à conta (§12): o conteúdo gravado aqui sobe
   onAfterMerge(() => hostStack.writer.resume())
   AppState.addEventListener('change', (s) => {

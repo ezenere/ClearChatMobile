@@ -28,6 +28,7 @@ import {
   effectiveConfigOf,
   freezesOfPreset,
   inheritanceMigrations,
+  deviceOverrideCleanups,
   inheritEnvOf
 } from '@/data/inherit'
 import { historyStore } from '@/agent/historyStore'
@@ -82,6 +83,11 @@ export interface HostStackDeps {
   localOnly?: () => boolean
   /** get_location / nearby_places (src/location); ausente = sem as tools de localização. */
   location?: LocationService
+  /**
+   * Marcas locais do aparelho que sobrevivem ao logout (o `kv` da conta no app; ausente = a tabela
+   * `meta` do cache) — ex.: a limpeza única das tools por aparelho (§4.3.6).
+   */
+  flags?: { get(key: string): string | null; set(key: string, value: string | null): void }
 }
 
 /** Registro `provider` (§4.3.1) → Provider (a chave fica só em memória/no cache privado). */
@@ -126,6 +132,12 @@ export interface HostStack {
    * pull completo (o motor chama) e na inicialização sem conta. Devolve os ids migrados.
    */
   migrateInheritance: () => string[]
+  /**
+   * Limpeza única das tools marcadas por causa do aparelho (§4.3.6): uma vez por aparelho em cada
+   * escopo — `account` depois de um pull completo (o motor chama), `local` na inicialização sem conta.
+   * Devolve os ids alterados ([] se já feita).
+   */
+  cleanupDeviceOverrides: (scope: 'local' | 'account') => string[]
   /**
    * Persona saindo (apagada aqui ou tombstone recebido, §7.7): congela os chats locais dela antes
    * — os frozen sobem antes do tombstone (a outbox LWW espera por eles). Devolve os ids.
@@ -340,6 +352,23 @@ export function createHostStack(d: HostStackDeps): HostStack {
       return []
     }
   }
+  const flags = d.flags ?? {
+    get: (k: string) => d.store.getMeta(k),
+    set: (k: string, v: string | null) => d.store.setMeta(k, v)
+  }
+  const cleanupDeviceOverrides = (scope: 'local' | 'account'): string[] => {
+    const key = `deviceToolsCleanup.${scope}`
+    if (flags.get(key)) return []
+    try {
+      const ids = writeRecords(deviceOverrideCleanups(d.store))
+      flags.set(key, String(Date.now()))
+      if (ids.length) d.log?.(`tools por aparelho: ${ids.length} chats limpos`)
+      return ids
+    } catch (e) {
+      d.log?.(`tools por aparelho: limpeza falhou (${(e as Error).message})`)
+      return []
+    }
+  }
   const freezePresetChats = (presetId: string): string[] => {
     const ids = writeRecords(freezesOfPreset(d.store, presetId))
     if (ids.length) d.log?.(`herança da persona: ${ids.length} chats congelados`)
@@ -348,7 +377,10 @@ export function createHostStack(d: HostStackDeps): HostStack {
   d.engine.setHooks({
     beforePresetGone: freezePresetChats,
     chatRebased: (chatId) => writer.schedule(chatId),
-    caughtUp: () => void migrateInheritance()
+    caughtUp: () => {
+      migrateInheritance()
+      cleanupDeviceOverrides('account')
+    }
   })
   const renameChatLocal = (chatId: string, title: string): void => {
     const t = title.trim().slice(0, 200)
@@ -389,6 +421,7 @@ export function createHostStack(d: HostStackDeps): HostStack {
     deleteChatLocal,
     saveOnline,
     migrateInheritance,
+    cleanupDeviceOverrides,
     freezePresetChats
   }
 }

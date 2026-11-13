@@ -8,6 +8,7 @@ import type { ChatConfig } from '../src/vendor/shared/types'
 import { openResult, sealCommand, type Envelope } from '../src/remote/crypto'
 import { REMOTE_REFUSAL } from '../src/host/host'
 import { localToolsTakeoverText, usesLocalTools } from '../src/host/policy'
+import { takeoverWarnsLocalTools } from '../src/vendor/shared/sync'
 import { makeHarness, until, type Harness } from './hostHarness'
 
 let h: Harness
@@ -74,6 +75,12 @@ describe('janela e revisões (§8.3–8.5)', () => {
     expect(usesLocalTools({ enabledTools: ['web_search'], skills: { enabled: true } })).toBe(true)
     expect(usesLocalTools({ voice: { tools: { enabledTools: ['read_file'] } } })).toBe(true)
     expect(usesLocalTools({ enabledTools: ['web_search', 'ask_user'] })).toBe(false)
+    // present_file também é "só no computador" (§8.9 desde 1.10.0); as do celular não contam
+    expect(usesLocalTools({ enabledTools: ['present_file'] })).toBe(true)
+    expect(usesLocalTools({ enabledTools: ['get_location', 'nearby_places'] })).toBe(false)
+    // o aviso forte ao assumir só num chat que já rodou num computador (hostCwd)
+    expect(takeoverWarnsLocalTools(true, { deviceId: 'pc', path: '/p' })).toBe(true)
+    expect(takeoverWarnsLocalTools(true, null)).toBe(false)
     const { chatId, sid } = newChat({
       enabledTools: ['shell', 'web_search', 'read_file', 'present_file'],
       skills: {

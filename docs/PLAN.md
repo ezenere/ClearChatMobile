@@ -666,6 +666,9 @@ forte com confirmação; as do computador aparecem esmaecidas e alternáveis (co
 persona, Novo chat, tools da chamada) e a contagem "N são ferramentas só do computador" saiu; a
 migração só marca própria a diferença numa tool do tipo de aparelho em que o chat rodou (`hostCwd`);
 "Voltar a herdar tudo" não torna mais o chat inexecutável aqui (sem nenhum caso especial).
+Ajustes do protocolo (desktop 34de0cd): aviso forte ao assumir só com `hostCwd`; `present_file` em
+`usesLocalTools`; limpeza única das marcas por causa do aparelho (depois do pull completo e, sem conta,
+na inicialização), com a marca de feito no `kv` do aparelho.
 
 ## Ideias
 

@@ -66,6 +66,10 @@ export function HostStateBanner({
   chatId: string
   mode: HostMode
   state: ChatState | null
+  /**
+   * O chat usa ferramentas locais E já rodou num computador (`hostCwd`, §8.9) — os textos dizem que
+   * aqui ele roda sem elas.
+   */
   localTools: boolean
   /** "Executar neste dispositivo" (§8.7–8.8; com ferramentas locais, a tela avisa antes). */
   onTakeover?: () => void

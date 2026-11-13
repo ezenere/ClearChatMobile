@@ -6,7 +6,9 @@
 // persona apagada no celular congela os chats e o tombstone chega ao servidor DEPOIS deles. Tools de
 // um tipo de aparelho (§4.3.6): chat novo de uma persona sem tools sobe SEM nenhuma tool própria; na
 // migração, a diferença numa tool do computador só fica própria no chat que rodou num computador
-// (`hostCwd`) e a do celular só no que rodou no celular; "voltar a herdar tudo" não tem caso especial.
+// (`hostCwd`) e a do celular só no que rodou no celular; "voltar a herdar tudo" não tem caso especial;
+// a limpeza única (depois do pull completo) tira as marcas que builds de teste gravaram por causa do
+// aparelho e envia o chat.
 import { afterAll, describe, expect, it } from 'vitest'
 import type { InheritConfig } from '@shared/chatInherit'
 import { AccountService } from '../../src/account/service'
@@ -133,6 +135,25 @@ describe.skipIf(!enabled)('herança ao vivo da persona contra o servidor real', 
         mainSessionId: 's-cel',
         createdAt: 3,
         updatedAt: 3
+      }),
+      // build de teste de 1.10.0 no celular: as do computador desligadas e a localização como próprias
+      await item(desk, 'chat', 'c-ruido', 'c-ruido', {
+        sv: 1,
+        title: 'Ruído',
+        config: {
+          ...tudo,
+          presetId: 'p-tudo',
+          cacheEnabled: false,
+          enabledTools: [...phoneRuns, 'get_location', 'nearby_places'],
+          overrides: {
+            'enabledTools.shell': true,
+            'enabledTools.read_file': true,
+            'enabledTools.get_location': true
+          }
+        },
+        mainSessionId: 's-ruido',
+        createdAt: 2,
+        updatedAt: 2
       }),
       // desktop < 1.10.0 (rodou num computador — hostCwd): o shell desligado, sem as do celular
       await item(desk, 'chat', 'c-pc', 'c-pc', {
@@ -269,6 +290,19 @@ describe.skipIf(!enabled)('herança ao vivo da persona contra o servidor real', 
       expect.arrayContaining(['get_location', 'nearby_places', 'read_file'])
     )
     expect(stack.repo.chat('c-pc')!.config.enabledTools).not.toContain('shell')
+    // limpeza única: no chat que só rodou no celular, as do computador voltam a herdar
+    await waitFor(
+      async () =>
+        !cfgOf((await plainOf(desk, 'chat', 'c-ruido'))?.plain).overrides?.['enabledTools.shell'],
+      'chat com marcas por causa do aparelho limpo no servidor',
+      20_000
+    )
+    expect(cfgOf((await plainOf(desk, 'chat', 'c-ruido'))!.plain).overrides).toEqual({
+      'enabledTools.get_location': true
+    })
+    expect(stack.repo.chat('c-ruido')!.config.enabledTools).toEqual(
+      expect.arrayContaining(['shell', 'read_file', 'nearby_places'])
+    )
 
     // ---- 2. chat novo no celular: overrides só do que mudou no formulário ----
     const p = presetFromPlain('p-rev', store.getPlain('preset', 'p-rev')!)

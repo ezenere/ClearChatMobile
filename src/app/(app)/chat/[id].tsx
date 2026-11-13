@@ -42,6 +42,7 @@ import { remote, useRemoteNotices } from '@/remote/react'
 import { chatActions, host, hostStack, onHostNotice, useChatRuntime } from '@/host/react'
 import { HostError } from '@/host/host'
 import { localToolsTakeoverText } from '@/host/policy'
+import { takeoverWarnsLocalTools } from '@shared/sync'
 import type { DivergenceDetails } from '@/host/divergence'
 import { divergedOf, handoverOf } from '@/remote/types'
 import { normalizeMemoryConfig } from '@shared/memory'
@@ -174,6 +175,9 @@ export default function ChatScreen() {
   const busy = BUSY_STATUS.has(status)
   const sid = view?.session.id ?? ''
   const hostName = state?.host?.name ?? 'host'
+  // §8.9: avisos de ferramentas locais só num chat que já rodou num computador (registro com hostCwd)
+  const chatHostCwd = store.getPlain('chat', id)?.hostCwd
+  const localWarn = takeoverWarnsLocalTools(localTools, chatHostCwd)
 
   // ---------------- comandos ----------------
 
@@ -675,7 +679,7 @@ export default function ChatScreen() {
               chatId={id}
               mode={mode}
               state={state}
-              localTools={localTools}
+              localTools={localWarn}
               onTakeover={() => setTakeover(true)}
             />
           ) : null}
@@ -1094,13 +1098,10 @@ export default function ChatScreen() {
       <ConfirmDialog
         visible={takeover}
         title="Executar neste dispositivo?"
-        // §8.9: chat com ferramentas locais → aviso forte (elas ficam desligadas enquanto o
-        // celular for o host — §4.3.6) e confirmação explícita
-        warning={
-          localTools
-            ? localToolsTakeoverText(store.getPlain('chat', id)?.hostCwd, state?.host?.name)
-            : null
-        }
+        // §8.9: chat com ferramentas locais que já rodou num computador (hostCwd) → aviso forte
+        // (elas ficam desligadas enquanto o celular for o host — §4.3.6) e confirmação explícita;
+        // sem hostCwd elas nunca rodaram e a troca é livre
+        warning={localWarn ? localToolsTakeoverText(chatHostCwd, state?.host?.name) : null}
         message={
           state?.pinned
             ? `O host deste chat está fixado no ${hostName}. Executar aqui mesmo assim? O chat passa a rodar neste celular${remoteOn ? ` quando o ${hostName} terminar o turno atual` : ''}.`

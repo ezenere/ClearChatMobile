@@ -356,6 +356,68 @@ describe('migração: tools de um tipo de aparelho (§4.3.6)', () => {
   })
 })
 
+describe('limpeza única das tools marcadas por causa do aparelho (§4.3.6)', () => {
+  it('depois do pull completo, uma vez: tira as marcas de tools de um tipo de aparelho em que o chat nunca rodou e envia', async () => {
+    await preset('p0', 'Padrão', { providerId: h.providerId, model: 'fake/persona' })
+    // chats como os builds de teste de 1.10.0 gravavam: as do computador desligadas e a
+    // localização ligada como próprias por causa do aparelho
+    const noisyCfg = {
+      providerId: h.providerId,
+      model: 'fake/persona',
+      presetId: 'p0',
+      cacheEnabled: false,
+      enabledTools: ['web_search', 'ask_user', 'get_location', 'nearby_places'],
+      overrides: {
+        'enabledTools.shell': true,
+        'enabledTools.read_file': true,
+        'enabledTools.get_location': true,
+        model: true
+      }
+    }
+    const put = (id: string, extra: Record<string, unknown> = {}) =>
+      h.desk.put('chat', id, id, {
+        sv: 1,
+        title: id,
+        config: noisyCfg,
+        mainSessionId: `s-${id}`,
+        createdAt: 7,
+        updatedAt: 7,
+        ...extra
+      })
+    await put('c-cel') // sem hostCwd: só rodou no celular
+    await put('c-pc', { hostCwd: { deviceId: 'pc', path: '/home/ana/proj' } })
+    await h.engine.sync()
+    // celular: as do computador saem (voltam a herdar); a do celular fica (ele rodou aqui)
+    expect(ownOf('c-cel')).toEqual(['enabledTools.get_location', 'model'])
+    expect(h.stack.repo.chat('c-cel')!.config.enabledTools).toEqual(
+      expect.arrayContaining(['shell', 'read_file'])
+    )
+    // computador: a do celular sai; as do computador ficam (escolha de quem rodou lá)
+    expect(ownOf('c-pc')).toEqual(['enabledTools.read_file', 'enabledTools.shell', 'model'])
+    // sobe (sem mexer no updatedAt)
+    await flushChat('c-cel')
+    const sp = (await serverPlain('chat', 'c-cel'))!
+    expect(Object.keys((sp.config as InheritConfig).overrides ?? {}).sort()).toEqual([
+      'enabledTools.get_location',
+      'model'
+    ])
+    expect(sp.updatedAt).toBe(7)
+    // uma vez por aparelho: um chat marcado que chega depois fica como está
+    await put('c-depois')
+    await h.engine.sync()
+    expect(ownOf('c-depois')).toEqual([
+      'enabledTools.get_location',
+      'enabledTools.read_file',
+      'enabledTools.shell',
+      'model'
+    ])
+    expect(h.stack.cleanupDeviceOverrides('account')).toEqual([])
+    // o escopo sem conta (inicialização em "Usar sem conta") é outro: roda uma vez também
+    expect(h.stack.cleanupDeviceOverrides('local')).toEqual(['c-depois'])
+    expect(h.stack.cleanupDeviceOverrides('local')).toEqual([])
+  })
+})
+
 describe('persona apagada: congelar antes do tombstone (§7.7)', () => {
   it('apagada aqui: os chats congelam e sobem ANTES do tombstone da persona', async () => {
     await preset('p1', 'Revisora', P1())

@@ -9,6 +9,7 @@ import { APPROVAL_MODES_SETTING, migrateLegacyApprovals } from '@shared/approval
 import { normalizeAppSignatureId } from '@shared/appSignatures'
 import {
   applyChatConfigPatch,
+  cleanDeviceOverrides,
   effectiveChatConfig,
   freezeChat,
   hasOverrides,
@@ -201,6 +202,44 @@ export function inheritanceMigrations(
   for (const r of rows) {
     const rec = chatRecordFrom(store, r.config)
     const next = migrateChatOverrides(rec, presetConfigOf(store, rec.presetId), env, r.ranOn)
+    if (next) out.push({ chatId: r.id, config: next })
+  }
+  return out
+}
+
+/**
+ * Limpeza única (§4.3.6): de cada chat com `overrides`, as unidades `enabledTools.<t>` de tools de um
+ * tipo de aparelho em que o chat nunca rodou (o critério da migração: `hostCwd` = computador; sem =
+ * celular) saem — marcas gravadas por causa do aparelho pelos builds de teste de 1.10.0 (o Novo chat
+ * do celular desligava as do computador e ligava as dele como próprias). Devolve os registros novos
+ * (quem chama grava e envia, e garante o "uma vez por dispositivo").
+ */
+export function deviceOverrideCleanups(
+  store: LocalStore
+): { chatId: string; config: InheritConfig }[] {
+  const rows = store.sql.all<{ id: string; plain: string }>(
+    `SELECT id, plain FROM records WHERE type = 'chat' AND deleted = 0 AND state = 0
+         AND plain IS NOT NULL AND json_valid(plain)
+         AND json_type(plain, '$.config.overrides') = 'object'
+         AND plain LIKE '%enabledTools.%'`
+  )
+  if (!rows.length) return []
+  const env = inheritEnvOf(store)
+  const out: { chatId: string; config: InheritConfig }[] = []
+  for (const r of rows) {
+    let plain: Plain
+    try {
+      plain = JSON.parse(r.plain) as Plain
+    } catch {
+      continue
+    }
+    const rec = chatRecordFrom(store, plain.config)
+    const next = cleanDeviceOverrides(
+      rec,
+      presetConfigOf(store, rec.presetId),
+      env,
+      chatRanOnOf(plain)
+    )
     if (next) out.push({ chatId: r.id, config: next })
   }
   return out

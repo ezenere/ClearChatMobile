@@ -933,7 +933,15 @@ rótulos); aqui só a leitura do cache e a fiação:
   nem na request nem no texto das tools) e as do computador aparecem esmaecidas e alternáveis em "Só
   no computador" (`src/settings/ComputerTools.tsx` — configurações do chat, persona, Novo chat, tools
   da chamada), com a nota de que não vão ao modelo neste celular. Ligar/desligar usa `withTool`
-  (preserva o que o app não conhece). Assumir um chat assim mostra o aviso forte com confirmação.
+  (preserva o que o app não conhece). Assumir um chat com ferramentas locais **que já rodou num
+  computador** (registro com `hostCwd`, `takeoverWarnsLocalTools` — §8.9) mostra o aviso forte com
+  confirmação; sem `hostCwd` a troca é livre (quase todo chat tem as do computador na lista).
+  `usesLocalTools` (vendorado, sobre a config efetiva) conta `present_file` também.
+- **Limpeza única** (§4.3.6, `deviceOverrideCleanups` + `stack.cleanupDeviceOverrides`): uma vez por
+  aparelho em cada escopo — `account` no fim do pull completo (gancho `caughtUp`, depois da migração),
+  `local` na inicialização sem conta — tira de `overrides` as `enabledTools.<t>` de tools de um tipo de
+  aparelho em que o chat nunca rodou (marcas dos builds de teste de 1.10.0; mesmo critério da migração)
+  e envia os chats. A marca de feito fica no `kv` do aparelho (sobrevive ao logout, que apaga o cache).
 - **Persona apagada**: aqui (`SettingsService.deletePreset`) ou pelo tombstone/resync (gancho
   `beforePresetGone`, dentro da transação, antes de a persona sair do cache) → os chats dela congelam
   (`freezeChat`) e vão à outbox; a outbox LWW segura o tombstone da persona enquanto houver chat
