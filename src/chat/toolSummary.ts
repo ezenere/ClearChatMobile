@@ -131,6 +131,13 @@ export function toolSummary(name: string, args: Record<string, unknown> | null):
     }
     case 'get_location':
       return ''
+    // tools compactadas e datetime (protocolo 1.11.0)
+    case 'datetime':
+      return pick('format')
+    case 'search_tool':
+      return Array.isArray(args.names)
+        ? args.names.filter((n) => typeof n === 'string').join(', ')
+        : pick('names')
     case 'nearby_places':
       return join([
         pick('what'),
@@ -185,7 +192,9 @@ const ICONS: Record<string, IconName> = {
   skill_load: 'bulb-outline',
   skill_read: 'bulb-outline',
   get_location: 'location-outline',
-  nearby_places: 'map-outline'
+  nearby_places: 'map-outline',
+  datetime: 'calendar-outline',
+  search_tool: 'book-outline'
 }
 
 export const toolIcon = (name: string): IconName => ICONS[name] ?? 'construct-outline'

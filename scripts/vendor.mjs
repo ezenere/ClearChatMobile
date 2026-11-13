@@ -96,7 +96,11 @@ const GROUPS = {
       'chatInherit.ts',
       // 1.10.0: tools de um tipo de aparelho (só no computador / só no celular — nomes, rótulos
       // das do celular, padrão do app, `withTool` que preserva as desconhecidas, `chatRanOn`)
-      'deviceTools.ts'
+      'deviceTools.ts',
+      // 1.11.0: tools compactadas (plano da request, search_tool, erro de argumentos com a definição
+      // completa, textos do app mostrados na UI) e a tool datetime (strftime no fuso do aparelho)
+      'compactTools.ts',
+      'datetime.ts'
     ]
   },
   desktop: {

@@ -88,7 +88,10 @@ export function resolveNewChat(
   return cfg
 }
 
-/** Config final com as escolhas da tela (`tools` = a lista inteira, com as do computador). */
+/**
+ * Config final com as escolhas da tela (`tools` = a lista inteira, com as do computador; como as
+ * tools vão — `toolsCompact`/`toolsFull`, 1.11.0 — se a tela as mudou).
+ */
 export function finalizeNewChat(
   base: ChatConfig,
   pick: {
@@ -97,6 +100,8 @@ export function finalizeNewChat(
     params: ChatParams
     tools: ToolName[]
     presetId: string | null
+    toolsCompact?: boolean
+    toolsFull?: ToolName[]
   },
   providers: Provider[]
 ): Partial<ChatConfig> {
@@ -105,7 +110,9 @@ export function finalizeNewChat(
     providerId: pick.providerId,
     model: pick.model,
     params: pick.params,
-    enabledTools: [...pick.tools]
+    enabledTools: [...pick.tools],
+    ...(pick.toolsCompact !== undefined ? { toolsCompact: pick.toolsCompact } : {}),
+    ...(pick.toolsFull !== undefined ? { toolsFull: [...pick.toolsFull] } : {})
   }
   if (pick.providerId !== base.providerId) {
     const p = providers.find((x) => x.id === pick.providerId)

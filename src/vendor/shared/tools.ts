@@ -6,6 +6,7 @@ import { LIMITS, MEMORY_LIMITS as ML } from './limits'
 import { ASK_USER_LIMITS as AL } from './askUser'
 import { shellDescriptionPrefix, toolShellInfo, type ShellInfoLite } from './shellInfo'
 import { PRESENT_FILE_LIMITS as PL } from './fileViewer'
+import { DATETIME_CODES } from './datetime'
 
 const shellDescription = (info: ShellInfoLite | null): string => {
   const p = shellDescriptionPrefix(info)
@@ -66,7 +67,8 @@ export const TOOL_NAMES: ToolName[] = [
   'wait_subagents',
   'cancel_subagent',
   'message_subagent',
-  'ask_user'
+  'ask_user',
+  'datetime'
 ]
 
 /**
@@ -118,6 +120,7 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   cancel_subagent: 'Cancelar subagente',
   message_subagent: 'Mensagem ao subagente',
   ask_user: 'Perguntar ao usuário',
+  datetime: 'Data e hora',
   memory_search: 'Buscar memória',
   memory_read: 'Ler memória',
   memory_write: 'Gravar memória',
@@ -126,7 +129,8 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   list_skills: 'Listar skills',
   skill_load: 'Carregar skill',
   skill_read: 'Ler arquivo da skill',
-  end_call: 'Encerrar chamada'
+  end_call: 'Encerrar chamada',
+  search_tool: 'Ler definição de tool'
 }
 
 /**
@@ -135,6 +139,13 @@ export const TOOL_LABELS: Record<ToolName, string> = {
  * chamada". Sem aprovação (só encerra a chamada, depois de a resposta terminar de tocar).
  */
 export const END_CALL_TOOL: ToolName = 'end_call'
+
+/**
+ * Tool automática das tools compactadas (protocolo 1.11.0 — @shared/compactTools): vai sempre
+ * completa, só quando alguma tool da request vai compacta. NÃO é escolhível (fora de TOOL_NAMES,
+ * `enabledTools` e `toolsFull`; leitores a ignoram nessas listas).
+ */
+export const SEARCH_TOOL: ToolName = 'search_tool'
 
 const def = (
   name: ToolName,
@@ -741,8 +752,30 @@ export const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
     },
     ['questions']
   ),
+  datetime: def(
+    'datetime',
+    `Data e hora atuais do aparelho que roda o chat, no fuso dele. Sem format: ISO 8601 com o deslocamento, o dia da semana e o fuso (IANA e UTC±hh:mm). Com format: códigos de strftime — ${DATETIME_CODES.join(' ')} (nomes de dia e mês em português; %Z = fuso IANA, %z = deslocamento, %s = segundos Unix).`,
+    {
+      format: {
+        type: 'string',
+        description: 'Opcional: formato com códigos de strftime (ex.: "%A, %d de %B de %Y, %H:%M").'
+      }
+    }
+  ),
   ...MEMORY_TOOL_DEFINITIONS,
   ...SKILL_TOOL_DEFINITIONS,
+  search_tool: def(
+    'search_tool',
+    'Devolve a definição completa (descrição e parâmetros) de ferramentas enviadas compactadas — só com o nome e uma descrição curta, sem os parâmetros. Leia uma ferramenta compactada com esta antes de usá-la; dá para pedir várias de uma vez.',
+    {
+      names: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Nomes das ferramentas (ex.: ["read_file", "shell"]).'
+      }
+    },
+    ['names']
+  ),
   end_call: def(
     'end_call',
     'Encerra a chamada de voz em andamento (desliga). Use quando o usuário se despedir ("tchau", "até mais", "valeu, era isso") ou pedir para desligar/encerrar a chamada — depois de dizer uma despedida curta NESTE MESMO turno (ela termina de tocar antes de a chamada cair). Não use se ele só fez uma pausa, agradeceu no meio da conversa ou ainda espera algo de você. Depois desta ferramenta o seu turno termina.',

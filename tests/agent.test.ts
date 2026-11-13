@@ -227,7 +227,15 @@ describe('request no celular', () => {
     expect(availableTools(c, { depth: 2 })).toEqual(['web_search', 'browse_url', 'list_models'])
     const req = buildRequest(c, { depth: 0, model: 'm' }, [], provider())
     const names = (req.body.tools as { function: { name: string } }[]).map((t) => t.function.name)
-    expect(names).toEqual(['web_search', 'browse_url', 'list_models', 'delegate_task', 'ask_user'])
+    // tools compactadas (padrão, 1.11.0): a search_tool automática vai no fim
+    expect(names).toEqual([
+      'web_search',
+      'browse_url',
+      'list_models',
+      'delegate_task',
+      'ask_user',
+      'search_tool'
+    ])
   })
 
   it('parâmetros que o modelo não aceita saem da request (com nota); os aceitos vão', () => {

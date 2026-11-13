@@ -7,6 +7,7 @@ import { nativeGcm } from '@/platform/gcm'
 import { gcmBackend } from '@/platform/primitives'
 import * as nobleOnly from '@vendor/site/crypto/primitives'
 import { normalizeBaseUrl } from '@vendor/desktop/sync/http'
+import { deviceTimeZone, formatDateTime, runDatetimeTool } from '@shared/datetime'
 import { deepEq, eq, ok, rejects, throws } from './assert'
 import type { VectorCase } from './vectors'
 
@@ -82,6 +83,50 @@ export function platformCases(): VectorCase[] {
     )
     eq(normalizeBaseUrl('http://10.0.2.2:8100'), 'http://10.0.2.2:8100', 'base local')
     throws(() => normalizeBaseUrl('ftp://x'), 'ftp')
+  })
+
+  // tool `datetime` (protocolo 1.11.0, @shared/datetime): Intl.DateTimeFormat com `timeZone`,
+  // `hour12: false` e `formatToParts` — no Hermes o Intl é o do sistema (ICU do Android); a saída
+  // tem de ser a mesma do Node/desktop
+  add('Intl com fuso (datetime): formatToParts, timeZone, hour12, horário de verão', () => {
+    const now = Date.UTC(2026, 10, 13, 17, 5, 9)
+    const at = (format: string, timeZone: string, t = now): string => {
+      const r = formatDateTime(format, { now: t, timeZone })
+      if (!r.ok) throw new Error(`${timeZone}: ${r.error}`)
+      return r.text
+    }
+    eq(
+      runDatetimeTool({}, { now, timeZone: 'America/Sao_Paulo' }).content,
+      '2026-11-13T14:05:09-03:00 · sexta-feira · fuso America/Sao_Paulo (UTC-03:00)',
+      'padrão em São Paulo'
+    )
+    eq(
+      at('%A, %d de %B de %Y, %H:%M:%S', 'America/Sao_Paulo'),
+      'sexta-feira, 13 de novembro de 2026, 14:05:09',
+      'pt-BR'
+    )
+    eq(at('%H:%M %z', 'Asia/Kolkata'), '22:35 +0530', 'meia hora')
+    eq(at('%H:%M %z', 'UTC'), '17:05 +0000', 'UTC')
+    // meia-noite: "00" (nunca "24"); dia que muda com o fuso
+    eq(
+      at('%F %T', 'America/Sao_Paulo', Date.UTC(2026, 2, 7, 3, 0, 0)),
+      '2026-03-07 00:00:00',
+      '00h'
+    )
+    eq(at('%F %H %a', 'Pacific/Auckland'), '2026-11-14 06 sáb', 'dia seguinte')
+    // horário de verão (regras do ICU do aparelho)
+    eq(at('%H %z', 'America/New_York', Date.UTC(2026, 6, 1, 12)), '08 -0400', 'EDT')
+    eq(at('%H %z', 'America/New_York', Date.UTC(2026, 0, 15, 12)), '07 -0500', 'EST')
+    eq(at('%H %z', 'Europe/London', Date.UTC(2026, 6, 1, 12)), '13 +0100', 'BST')
+    // fuso do aparelho: nome IANA
+    const tz = deviceTimeZone()
+    ok(typeof tz === 'string' && tz.length > 0, 'fuso do aparelho')
+    ok(formatDateTime('%Z', {}).ok, `formatar no fuso do aparelho (${tz})`)
+  })
+
+  add('Intl: fuso inválido é recusado (RangeError) em vez de cair em UTC', () => {
+    const r = formatDateTime(null, { now: 0, timeZone: 'Nada/Disso' })
+    ok(!r.ok, `fuso inválido aceito: ${r.ok ? r.text : ''}`)
   })
 
   add('AbortSignal.timeout / AbortSignal.any', async () => {

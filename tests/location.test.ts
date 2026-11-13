@@ -614,7 +614,8 @@ describe('aprovação e oferta', () => {
       createdAt: 0
     })
     const names = (req.body.tools as { function: { name: string } }[]).map((t) => t.function.name)
-    expect(names).toEqual(['web_search', 'get_location', 'nearby_places'])
+    // (compactadas por padrão, 1.11.0: a search_tool automática vai no fim)
+    expect(names).toEqual(['web_search', 'get_location', 'nearby_places', 'search_tool'])
     // os nomes são os do protocolo (@shared/deviceTools, §4.3.6): as só do celular e o que ele roda
     expect(LOCATION_TOOLS).toEqual(PHONE_TOOLS)
     expect([...MOBILE_TOOLS].sort()).toEqual(
@@ -689,7 +690,8 @@ describe('runner: tools de localização num chat deste celular', () => {
     expect(t.meta.approval).toBeUndefined() // item fora dos itens sincronizados do protocolo
     const sent = h.llm.requests.find((r) => Array.isArray(r.body.tools))
     const names = (sent?.body.tools as { function: { name: string } }[]).map((x) => x.function.name)
-    expect(names).toEqual(['get_location', 'nearby_places'])
+    // compactas por padrão (1.11.0): a search_tool no fim devolve as definições do celular
+    expect(names).toEqual(['get_location', 'nearby_places', 'search_tool'])
     const last = h.stack.repo.path(sid).pop()!
     expect(String(last.message.content)).toContain('Resultado recebido (get_location)')
   })
@@ -733,7 +735,7 @@ describe('runner: tools de localização num chat deste celular', () => {
     expect(String(tool(b.sid).message.content)).toContain('não está disponível nesta sessão')
     const sent = h.llm.requests.filter((r) => Array.isArray(r.body.tools)).pop()
     const names = (sent?.body.tools as { function: { name: string } }[]).map((x) => x.function.name)
-    expect(names).toEqual(['nearby_places'])
+    expect(names).toEqual(['nearby_places', 'search_tool'])
     expect(current.device.positions).toEqual([])
   })
 

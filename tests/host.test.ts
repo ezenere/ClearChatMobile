@@ -98,7 +98,8 @@ describe('janela e revisões (§8.3–8.5)', () => {
     const names = ((req.body.tools as { function: { name: string } }[]) ?? []).map(
       (t) => t.function.name
     )
-    expect(names).toEqual(['web_search'])
+    // (compactadas por padrão, 1.11.0: a search_tool automática vai no fim)
+    expect(names).toEqual(['web_search', 'search_tool'])
     // nem no texto das tools no system prompt
     expect(JSON.stringify(req.body.messages)).not.toMatch(/read_file|present_file|skill_load/)
     // a lista do chat continua a mesma (nada vira próprio nem some por causa do aparelho)

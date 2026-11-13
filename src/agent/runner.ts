@@ -87,7 +87,14 @@ import {
   smartRejectText
 } from '@shared/smartApprove'
 import { buildJudgeExtras, isTypedUserMessage } from '@shared/smartApproveContext'
-import { MEMORY_TOOL_NAMES } from '@shared/tools'
+import { MEMORY_TOOL_NAMES, SEARCH_TOOL } from '@shared/tools'
+import {
+  invalidArgsText,
+  runSearchTool,
+  validateToolArgs,
+  withFullDefinition
+} from '@shared/compactTools'
+import { runDatetimeTool } from '@shared/datetime'
 import type {
   AgentEvent,
   ApiMessage,
@@ -180,6 +187,7 @@ import {
   buildRequest,
   currentEnv,
   modelInfoFor,
+  toolsPlan,
   voiceCallContextFor,
   type BuiltRequest
 } from './request'
@@ -1058,7 +1066,10 @@ export class Runner {
     const history = this.repo.path(session.id)
     const avail = availableTools(reqChat, session, history)
     if (!reqChat.config.nativeTools && avail.length && acc.content) {
-      const parsed = parseTextToolCalls(acc.content, avail)
+      // a `search_tool` (tools compactadas, 1.11.0) também vale no fallback do JSON sem as tags
+      const known: string[] = [...avail]
+      if (toolsPlan(reqChat, session, history).compacted.length) known.push(SEARCH_TOOL)
+      const parsed = parseTextToolCalls(acc.content, known)
       if (parsed.length) {
         const parts: string[] = []
         let subSessionId: string | undefined
@@ -1236,16 +1247,44 @@ export class Runner {
     // chamada de voz: as tools do turno (`voice.tools.enabledTools`) valem também na execução
     const voiceCall = voiceCallContextFor(chat, session)
     const gateChat = voiceCall ? applyVoiceCallChat(chat, voiceCall) : chat
+    // tools compactadas (protocolo 1.11.0, @shared/compactTools — = desktop): o mesmo plano da
+    // request — a `search_tool` devolve as definições completas das enviadas (as do celular como o
+    // celular as manda); uma tool que foi compacta e chega com argumentos inválidos recebe o erro
+    // com a definição completa dela (sem o histórico: compacta ou não só depende da config; a
+    // search_tool o lê para listar exatamente as enviadas)
+    const plan = toolsPlan(gateChat, session)
+    if (name === SEARCH_TOOL && plan.compacted.length) {
+      let sargs: Record<string, unknown>
+      try {
+        sargs = parseToolArgs(rawArgs)
+      } catch (e) {
+        return done({ content: `Erro: ${errMsg(e)}`, status: 'error' })
+      }
+      const sent = toolsPlan(gateChat, session, this.repo.path(session.id))
+      return done(runSearchTool(sargs, sent.full))
+    }
     if (!availableTools(gateChat, session).includes(name))
       return done({
         content: `Erro: a ferramenta "${rawName}" não está disponível nesta sessão.`,
         status: 'error'
       })
+    const compactDef = plan.compacted.includes(name)
+      ? plan.full.find((d) => d.function.name === name)
+      : undefined
     let args: Record<string, unknown>
     try {
       args = parseToolArgs(rawArgs)
     } catch (e) {
-      return done({ content: `Erro: ${errMsg(e)}`, status: 'error' })
+      const text = `Erro: ${errMsg(e)}`
+      return done({
+        content: compactDef ? withFullDefinition(text, compactDef) : text,
+        status: 'error'
+      })
+    }
+    if (compactDef) {
+      const problems = validateToolArgs(compactDef, args)
+      if (problems.length)
+        return done({ content: invalidArgsText(compactDef, problems), status: 'error' })
     }
     // chamada de voz: `end_call` não pede aprovação (só encerra a chamada — o VoiceCallManager vê o
     // resultado ok e desliga quando a despedida terminar de tocar)
@@ -1489,9 +1528,12 @@ export class Runner {
                   ? listChatsTool
                   : name === 'read_history'
                     ? readHistoryTool
-                    : loc && isLocationTool(name)
-                      ? (a: Record<string, unknown>, c: ToolContext) => loc.run(name, a, c)
-                      : null
+                    : name === 'datetime'
+                      ? // data/hora DESTE aparelho, no fuso dele (1.11.0; sem aprovação)
+                        async (a: Record<string, unknown>) => runDatetimeTool(a)
+                      : loc && isLocationTool(name)
+                        ? (a: Record<string, unknown>, c: ToolContext) => loc.run(name, a, c)
+                        : null
       if (!impl)
         return done({
           content: `Erro: ferramenta "${name}" indisponível no celular.`,

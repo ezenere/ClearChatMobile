@@ -12,6 +12,8 @@
 //   "/tell <chat_id> <msg>" → send_to_chat;  "/ask-chat <chat_id> <msg>" → com wait_for_reply;
 //   "/chats" → list_chats;  "/info" → get_chat_info;  "/history <q>" → read_history (todos os chats);
 //   "/big" → resposta longa (enche o contexto para a compactação automática);
+//   1.11.0: "/now [formato]" → datetime;  "/lookup <nomes…>" → search_tool (tools compactadas);
+//   "/badargs" → web_search com argumentos inválidos ({ q } em vez de { query });
 //   requests laterais: compactação (prompt de resumo) → <conversation_summary>…; título (prompt do
 //   título) → "Título: <palavras>"; extração de memórias → memory_write com "meu nome é X" (ou "meu nome e X", sem acento: o adb não digita "é");
 //   resto → "ok: <texto>" (com raciocínio e usage com custo).
@@ -458,6 +460,19 @@ export function startFakeLlm(
         'Vou procurar por perto. '
       )
     }
+    // tools compactadas e datetime (1.11.0)
+    if (text.startsWith('/now')) {
+      const format = text.slice(4).trim()
+      return toolCall('datetime', format ? { format } : {}, 'Vou ver a hora. ')
+    }
+    if (text.startsWith('/lookup'))
+      return toolCall('search_tool', {
+        names: text
+          .slice(7)
+          .split(/[\s,]+/)
+          .filter(Boolean)
+      })
+    if (text.startsWith('/badargs')) return toolCall('web_search', { q: 'clima' })
     if (text.startsWith('/chats')) return toolCall('list_chats', {})
     if (text.startsWith('/info')) return toolCall('get_chat_info', {})
     if (text.startsWith('/history'))

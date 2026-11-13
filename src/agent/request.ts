@@ -7,15 +7,27 @@
 // - anexos: o leitor (base64) vem pronto do runner, que baixou os blobs antes (§14);
 // - memória: fontes registráveis (índice congelado + help, tools pela config — como o desktop);
 //   skills: nunca no celular; voz (fase 6): `end_call` nos turnos da chamada (fonte registrável,
-//   como no desktop — `setVoiceCallSource`).
+//   como no desktop — `setVoiceCallSource`);
+// - tools compactadas (protocolo 1.11.0, @shared/compactTools — = `toolsPlan` do desktop): o plano
+//   parte das definições COMPLETAS como o celular as mandaria (as de localização deste aparelho e a
+//   descrição do `browse_url` do celular inclusive); compactas + `search_tool` no fim + o prompt
+//   fixo no fim do system prompt, nos turnos normais, subagentes e chamada de voz.
 // É o módulo que o shim `src/vendor/desktop/agent/request.ts` reexporta (BuiltRequest, maskRequest,
 // modelInfoFor para llm.ts / smartApprove.ts vendorados).
 import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
 import { activeHistory, isDisplayOnly } from '@shared/context'
+import { planTools, withCompactPrompt, type ToolsPlan } from '@shared/compactTools'
 import { defaultToolsPrompt } from '@shared/defaults'
 import { paramSupport, type ParamSupport } from '@shared/modelParams'
 import { providerKind, type ProviderKind } from '@shared/providerKinds'
-import { END_CALL_TOOL, TOOL_NAMES, toolDefinitionFor, type ToolDefinition } from '@shared/tools'
+import { isPhoneTool } from '@shared/deviceTools'
+import {
+  END_CALL_TOOL,
+  MEMORY_TOOL_NAMES,
+  TOOL_NAMES,
+  toolDefinitionFor,
+  type ToolDefinition
+} from '@shared/tools'
 import type { ResolvedVoiceCall } from '@shared/voice'
 import type {
   ApiMessage,
@@ -66,6 +78,8 @@ export const MOBILE_TOOLS: readonly ToolName[] = [
   'list_chats',
   'send_to_chat',
   'read_history',
+  // data e hora do aparelho (protocolo 1.11.0; portátil, sem aprovação — @shared/datetime)
+  'datetime',
   // só no celular (src/location; nomes em @shared/deviceTools): o desktop as preserva nas listas
   // e as mostra esmaecidas, mas não as executa
   ...LOCATION_TOOLS
@@ -304,7 +318,51 @@ export function toolDefinitions(
   )
 }
 
-/** System prompt → <environment> → memória (índice + help, só a principal) → texto das tools. */
+/**
+ * Definição COMPLETA de uma tool como este celular a manda (o "</> definição" das telas de tools —
+ * a mesma fonte da request: localização deste aparelho, `browse_url` do celular, provedores). null =
+ * o celular não a manda (só do computador, ou localização sem o serviço deste aparelho).
+ */
+export function phoneToolDefinition(name: string): ToolDefinition | null {
+  const n = name as ToolName
+  if (!portableTools().includes(n) && !MEMORY_TOOL_NAMES.includes(n) && n !== END_CALL_TOOL)
+    return null
+  if (isPhoneTool(n) && !locationSource?.definition(n)) return null
+  return toolDefinitions([n])[0] ?? null
+}
+
+/**
+ * As definições chegam ao modelo? (campo `tools`, ou o texto das tools GERADO pelo app no system
+ * prompt — um `toolsPromptText` escrito pelo usuário vai como está e não leva definições).
+ */
+function toolsReachModel(cfg: ChatConfig): boolean {
+  return cfg.nativeTools || (cfg.toolsInPrompt && cfg.toolsPromptText == null)
+}
+
+/**
+ * Tools da request com a compactação (protocolo 1.11.0 — @shared/compactTools; = desktop): as
+ * disponíveis da sessão, completas como o celular as manda (`toolDefinitions`: localização deste
+ * aparelho, `browse_url` do celular) → compactas as que não estão em `toolsFull` (com a compactação
+ * ligada), `search_tool` no fim e o prompt fixo, se alguma foi compacta. Vale para os turnos
+ * normais, subagentes e a chamada de voz (`end_call` sempre completa). Sem tools chegando ao modelo
+ * (sem tools nativas e sem o texto gerado) → nada é compactado. Usado na request, na execução
+ * (`search_tool`, erro de argumentos) e na estimativa da compactação do histórico.
+ */
+export function toolsPlan(
+  chat: Chat,
+  session: SessionRef,
+  history?: StoredMessage[],
+  providerNames?: string[]
+): ToolsPlan {
+  const full = toolDefinitions(availableTools(chat, session, history), providerNames)
+  if (!toolsReachModel(chat.config)) return { definitions: full, full, compacted: [], prompt: null }
+  return planTools(full, chat.config)
+}
+
+/**
+ * System prompt → <environment> → memória (índice + help, só a principal) → texto das tools (o
+ * gerado segue a compactação) → prompt fixo das tools compactadas (só com alguma compacta).
+ */
 export function systemContent(
   chat: Chat,
   session: Pick<Session, 'depth'> & { id?: string },
@@ -323,14 +381,14 @@ export function systemContent(
     add(memory.index ?? '')
     add(memory.help ?? '')
   }
+  const plan = toolsPlan(chat, session, history)
   if (cfg.toolsInPrompt) {
-    const defs = toolDefinitions(availableTools(chat, session, history))
     add(
       cfg.toolsPromptText ??
-        defaultToolsPrompt(defs, cfg.nativeTools, { subagent: session.depth > 0 })
+        defaultToolsPrompt(plan.definitions, cfg.nativeTools, { subagent: session.depth > 0 })
     )
   }
-  return s
+  return withCompactPrompt(s, plan)
 }
 
 export function parseExtraBody(extra: string | undefined): Record<string, unknown> | null {
@@ -482,7 +540,8 @@ export function buildRequest(
     cfg.appSignatureCustom
   )
   const adapter = adapterFor(kind)
-  const tools = availableTools(chat, session, history)
+  // compactação (1.11.0): as definições como vão (compactas + search_tool, ou completas)
+  const tools = toolsPlan(chat, session, history).definitions
   const params = cfg.params ?? {}
   const extra = parseExtraBody(params.extraBody)
   const support = filterParams(params, kind, provider.id, session.model, extra)
@@ -496,7 +555,7 @@ export function buildRequest(
       body: buildAnthropicBody({
         model: session.model,
         messages: sent,
-        tools: cfg.nativeTools && tools.length ? toolDefinitions(tools) : undefined,
+        tools: cfg.nativeTools && tools.length ? tools : undefined,
         params: support.send,
         cacheEnabled: cfg.cacheEnabled,
         extra
@@ -516,7 +575,7 @@ export function buildRequest(
     stream_options: { include_usage: true }
   }
 
-  if (cfg.nativeTools && tools.length) body.tools = toolDefinitions(tools)
+  if (cfg.nativeTools && tools.length) body.tools = tools
 
   const { reasoning_effort: effort, ...sampling } = support.send
   Object.assign(body, sampling)

@@ -129,7 +129,8 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     // só as tools que o celular executa vão ao modelo (as do computador ficam de fora, §4.3.6)
     const sent = (r: { body: Record<string, unknown> }) =>
       ((r.body.tools as { function: { name: string } }[]) ?? []).map((t) => t.function.name)
-    expect(sent(req)).toEqual(['web_search', 'ask_user'])
+    // (compactadas por padrão, 1.11.0: a search_tool automática vai no fim)
+    expect(sent(req)).toEqual(['web_search', 'ask_user', 'search_tool'])
     // seguir a persona conta para "N chats seguem"
     expect(followersByPreset(h.store).get('p1')).toBe(1)
 
@@ -142,8 +143,10 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     await h.stack.host.local(chat.id, 'send', { sessionId: session.id, text: 'de novo' })
     await until(() => !h.stack.runner.isRunning(session.id), 10_000, 'turno 2')
     const req2 = h.llm.requests.filter((r) => r.path.endsWith('/chat/completions')).pop()!
-    expect(sent(req2)).toEqual(['web_search'])
-    expect(JSON.stringify(req2.body)).not.toMatch(/read_file|"shell"/)
+    expect(sent(req2)).toEqual(['web_search', 'search_tool'])
+    // nenhuma definição delas (a descrição da search_tool só cita nomes como exemplo)
+    expect(JSON.stringify(req2.body)).not.toMatch(/"name":"(read_file|shell)"/)
+    expect(JSON.stringify(req2.body.messages)).not.toMatch(/read_file|"shell"/)
     // nada virou próprio por causa do aparelho
     expect(ownOf(chat.id)).toEqual(['params.temperature'])
   })
@@ -295,9 +298,11 @@ describe('migração: tools de um tipo de aparelho (§4.3.6)', () => {
         updatedAt: 5,
         ...extra
       })
-    // chat de um celular antigo: só as tools que ele roda, com a localização desligada
+    // chat de um celular antigo: só as tools que ele roda, com a localização desligada (as listas
+    // já trazem a datetime, 1.11.0 — sem ela, a datetime desligada viraria própria na migração)
     const phoneTools = ['web_search', 'browse_url', 'list_models', 'delegate_task', 'get_chat_info']
     await old('c-cel', [
+      'datetime',
       ...phoneTools,
       'list_chats',
       'send_to_chat',
@@ -334,7 +339,8 @@ describe('migração: tools de um tipo de aparelho (§4.3.6)', () => {
       'wait_subagents',
       'cancel_subagent',
       'message_subagent',
-      'ask_user'
+      'ask_user',
+      'datetime'
     ]
     await old('c-pc', deskTools, { hostCwd: { deviceId: 'pc', path: '/home/ana/proj' } })
     await h.engine.sync()
