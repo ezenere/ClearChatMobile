@@ -1,7 +1,7 @@
 # ClearChat Mobile — plano
 
 App Android (iOS depois) em **Expo SDK 58 / React Native 0.88**, com dev build (`expo prebuild`) —
-precisamos de módulos nativos. Implementa o protocolo de sync v1.11.0.
+precisamos de módulos nativos. Implementa o protocolo de sync v1.12.0.
 
 ## Escopo
 
@@ -682,6 +682,25 @@ herança e a definição que vai. Detalhes: README § "Tools compactadas e `date
 Verificado: typecheck, lint, `npm test`, `vendor:check`; no AVD (Android 15, Hermes): self-test com o
 Intl com fuso (81/81), turnos `datetime` e `search_tool` com o provedor falso, telas e marcas da
 herança (modo sem conta).
+
+## Busca nativa de ferramentas (protocolo 1.12.0) — estado (2026-11-13)
+
+Feito (vendor do desktop 34acd86, `@shared/toolSearch`): modo por request (busca nativa da Anthropic, do
+OpenRouter pela Messages API — `/messages` com Bearer —, versão local com o motivo, sem compactação) pelo
+mesmo resolvedor do desktop; prompt fixo nativo com as adiadas efetivas da request; PDF não tira da
+Messages API; `ApiMessage.native` gravado e reenviado só no mesmo canal, com as
+referências filtradas às tools que o celular manda (chat do computador hospedado aqui continua válido);
+adiada usada sem a descoberta vai carregada; `search_tool` → `tool_search` (alias de leitura, troca na
+cópia); runner com a queda (sem reenvio → versão local), `toolSearchCaps` no KeyValueStore do aparelho
+(24 h, nunca sincronizado), `meta.toolSearch`, `pause_turn`, custo pelo `/generation`; telas (chat,
+persona, Novo chat, tools da chamada) com o modo, o motivo, o aviso da versão local, chips
+"adiada"/"carregada" e o item exato de `tools[]`; chip "buscou tools" e o modo no rodapé da conversa.
+Detalhes: README § "Busca nativa de ferramentas".
+
+Verificado: typecheck, lint, `npm test` (inclui `tests/toolSearch.test.ts` e `toolSearchUi.test.ts`),
+`vendor:check`, integração no servidor local; no AVD (Pixel 9 Pro, Hermes, modo sem conta): Novo chat com
+a versão local (motivo + aviso) e com a busca nativa da Anthropic (provedor falso como host oficial),
+configurações do chat com "adiada"/"carregada", o item exato e a entrada de busca, e o chip na conversa.
 
 ## Ideias
 

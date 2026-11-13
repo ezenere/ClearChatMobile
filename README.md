@@ -331,7 +331,10 @@ HTTP), `tests/host.test.ts` (janelas, revisões, recusas, chat com tools locais 
 espelho) e `tests/integration/host.test.ts` (servidor real). Provedor falso: `tests/fakes/fakeLlm.ts`
 (SSE OpenAI-compatible e Anthropic, `/models`, DuckDuckGo e páginas falsas; roda sozinho com
 `node tests/fakes/fakeLlm.ts 8790` para o E2E). No app de desenvolvimento,
-`EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG=http://127.0.0.1:8790/ddg` aponta o web_search para o falso.
+`EXPO_PUBLIC_CLEARCHAT_SEARCH_BASE_DDG=http://127.0.0.1:8790/ddg` aponta o web_search para o falso e
+`EXPO_PUBLIC_CLEARCHAT_E2E_NATIVE_HOSTS=127.0.0.1` trata o provedor falso como o host oficial na busca
+nativa de tools (1.12.0; um provedor "Anthropic" em `http://127.0.0.1:8790/v1` → "/now" faz a busca do
+servidor e mostra o chip "buscou tools").
 
 ## Host no celular (fase 4b)
 
@@ -996,7 +999,56 @@ Contrato: §4.3.6 ("Tools compactadas e `datetime`"). A lógica é a do desktop,
 
 Testes: `tests/compactTools.test.ts` (plano nas tools do celular, `search_tool` = definição sem
 compactação, argumentos inválidos, `datetime`, voz, herança, Novo chat e o runner com o provedor falso —
-`/now`, `/lookup`, `/badargs`).
+`/now`, `/lookup`, `/badargs`). Desde 1.12.0 a tool se chama `tool_search` (abaixo) e isto é a
+**versão local**.
+
+## Busca nativa de ferramentas (protocolo 1.12.0)
+
+Contrato: §4.3.6 ("Busca nativa de ferramentas"), §4.3.8 ("Blocos nativos do provedor",
+`MessageMeta.toolSearch`), §4.4 (`toolSearchCaps`). A lógica é a do desktop, vendorada
+(`@shared/toolSearch`, `@shared/compactTools`, o adaptador da Anthropic, `llm.ts`, `compaction.ts`);
+aqui só a fiação:
+
+- **Modo por request** (`resolveToolMode` em `src/agent/request.ts`, = desktop): com a compactação ligada
+  e alguma tool fora de `toolsFull`, `native-anthropic` (provedor `anthropic` no host oficial, Claude
+  4.5+: todas completas, as de fora de `toolsFull` com `defer_loading`, `tool_search_tool_regex_20251119`
+  por último, cache na última carregada), `native-openrouter` (OpenRouter oficial, modelo servido pela
+  Messages API — `endpoints` do /models, que `mapModel` guarda; variante `:free` cai no id base — e chat
+  compatível: sem áudio, sem parâmetros/`extraBody` só da Chat Completions; PDF não impede → a request
+  vai para `{baseUrl}/messages` com Bearer e `openrouter:tool_search`), `local` (qualquer outro caso,
+  com o motivo nas notas: a compactação de 1.11.0 com a `tool_search` — antes `search_tool` — e o
+  prompt fixo) ou `off`. Nos nativos, com alguma adiada, vai o **prompt fixo nativo** no fim do system prompt
+  (`nativeToolSearchPrompt`: nomeia a busca do modo e lista as adiadas EFETIVAS desta request — sem as
+  carregadas pelo histórico; `nativeDeferral`/`sentHistory`, = desktop). As tools são as que ESTE
+  celular manda.
+- **Blocos nativos** (`ApiMessage.native`): o runner grava os blocos da resposta (sem pensamento) só
+  quando vieram blocos do servidor; a request reenvia só ao mesmo provedor/API/modelo e se ainda bate com
+  `content`/`tool_calls`, com as referências filtradas às tools da request — um chat do computador
+  hospedado aqui continua válido sem as tools de lá; uma adiada usada sem a descoberta junto vai
+  carregada. Editar uma resposta (e o ajuste do que foi ouvido na chamada) tira o `native` que não bate.
+  Chamadas antigas de `search_tool` vão como `tool_search` só na cópia enviada.
+- **Runner**: queda — recusa do modo nativo (HTTP 400/404/422 que não é estouro de contexto) → repete
+  sem reenviar blocos (se havia; dá certo → esses blocos não vão mais na sessão) e depois UMA vez na
+  versão local; só se a local der certo a falha fica lembrada 24 h no `toolSearchCaps` DESTE aparelho
+  (`src/agent/toolSearchCaps.ts`, JSON no KeyValueStore do aparelho — nunca sincronizado); `meta.toolSearch`
+  com o modo (e `fallbackFrom`); `pause_turn` → pede de novo sem mensagem do usuário (máx. 3 seguidos);
+  a execução segue o modo da última request da sessão (`tool_search` não existe nos nativos); custo da
+  Messages API do OpenRouter sem `usage.cost` no stream → `GET /generation` em segundo plano. A
+  compactação do histórico também cai para a local numa recusa.
+- **Telas**: o modo é calculado no aparelho (`src/settings/toolSearchUi.ts` → `toolSearchViewOf`, o
+  mesmo resolvedor) nas configurações do chat, persona, Novo chat e tools da chamada: "Enviar tools
+  compactadas" mostra "Busca nativa da Anthropic" / "Busca nativa do OpenRouter (Messages API)" /
+  "Versão local do app" com o status, o motivo e o aviso da versão local; chips "adiada"/"carregada" nos
+  nativos; "O que vai junto" mostra o prompt fixo nativo exato e a entrada de busca do provedor; a
+  "Definição" de cada tool, o item exato de `tools[]` (uma adiada já usada no histórico sem a busca:
+  "carregada nesta request", com o motivo). Na conversa, o chip "buscou tools: …" das buscas do
+  provedor (sem a pré-busca do OpenRouter) e o modo no rodapé.
+
+Testes: `tests/toolSearch.test.ts` (tabela de modos, bodies Anthropic/OpenRouter, SSE, reenvio/descarte,
+queda + caps, renome, celular sem as tools do computador, custo, e o runner com provedores falsos locais —
+127.0.0.1 tratado como host oficial) e `tests/toolSearchUi.test.ts` (o modo nas telas). No emulador:
+`EXPO_PUBLIC_CLEARCHAT_E2E_NATIVE_HOSTS=127.0.0.1` + o provedor falso (`tests/fakes/fakeLlm.ts`) com um
+provedor "Anthropic" local e um modelo Claude 4.5+.
 
 ## Build iOS no Mac
 
