@@ -89,6 +89,35 @@ function tone(ms: number, rms: number): Float32Array {
   for (let i = 0; i < n; i++) out[i] = amp * Math.sin((2 * Math.PI * 180 * i) / RATE)
   return out
 }
+/**
+ * Digitação sintética (2026-11-13: o teclado perto do microfone virava voz — abaixava a resposta,
+ * virava barge-in e o whisper devolvia "Tchau."): a cada tecla um clique de descida (rajada de ruído
+ * com decaimento de 3 ms + "toc" grave curto) e o de subida ~70 ms depois, sobre ruído de sala.
+ */
+function typing(ms: number, keysPerSec = 8): Float32Array {
+  const n = Math.round((ms * RATE) / 1000)
+  const out = new Float32Array(n)
+  let seed = 5
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1
+  for (let i = 0; i < n; i++) out[i] = 0.0008 * rnd()
+  const click = (at: number, k: number) => {
+    for (let i = 0; at + i < n && i < 400; i++) {
+      const e = Math.exp(-i / 48)
+      out[at + i] +=
+        k * (0.2 * e * rnd() + 0.06 * Math.exp(-i / 96) * Math.sin((2 * Math.PI * 180 * i) / RATE))
+    }
+  }
+  const period = RATE / keysPerSec
+  for (
+    let t = 200, j = 0;
+    t < n;
+    t += Math.round(period * (0.6 + (0.8 * ((j++ * 7919) % 100)) / 100))
+  ) {
+    click(t, 1)
+    click(t + Math.round(RATE * 0.07), 0.5)
+  }
+  return out
+}
 const cat = (...parts: Float32Array[]): Float32Array => {
   const out = new Float32Array(parts.reduce((n, p) => n + p.length, 0))
   let o = 0
@@ -1057,6 +1086,59 @@ describe('ditado e chamada de voz no host do celular', () => {
       .join(' ')
     expect(sentAssistant).toContain(content)
     expect(sentAssistant).not.toContain('sem parar nunca')
+    call.stop()
+    await until(() => !call.getView().call.active, 4000)
+    expect(call.follow.get()).toEqual({ sessionId: null, heard: [], current: null })
+  }, 60_000)
+
+  it('digitar enquanto a resposta toca (com fone): nada abaixa, nada interrompe, nenhum turno', async () => {
+    resetNoiseFloor()
+    const q1 = speech([[1300, true]])
+    h.llm.voice.fixtures = [
+      {
+        voicedMs: voicedMsOf(wav16(q1)).voicedMs,
+        text: 'Conte devagar uma história comprida sobre o mar e as ondas que batem na praia sem parar nunca.'
+      }
+    ]
+    const mic = new ScriptedMic()
+    const pb = trackedPlayback(1)
+    const voice = createVoiceStack({
+      stack: h.stack,
+      store: h.store,
+      mic: () => mic,
+      playback: pb,
+      clips: memoryClipStore(),
+      requestMic: async () => true,
+      bargeIn: () => true
+    })
+    const call = voice.call
+    const { sid } = newChat()
+    await call.start(sid)
+    const silence = speech([[64, false]])
+    const feedUntil = async (cond: () => boolean, what: string, ms = 20000) => {
+      const t0 = Date.now()
+      while (!cond()) {
+        if (Date.now() - t0 > ms) throw new Error(`timeout: ${what}`)
+        mic.feed(silence)
+        await sleep(4)
+      }
+    }
+    const kinds = () => call.getView().timeline.map((e) => e.kind)
+    mic.feed(q1)
+    await feedUntil(() => !!call.follow.get().current, 'começar a falar')
+    const sttCalls = () => h.llm.voice.log.filter((l) => l.path.endsWith('/audio/transcriptions'))
+    const sttBefore = sttCalls().length
+    // ~3 s de digitação em tempo real por cima da resposta
+    const keys = typing(3000)
+    for (let o = 0; o < keys.length; o += 512 * 4) {
+      mic.feed(keys.subarray(o, o + 512 * 4))
+      await sleep(100)
+    }
+    expect(kinds()).not.toContain('duck')
+    expect(kinds()).not.toContain('barge-in')
+    expect(Math.min(...pb.volumes)).toBe(1)
+    expect(sttCalls().length).toBe(sttBefore) // o teclado nunca foi ao STT
+    expect(h.stack.repo.path(sid).filter((m) => m.message.role === 'user').length).toBe(1)
     call.stop()
     await until(() => !call.getView().call.active, 4000)
     expect(call.follow.get()).toEqual({ sessionId: null, heard: [], current: null })

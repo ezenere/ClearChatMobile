@@ -3,7 +3,8 @@
 // demora espaçadas, TTS por frase, tags de voz, turno continuado, barge-in em palavras, `end_call`,
 // marcadores e custos) com o "sensor" que no desktop vive no renderer
 // (src/renderer/src/lib/voice/useVoiceCall.ts): captura contínua, fala detectada pelo `LevelGate`
-// (a mesma regra do portão do STT: nível de ativação deste aparelho + piso de ruído adaptativo), fim
+// (a mesma regra do portão do STT, com as amostras de cada quadro: nível de ativação deste aparelho
+// + piso de ruído adaptativo + estalos — digitar/bater na mesa — e sequência mínima), fim
 // de turno ADAPTATIVO (`AdaptiveTurnGate` + transcrição especulativa na pausa +
 // `classifyUtteranceEnd`), uma sessão de transcrição por fala, a fila de reprodução e a fala por
 // cima da resposta com histerese (`PlaybackDuck`): depois de voz sustentada (onset) a voz do
@@ -57,7 +58,7 @@ import {
   type VoiceUse
 } from './resolve'
 import { VoiceFollow } from './follow'
-import { FRAME_MS, pcmBytes, type MicFrame, type MicSource } from './mic'
+import { FRAME_MS, MIC_SAMPLE_RATE, pcmBytes, type MicFrame, type MicSource } from './mic'
 import { UtteranceQueue, type PlaybackBackend } from './player'
 import { TranscribeSession } from './session'
 import { onSttApiUsage } from './stt'
@@ -434,6 +435,9 @@ export class VoiceCallController {
         }
       },
       onItem: ({ item, phase }) => {
+        // fim de uma utterance cancelada DEPOIS do fim da chamada (o `done` resolve depois do
+        // teardown): a leitura ao vivo já foi zerada — nada mais conta como ouvido
+        if (gen !== this.generation) return
         const sentence = (item.kind ?? 'sentence') === 'sentence'
         if (phase === 'start' && sentence) this.started.add(item.id)
         // leitura ao vivo: a frase tocando (o chat esmaece o que ainda não foi ouvido)
@@ -760,8 +764,12 @@ export class VoiceCallController {
     const deaf = this.isDeaf()
     if (deaf !== this.view.deaf) this.set({ deaf })
     this.set({ level: deaf ? 0 : f.rms })
-    // surdo (meia-duplex): o quadro conta como silêncio e não ensina o piso de ruído
-    this.onVoiced(deaf ? 0 : this.level.pushRms(f.rms, f.ms || FRAME_MS) ? VOICED : 0)
+    // surdo (meia-duplex): o quadro conta como silêncio e não ensina o piso de ruído; com as
+    // amostras, a regra completa do portão — estalo (tecla, batida) e sequência curta não são fala
+    const voiced =
+      !deaf &&
+      this.level.pushSamples(f.pcm, MIC_SAMPLE_RATE, { frameMs: f.ms || FRAME_MS, scale: 0x8000 })
+    this.onVoiced(voiced ? VOICED : 0)
     if (deaf) return
     const bytes = pcmBytes(f.pcm)
     if (this.speaking) {
