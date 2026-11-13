@@ -87,13 +87,8 @@ import {
   smartRejectText
 } from '@shared/smartApprove'
 import { buildJudgeExtras, isTypedUserMessage } from '@shared/smartApproveContext'
-import { MEMORY_TOOL_NAMES, SEARCH_TOOL } from '@shared/tools'
-import {
-  invalidArgsText,
-  runSearchTool,
-  validateToolArgs,
-  withFullDefinition
-} from '@shared/compactTools'
+import { MEMORY_TOOL_NAMES, SEARCH_TOOL, type ToolDefinition } from '@shared/tools'
+import { compactToolErrorText, runSearchTool, withFullDefinition } from '@shared/compactTools'
 import { runDatetimeTool } from '@shared/datetime'
 import type {
   AgentEvent,
@@ -1234,8 +1229,14 @@ export class Runner {
     let smart: SmartApproveRecord | undefined
     let smartOverride = false
     let approval: ApprovalRecord | undefined
+    // tool que foi compacta (protocolo 1.11.0, = desktop): roda com os argumentos como vierem; se
+    // falhar e os argumentos não seguem o esquema, o erro ganha a definição completa
+    let argCheck: { def: ToolDefinition; args: Record<string, unknown> } | undefined
     const done = (o: Omit<ToolOutcome, 'durationMs'>): ToolOutcome => ({
       ...o,
+      ...(argCheck && o.status === 'error'
+        ? { content: compactToolErrorText(o.content, argCheck.def, argCheck.args) }
+        : {}),
       ...(smart ? { smartApprove: smart } : {}),
       ...(smartOverride ? { smartOverride: true } : {}),
       ...(approval ? { approval } : {}),
@@ -1249,8 +1250,8 @@ export class Runner {
     const gateChat = voiceCall ? applyVoiceCallChat(chat, voiceCall) : chat
     // tools compactadas (protocolo 1.11.0, @shared/compactTools — = desktop): o mesmo plano da
     // request — a `search_tool` devolve as definições completas das enviadas (as do celular como o
-    // celular as manda); uma tool que foi compacta e chega com argumentos inválidos recebe o erro
-    // com a definição completa dela (sem o histórico: compacta ou não só depende da config; a
+    // celular as manda); uma tool que foi compacta roda com os argumentos como vierem e, se falhar
+    // fora do esquema, o erro ganha a definição completa (sem o histórico: compacta ou não só depende da config; a
     // search_tool o lê para listar exatamente as enviadas)
     const plan = toolsPlan(gateChat, session)
     if (name === SEARCH_TOOL && plan.compacted.length) {
@@ -1281,11 +1282,7 @@ export class Runner {
         status: 'error'
       })
     }
-    if (compactDef) {
-      const problems = validateToolArgs(compactDef, args)
-      if (problems.length)
-        return done({ content: invalidArgsText(compactDef, problems), status: 'error' })
-    }
+    if (compactDef) argCheck = { def: compactDef, args }
     // chamada de voz: `end_call` não pede aprovação (só encerra a chamada — o VoiceCallManager vê o
     // resultado ok e desliga quando a despedida terminar de tocar)
     if (name === 'end_call') return done({ content: END_CALL_RESULT, status: 'ok' })

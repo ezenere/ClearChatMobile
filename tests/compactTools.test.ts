@@ -606,24 +606,26 @@ describe('runner (provedor falso): search_tool, argumentos inválidos e datetime
     expect(byName.get('browse_url')!.description).toBe(MOBILE_BROWSE_URL_DESCRIPTION)
   })
 
-  it('argumentos inválidos numa compacta → erro com a definição completa; completa → erro normal da tool', async () => {
+  it('argumentos fora do esquema numa compacta: a tool roda; se falhar, o erro dela + a definição completa; completa → erro normal da tool', async () => {
     h = await makeHarness()
     const { sid } = newChat()
     await h.stack.runner.send(sid, '/badargs')
+    // nada barra antes: a chamada segue o caminho normal (web_search pede aprovação)
+    await until(() => h.stack.runner.approvals.list().length === 1, 8000, 'aprovação')
+    h.stack.runner.approve(h.stack.runner.approvals.list()[0].id, 'allow')
     await idle(sid)
     const t = lastTool(sid)
     expect(t.meta.toolStatus).toBe('error')
     const text = String(t.message.content)
+    expect(text).toMatch(/^Erro: /)
     expect(text).toContain(
-      'Erro: argumentos inválidos para web_search: falta "query" (obrigatório); parâmetro desconhecido: "q".'
+      'Os argumentos não seguem o esquema de web_search: falta "query" (obrigatório); parâmetro desconhecido: "q".'
     )
     const [web] = toolDefinitions(['web_search'])
     expect(text).toContain(
       `foi enviada compactada; a definição completa dela é:\n${JSON.stringify(web.function)}`
     )
-    // web_search completa (toolsFull): sem a validação da compactação nem a definição no erro
-    // (a validação vem antes da aprovação: a compacta inválida nem chega a pedir)
-    expect(h.stack.runner.approvals.list()).toEqual([])
+    // web_search completa (toolsFull): o erro normal da tool, sem a definição
     const { sid: s2 } = newChat({ toolsFull: ['web_search'] })
     await h.stack.runner.send(s2, '/badargs')
     await until(() => h.stack.runner.approvals.list().length === 1, 8000, 'aprovação')
