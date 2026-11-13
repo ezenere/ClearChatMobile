@@ -15,6 +15,7 @@ import { store } from '@/data/native'
 import { hostStack } from '@/host/native'
 import { settings } from '@/settings/react'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
+import { toolSearchViewOf } from '@/settings/toolSearchUi'
 import { useVoiceCallInheritance } from '@/settings/voiceUi'
 import { Sheet } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
@@ -175,6 +176,20 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
   // as tools que o chat usa (efetivas — herança ao vivo da persona, 1.10.0) e como vão (1.11.0)
   const [effCfg] = useState(() => hostStack.repo.chat(chatId)?.config ?? null)
   const effTools: ToolName[] | null = effCfg?.enabledTools ?? null
+  // busca nativa (1.12.0): o modo efetivo do chat (a definição de cada tool da chamada é a que vai)
+  const [toolView] = useState(() => {
+    const chat = hostStack.repo.chat(chatId)
+    if (!chat) return null
+    const provider = providers.find((p) => p.id === chat.config.providerId) ?? null
+    return toolSearchViewOf({
+      cfg: chat.config,
+      provider,
+      model: chat.config.model,
+      chatId,
+      sessionId: chat.mainSessionId,
+      history: hostStack.repo.path(chat.mainSessionId)
+    })
+  })
   const [value, setValue] = useState<VoiceCallConfig | null>(
     () => (cfg?.voice as VoiceCallConfig | undefined) ?? null
   )
@@ -199,6 +214,7 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
         persona={persona}
         chatTools={effTools}
         compactCfg={effCfg}
+        toolSearch={toolView}
         onChange={(voiceCfg) => {
           setValue(voiceCfg)
           hostStack.repo.updateChat(chatId, { config: { voice: voiceCfg } })

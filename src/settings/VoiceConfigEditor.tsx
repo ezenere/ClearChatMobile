@@ -28,8 +28,9 @@ import { MOBILE_TOOLS } from '@/agent/request'
 import { toolLabel } from '@/agent/toolLabels'
 import { LOCATION_TOOLS } from '@/location/service'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
-import { ToolSendLine, type CompactCfg } from '@/settings/ToolsSend'
+import { ToolSendLine, type CompactCfg, type ToolSearchModeView } from '@/settings/ToolsSend'
 import { compactToolsOn } from '@shared/compactTools'
+import { isNativeMode } from '@shared/toolSearch'
 import { ModelField } from '@/settings/ModelPicker'
 import { FieldLabel, Multiline, Note, NumberField } from '@/settings/ui'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
@@ -66,6 +67,7 @@ export function VoiceConfigEditor({
   persona = null,
   chatTools = null,
   compactCfg = null,
+  toolSearch = null,
   tagsSupport = { supported: false, model: null },
   device = null,
   testID = 'voice-config'
@@ -83,6 +85,11 @@ export function VoiceConfigEditor({
   chatTools?: ToolName[] | null
   /** Compactação do chat/persona (1.11.0): as tools da chamada vão assim (a definição de cada uma). */
   compactCfg?: CompactCfg | null
+  /**
+   * Modo efetivo do chat/persona (busca nativa, 1.12.0): a definição de cada tool da chamada é o item
+   * exato da Messages API (adiada/carregada) quando o provedor tem a busca nativa.
+   */
+  toolSearch?: ToolSearchModeView | null
   /** A voz da chamada interpreta tags de voz? */
   tagsSupport?: { supported: boolean; model: string | null }
   /** Settings de voz deste aparelho: com elas, as seções "Fala"/"Transcrição" (voz da persona/chat). */
@@ -313,9 +320,11 @@ export function VoiceConfigEditor({
       </Card>
       {tools && compactCfg ? (
         <Note>
-          {compactToolsOn(compactCfg)
-            ? 'Vão compactas como no chat (Tools → “Enviar tools compactadas”); “Definição” mostra o que vai. Encerrar a chamada (end_call) vai sempre completa.'
-            : 'Vão completas como no chat (Tools → “Enviar tools compactadas” desligado).'}
+          {!compactToolsOn(compactCfg)
+            ? 'Vão completas como no chat (Tools → “Enviar tools compactadas” desligado).'
+            : isNativeMode(toolSearch?.mode)
+              ? `Vão como no chat (Tools → “Enviar tools compactadas”: ${toolSearch?.label}) — completas, adiadas ou carregadas; “Definição” mostra o item exato. Encerrar a chamada (end_call) vai sempre carregada.`
+              : 'Vão compactas como no chat (Tools → “Enviar tools compactadas”); “Definição” mostra o que vai. Encerrar a chamada (end_call) vai sempre completa.'}
         </Note>
       ) : null}
       {tools ? (
@@ -335,6 +344,7 @@ export function VoiceConfigEditor({
                   cfg={compactCfg}
                   enabled={tools.includes(t)}
                   chip={false}
+                  view={toolSearch}
                   testID={`${testID}-tool-send-${t}`}
                 />
               ) : null}

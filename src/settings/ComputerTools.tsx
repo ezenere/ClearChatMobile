@@ -3,7 +3,8 @@
 // chat — a mesma em todo aparelho —, esmaecidas e alternáveis, com a nota de que o celular não as
 // manda ao modelo (nada escondido vai ao modelo). Valem quando o chat roda num computador. Com a
 // compactação ligada (1.11.0), cada uma ligada ganha o chip "compacta"/"completa" (vale quando o chat
-// roda num computador; a definição de lá depende do computador e não aparece aqui).
+// roda num computador; a definição de lá depende do computador e não aparece aqui) — "adiada"/
+// "carregada" quando o modo efetivo é a busca nativa do provedor (1.12.0).
 import type { ReactNode } from 'react'
 import { View } from 'react-native'
 import { COMPUTER_TOOL_NAMES, DEVICE_ONLY_NOTE, DEVICE_ONLY_TITLE } from '@shared/deviceTools'
@@ -11,7 +12,7 @@ import { TOOL_LABELS } from '@shared/tools'
 import type { ChatConfig, ToolName } from '@shared/types'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { spacing } from '@/ui/theme'
-import { ToolSendLine, type CompactCfg } from './ToolsSend'
+import { ToolSendLine, type CompactCfg, type ToolSearchModeView } from './ToolsSend'
 import { FieldLabel, Note } from './ui'
 
 export function ComputerToolsGroup({
@@ -29,8 +30,12 @@ export function ComputerToolsGroup({
   wrap?: (tool: ToolName, row: ReactNode) => ReactNode
   testID?: string
   rowTestID?: (tool: ToolName) => string
-  /** Compactação (1.11.0): o chip "compacta"/"completa" de cada uma ligada. */
-  send?: { cfg: CompactCfg; patch?: (p: Partial<ChatConfig>) => void }
+  /** Compactação (1.11.0): o chip "compacta"/"completa" (1.12.0: "adiada"/"carregada") de cada uma. */
+  send?: {
+    cfg: CompactCfg
+    patch?: (p: Partial<ChatConfig>) => void
+    view?: ToolSearchModeView | null
+  }
 }) {
   return (
     <>
@@ -54,6 +59,7 @@ export function ComputerToolsGroup({
                   enabled={tools.includes(t)}
                   def={false}
                   dim
+                  view={send.view}
                 />
               ) : null}
             </>

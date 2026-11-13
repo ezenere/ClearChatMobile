@@ -3,7 +3,8 @@
 // (@shared/modelParams) e as tools: as que o celular roda e, esmaecidas, as só do computador — a
 // lista do chat é a mesma em todo aparelho (§4.3.6); o celular só manda ao modelo as que executa.
 // Como vão (1.11.0): "Enviar tools compactadas" com o que vai junto, o chip "compacta"/"completa" e a
-// definição de cada uma.
+// definição de cada uma; 1.12.0: o modo efetivo com o provedor + modelo escolhidos (busca nativa do
+// provedor ou versão local, com o motivo e o aviso), "adiada"/"carregada" e o item exato.
 // Nada vira próprio do chat por causa do aparelho, só o que o usuário muda aqui. Roda aqui ao enviar.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useRouter } from 'expo-router'
@@ -16,7 +17,7 @@ import { withTool } from '@shared/deviceTools'
 import type { ChatConfig, ChatParams, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { useSession } from '@/account/react'
-import { settings as settingsService } from '@/settings/react'
+import { readAt, settings as settingsService } from '@/settings/react'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { store } from '@/data/native'
 import { MOBILE_TOOLS } from '@/agent/request'
@@ -40,6 +41,8 @@ import {
 } from '@/host/newChat'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
 import { CompactToolsCard, ToolSendLine } from '@/settings/ToolsSend'
+import { toolSearchViewOf } from '@/settings/toolSearchUi'
+import { useToolSearchCapsVersion } from '@/settings/useToolSearch'
 import { ModelPicker, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { Button } from '@/ui/Button'
@@ -125,6 +128,16 @@ export default function NewChatScreen() {
   const modelList = models.pid === providerId ? models.list : null
   const info = modelList?.find((m) => m.id === model) ?? null
   const engines = searchPlan((id) => store.setting(id)).map((e) => ENGINE_META[e.id].label)
+  // busca nativa (1.12.0): o modo com o provedor + modelo + tools do formulário (o da 1ª request)
+  const tv = useToolSearchCapsVersion()
+  const toolView = readAt(tv, () =>
+    toolSearchViewOf({
+      cfg: { ...base, providerId, model: model.trim(), params, enabledTools: tools, ...send },
+      provider,
+      model,
+      models: modelList
+    })
+  )
 
   const create = async () => {
     if (!provider || !model.trim()) {
@@ -312,6 +325,7 @@ export default function NewChatScreen() {
           cfg={sendCfg}
           onChange={(toolsCompact) => patchSend({ toolsCompact })}
           sent={MOBILE_TOOLS.filter((t) => tools.includes(t))}
+          view={toolView}
           testID="new-tools-compact"
         />
         <View style={st.box}>
@@ -329,6 +343,7 @@ export default function NewChatScreen() {
                 cfg={sendCfg}
                 patch={patchSend}
                 enabled={tools.includes(t)}
+                view={toolView}
                 testID={`new-tool-send-${t}`}
               />
             </View>
@@ -344,7 +359,7 @@ export default function NewChatScreen() {
         <ComputerToolsGroup
           tools={tools}
           onToggle={(t, v) => setTools((x) => withTool(x, t, v))}
-          send={{ cfg: sendCfg, patch: patchSend }}
+          send={{ cfg: sendCfg, patch: patchSend, view: toolView }}
         />
       </ScrollView>
       <BottomBarButton

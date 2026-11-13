@@ -2,6 +2,8 @@
 // fila"/"enviada agora", voz), resposta do assistente (raciocínio recolhível, Markdown, cards das
 // tools, rodapé com modelo/tokens/cache/custo/duração), resumo de compactação, erro, marcadores de
 // chamada, mensagens de outros chats/agente pai/irmãos, resultado de subagente, extração de memória.
+// Busca nativa de tools (1.12.0): o chip "buscou tools: …" de cada busca do provedor (blocos de
+// `native`) e o modo em que a resposta foi gerada no rodapé (`meta.toolSearch`).
 import Ionicons from '@expo/vector-icons/Ionicons'
 import {
   createContext,
@@ -16,7 +18,8 @@ import type { SiblingInfo } from '@shared/branches'
 import { contentText, messageAttachments, toolContentText } from '@shared/attachments'
 import { splitInterChatText } from '@shared/interChat'
 import { isSiblingKind, splitSiblingText } from '@shared/siblings'
-import type { Session, StoredMessage, StreamDraft } from '@shared/types'
+import type { NativeTurn, Session, StoredMessage, StreamDraft } from '@shared/types'
+import { nativeSearchChip, nativeSearches, toolSearchMetaLabel } from '@shared/toolSearch'
 import { callUsageLines, voiceBadgeText } from '@shared/voiceCallMarks'
 import { liveDimFrom } from '@shared/heardText'
 import { dayLabel } from '@vendor/renderer/dates'
@@ -261,6 +264,47 @@ function Reasoning({ msg, text }: { msg: StoredMessage; text: string }) {
   )
 }
 
+/**
+ * Buscas de tools feitas pelo provedor nesta resposta (busca nativa, 1.12.0 — blocos de `native`):
+ * um chip por busca, ex.: "buscou tools: read_file, shell"; tocar mostra o padrão da busca.
+ */
+function ToolSearchChips({ native }: { native?: NativeTurn }) {
+  const [open, setOpen] = useState<number | null>(null)
+  const list = nativeSearches(native)
+  if (!list.length) return null
+  const who = native?.kind === 'openrouter' ? 'pelo OpenRouter' : 'pelo provedor'
+  return (
+    <View style={st.searchChips}>
+      {list.map((x, i) => (
+        <View key={i} style={{ gap: 4 }}>
+          <Pressable
+            onPress={() => setOpen((v) => (v === i ? null : i))}
+            style={({ pressed }) => [st.searchChip, pressed && { opacity: 0.7 }]}
+            accessibilityRole="button"
+            accessibilityLabel={`${nativeSearchChip(x)} — busca feita ${who}`}
+            testID="tool-search-chip"
+          >
+            <Ionicons name="search-outline" size={12} color={colors.subtle} />
+            <Text style={st.searchChipText}>{nativeSearchChip(x)}</Text>
+          </Pressable>
+          {open === i ? (
+            <Text style={st.searchDetail} testID="tool-search-chip-detail">
+              Busca de tools feita {who}
+              {x.query ? (
+                <>
+                  {' com '}
+                  <Text style={st.searchQuery}>{x.query}</Text>
+                </>
+              ) : null}
+              . As encontradas passam a valer nesta conversa.
+            </Text>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  )
+}
+
 function UsageFooter({ msg }: { msg: StoredMessage }) {
   const u = msg.meta.usage
   const parts: string[] = []
@@ -275,9 +319,19 @@ function UsageFooter({ msg }: { msg: StoredMessage }) {
   }
   const d = formatDuration(msg.meta.durationMs)
   if (d) parts.push(d)
+  // busca nativa de tools (1.12.0): o modo em que a resposta foi gerada (só exibição)
+  const ts = msg.meta.toolSearch
+  const tsLabel = ts ? toolSearchMetaLabel(ts) : null
+  if (tsLabel) parts.push(tsLabel)
   if (!parts.length) return <View style={{ flex: 1 }} />
   return (
-    <View style={st.usage} testID="usage-footer">
+    <View
+      style={st.usage}
+      testID="usage-footer"
+      accessibilityLabel={
+        ts?.reason ? `${parts.join(', ')}. Envio das tools: ${ts.reason}` : undefined
+      }
+    >
       <Ionicons name="hardware-chip-outline" size={11} color={colors.faint} />
       <Text style={st.usageText} numberOfLines={2}>
         {parts.join('  ·  ')}
@@ -344,6 +398,7 @@ function AssistantMessage({ msg }: { msg: StoredMessage }) {
           <Text style={st.interruptedText}>Interrompida pelo usuário</Text>
         </View>
       ) : null}
+      <ToolSearchChips native={m.native} />
       {(m.tool_calls ?? []).map((tc) =>
         tc.function.name === 'end_call' ? (
           <EndCallLine key={tc.id} args={tc.function.arguments} result={c.results.get(tc.id)} />
@@ -834,6 +889,20 @@ const st = StyleSheet.create({
     marginTop: 4
   },
   usage: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  searchChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  searchChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 7,
+    paddingVertical: 3
+  },
+  searchChipText: { color: colors.subtle, fontSize: 11.5 },
+  searchDetail: { color: colors.subtle, fontSize: 12, lineHeight: 17, maxWidth: 320 },
+  searchQuery: { fontFamily: font.mono, color: colors.muted },
   usageText: { flex: 1, color: colors.faint, fontSize: 11, fontVariant: ['tabular-nums'] },
   reasoning: { marginBottom: 6 },
   reasonHead: {

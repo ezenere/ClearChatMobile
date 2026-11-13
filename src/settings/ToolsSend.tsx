@@ -1,11 +1,15 @@
 // Tools compactadas (protocolo 1.11.0, §4.3.6 — "Tools compactadas e `datetime`"; @shared/
-// compactTools) nas listas de tools do celular (configurações do chat, persona, Novo chat, tools da
-// chamada) — = `ToolFullChip`, `CompactToolsInfo` e `ToolDefInfo` do desktop, no jeito do celular:
-// - "Enviar tools compactadas" (`toolsCompact`) com a linha de estado e a folha "O que vai junto":
-//   o prompt fixo e a definição da `search_tool`, exatamente como vão (textos do app, só leitura);
-// - em cada tool, o chip "compacta"/"completa" (`toolsFull`, com a marca "↺ neste chat" da unidade
-//   `toolsFull.<tool>` no chat que herda) e o "</> Definição", que mostra a definição que vai no modo
-//   atual (compacta, ou a completa como ESTE celular a manda).
+// compactTools) e a busca nativa de tools (1.12.0, @shared/toolSearch) nas listas de tools do
+// celular (configurações do chat, persona, Novo chat, tools da chamada) — = `ToolFullChip`,
+// `CompactToolsInfo`, `ToolDefInfo` e a linha do modo do desktop, no jeito do celular:
+// - "Enviar tools compactadas" (`toolsCompact`) com a linha de estado — o modo efetivo deste chat +
+//   modelo (busca nativa da Anthropic / do OpenRouter / versão local do app), o motivo e, na versão
+//   local, o aviso — e a folha "O que vai junto": na versão local o prompt fixo e a `tool_search`;
+//   num modo nativo a entrada de busca do provedor, exatamente como vão (só leitura);
+// - em cada tool, o chip "compacta"/"completa" ("adiada"/"carregada" nos modos nativos; `toolsFull`,
+//   com a marca "↺ neste chat" da unidade `toolsFull.<tool>` no chat que herda) e o "</> Definição",
+//   que mostra o que vai no modo atual (compacta, completa como ESTE celular a manda, ou o item exato
+//   da Messages API com `defer_loading`).
 // Nada oculto vai ao modelo: tudo que a compactação acrescenta aparece aqui.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useState, type ReactNode } from 'react'
@@ -15,12 +19,14 @@ import {
   COMPACT_TOOLS_PROMPT,
   compactToolsOn,
   isCompactable,
+  NATIVE_TOOL_SEARCH_HELP,
   SEARCH_TOOL_DEFINITION,
   sendsCompact,
   sentToolDefinition,
   shortToolDescription,
   withFullTool
 } from '@shared/compactTools'
+import { isNativeMode, SEARCH_ENTRY_NOTE, TOOL_SEARCH_LOCAL_NOTICE } from '@shared/toolSearch'
 import { MEMORY_TOOL_NAMES, SKILL_TOOL_NAMES, TOOL_LABELS } from '@shared/tools'
 import type { ChatConfig } from '@shared/types'
 import { phoneToolDefinition } from '@/agent/request'
@@ -30,36 +36,49 @@ import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { Sheet } from '@/ui/Sheet'
 import { colors, font, radius, spacing } from '@/ui/theme'
 import { compactStatusText, type CompactCfg } from './compactUi'
+import {
+  nativeToolItem,
+  toolChipText,
+  toolSearchLine,
+  type ToolSearchModeView
+} from './toolSearchUi'
 import { FieldLabel, Note } from './ui'
 
-export type { CompactCfg }
+export type { CompactCfg, ToolSearchModeView }
 type Patch = (p: Partial<ChatConfig>) => void
 
 /**
- * "Enviar tools compactadas": o interruptor (com a marca da herança, via `wrap`), a linha de estado e
- * a folha com o prompt fixo e a `search_tool` exatamente como vão.
+ * "Enviar tools compactadas": o interruptor (com a marca da herança, via `wrap`), a linha de estado
+ * (o modo efetivo: busca nativa do provedor ou versão local, com o motivo e o aviso) e a folha com o
+ * que vai junto, exatamente como vai.
  */
 export function CompactToolsCard({
   cfg,
   onChange,
   sent,
+  view,
   wrap,
   testID = 'tools-compact'
 }: {
   cfg: CompactCfg
   onChange: (on: boolean) => void
-  /** Tools ligadas que o celular manda (contagem da linha de estado). */
+  /** Tools ligadas que o celular manda (contagem da linha de estado sem o modo resolvido). */
   sent: readonly string[]
+  /** Modo efetivo deste chat/persona + modelo (1.12.0 — `toolSearchViewOf`). */
+  view?: ToolSearchModeView | null
   /** Envolve o interruptor (ex.: a marca "↺ neste chat" de `toolsCompact`). */
   wrap?: (row: ReactNode) => ReactNode
   testID?: string
 }) {
   const [info, setInfo] = useState(false)
+  const on = compactToolsOn(cfg)
+  const native = on && isNativeMode(view?.mode)
+  const line = on && view ? toolSearchLine(view) : null
   const row = (
     <ToggleRow
       title="Enviar tools compactadas"
-      subtitle="Cada tool vai só com o nome e uma descrição curta; o modelo lê a definição completa com search_tool antes de usar. Marque “completa” nas que devem ir inteiras."
-      value={compactToolsOn(cfg)}
+      subtitle="Economiza contexto. Onde o provedor tem busca nativa de ferramentas (Anthropic; OpenRouter pela Messages API), cada tool vai completa mas adiada e o modelo a encontra pela busca do provedor. Nos outros endpoints, a versão local do app: cada tool vai só com o nome e uma descrição curta e o modelo lê a definição completa com tool_search. Marque “completa”/“carregada” nas que devem ir inteiras desde o início."
+      value={on}
       onChange={onChange}
       testID={testID}
     />
@@ -69,32 +88,110 @@ export function CompactToolsCard({
       <Card padded={false} testID={`${testID}-card`}>
         <View style={st.pad}>
           {wrap ? wrap(row) : row}
-          <Text style={st.status} testID={`${testID}-status`}>
-            {compactStatusText(cfg, sent)}
-          </Text>
+          {line ? (
+            <View style={{ gap: 6 }} testID={`${testID}-mode`}>
+              <Text style={st.status} testID={`${testID}-status`}>
+                <Text style={st.modeLabel} testID={`${testID}-mode-${view!.mode}`}>
+                  {line.label}
+                </Text>
+                {`: ${line.status}`}
+              </Text>
+              {line.reason ? (
+                <Text style={st.status} testID={`${testID}-reason`}>
+                  {line.reason}
+                </Text>
+              ) : null}
+              {line.notice ? (
+                <View style={st.notice} testID={`${testID}-local-notice`}>
+                  <Ionicons name="information-circle-outline" size={15} color={colors.warning} />
+                  <Text style={st.noticeText}>{line.notice}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={st.status} testID={`${testID}-status`}>
+              {on && view ? 'Todas as ligadas vão completas.' : compactStatusText(cfg, sent)}
+            </Text>
+          )}
         </View>
         <Pressable
           onPress={() => setInfo(true)}
           style={({ pressed }) => [st.infoRow, pressed && { backgroundColor: colors.hover }]}
           accessibilityRole="button"
-          accessibilityLabel="O que vai junto: o prompt fixo e a definição da search_tool"
+          accessibilityLabel={
+            native
+              ? 'O que vai junto: a entrada de busca do provedor'
+              : 'O que vai junto: o prompt fixo e a definição da tool_search'
+          }
           testID={`${testID}-info`}
         >
           <Ionicons name="code-slash-outline" size={17} color={colors.accentStrong} />
           <View style={{ flex: 1 }}>
             <Text style={st.infoTitle}>O que vai junto</Text>
-            <Text style={st.infoSub}>Prompt fixo e search_tool, exatamente como vão</Text>
+            <Text style={st.infoSub}>
+              {native
+                ? 'Entrada de busca do provedor, exatamente como vai'
+                : 'Prompt fixo e tool_search, exatamente como vão'}
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={17} color={colors.subtle} />
         </Pressable>
       </Card>
-      <CompactToolsSheet visible={info} onClose={() => setInfo(false)} />
+      <CompactToolsSheet
+        visible={info}
+        onClose={() => setInfo(false)}
+        view={on ? (view ?? null) : null}
+      />
     </>
   )
 }
 
-/** Folha "Tools compactadas": o que a compactação faz, o prompt fixo e a `search_tool`. */
-export function CompactToolsSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+/**
+ * Folha "Tools compactadas": o que vai, exatamente, no modo efetivo. Versão local (1.11.0): o
+ * prompt fixo e a `tool_search` (textos do app, não editáveis). Busca nativa (1.12.0): a entrada de
+ * busca do servidor como vai (descrição do provedor) — sem prompt do app e sem `tool_search`.
+ */
+export function CompactToolsSheet({
+  visible,
+  onClose,
+  view = null
+}: {
+  visible: boolean
+  onClose: () => void
+  view?: ToolSearchModeView | null
+}) {
+  if (view && isNativeMode(view.mode)) {
+    return (
+      <Sheet
+        visible={visible}
+        onClose={onClose}
+        title={`Tools compactadas · ${view.label}`}
+        subtitle="O que vai, exatamente — nenhum texto do app no system prompt."
+        maxHeight="90%"
+        testID="compact-tools-sheet"
+      >
+        <View style={st.sheetBody}>
+          <Text style={st.p} testID="compact-tools-native">
+            {NATIVE_TOOL_SEARCH_HELP}
+          </Text>
+          <Text style={st.p}>
+            Cada tool que não está marcada “carregada” vai com a definição completa e defer_loading:
+            true; as marcadas (e end_call) vão carregadas, e a última carregada leva o ponto de
+            cache. A entrada de busca abaixo vai por último. {SEARCH_ENTRY_NOTE[view.mode]} Não há
+            tool_search do app nem instrução no system prompt.
+            {view.mode === 'native-openrouter'
+              ? ' Enquanto houver tools adiadas, a request vai para /messages (Messages API do OpenRouter) em vez de /chat/completions.'
+              : ''}{' '}
+            A “Definição” de cada tool mostra o item exato.
+          </Text>
+          <Text style={st.codeLabel}>Entrada de busca — último item do array tools:</Text>
+          <Code testID="compact-tools-search-entry">
+            {JSON.stringify(view.searchEntry, null, 2)}
+          </Code>
+        </View>
+      </Sheet>
+    )
+  }
   return (
     <Sheet
       visible={visible}
@@ -106,9 +203,15 @@ export function CompactToolsSheet({ visible, onClose }: { visible: boolean; onCl
     >
       <View style={st.sheetBody}>
         <Text style={st.p}>{COMPACT_TOOLS_HELP}</Text>
+        {view?.mode === 'local' ? (
+          <Text style={st.p} testID="compact-tools-local">
+            {TOOL_SEARCH_LOCAL_NOTICE}
+            {view.reason ? ` Motivo: ${view.reason}.` : ''}
+          </Text>
+        ) : null}
         <Text style={st.p}>
           Cada tool que não está marcada “completa” vai só com o nome e a descrição curta do app,
-          com parâmetros vazios. Havendo pelo menos uma compacta, vão também a search_tool (abaixo)
+          com parâmetros vazios. Havendo pelo menos uma compacta, vão também a tool_search (abaixo)
           e o prompt fixo no fim do system prompt; sem nenhuma compacta, nenhum dos dois. Vale para
           memória, subagentes e a chamada de voz (menos end_call, sempre completa).
         </Text>
@@ -117,7 +220,7 @@ export function CompactToolsSheet({ visible, onClose }: { visible: boolean; onCl
         </Text>
         <Code testID="compact-tools-prompt">{COMPACT_TOOLS_PROMPT}</Code>
         <Text style={st.codeLabel}>
-          search_tool — último item do array tools (sempre completa):
+          tool_search — último item do array tools (sempre completa):
         </Text>
         <Code testID="compact-tools-search-tool">
           {JSON.stringify(SEARCH_TOOL_DEFINITION, null, 2)}
@@ -138,10 +241,10 @@ function Code({ children, testID }: { children: string; testID?: string }) {
 }
 
 /**
- * Linha do envio de uma tool (embaixo da linha dela): o chip "compacta"/"completa" (compactação
- * ligada e tool ligada; `patch` ausente = só leitura), a marca "↺ neste chat" de `toolsFull.<tool>`
- * e o "</> Definição" (o que vai, no modo atual). `def` = false esconde a definição (tools que o
- * celular não manda — as do computador).
+ * Linha do envio de uma tool (embaixo da linha dela): o chip "compacta"/"completa" ("adiada"/
+ * "carregada" num modo de busca nativa; compactação ligada e tool ligada; `patch` ausente = só
+ * leitura), a marca "↺ neste chat" de `toolsFull.<tool>` e o "</> Definição" (o que vai, no modo
+ * atual). `def` = false esconde a definição (tools que o celular não manda — as do computador).
  */
 export function ToolSendLine({
   name,
@@ -151,6 +254,7 @@ export function ToolSendLine({
   def = true,
   chip: withChip = true,
   dim,
+  view = null,
   testID
 }: {
   name: string
@@ -162,6 +266,8 @@ export function ToolSendLine({
   /** false = sem o chip (tools da chamada: a compactação é a do chat). */
   chip?: boolean
   dim?: boolean
+  /** Modo efetivo do chat/persona (1.12.0): nos nativos, "adiada"/"carregada" e o item exato. */
+  view?: ToolSearchModeView | null
   testID?: string
 }) {
   const [open, setOpen] = useState(false)
@@ -172,6 +278,9 @@ export function ToolSendLine({
   const fullDef = def ? phoneToolDefinition(name) : null
   if (!chip && !fullDef) return null
   const label = toolLabel(name)
+  const native = compactToolsOn(cfg) && isNativeMode(view?.mode)
+  const text = toolChipText(native, full)
+  const other = toolChipText(native, !full)
   return (
     <View style={[st.lineWrap, dim && { opacity: 0.6 }]}>
       <View style={st.line}>
@@ -191,12 +300,10 @@ export function ToolSendLine({
             ]}
             accessibilityRole="button"
             accessibilityState={{ selected: full }}
-            accessibilityLabel={`${label}: vai ${full ? 'completa' : 'compacta'}.${patch ? ` Toque para mandar ${full ? 'compacta' : 'completa'}.` : ''}`}
+            accessibilityLabel={`${label}: vai ${text}.${patch ? ` Toque para mandar ${other}.` : ''}`}
             testID={`${id}-chip`}
           >
-            <Text style={[st.chipText, full && st.chipTextFull]}>
-              {full ? 'completa' : 'compacta'}
-            </Text>
+            <Text style={[st.chipText, full && st.chipTextFull]}>{text}</Text>
           </Pressable>
         ) : null}
         {chip ? (
@@ -228,6 +335,7 @@ export function ToolSendLine({
           name={name}
           cfg={cfg}
           fullDef={fullDef}
+          view={native ? view : null}
           visible={open}
           onClose={() => setOpen(false)}
         />
@@ -244,10 +352,13 @@ export function ToolSendLine({
 export function OtherToolsGroup({
   cfg,
   patch,
+  view = null,
   testID = 'tools-other-compact'
 }: {
   cfg: CompactCfg
   patch?: Patch
+  /** Modo efetivo (1.12.0): "adiada"/"carregada" e o item exato nos modos nativos. */
+  view?: ToolSearchModeView | null
   testID?: string
 }) {
   if (!compactToolsOn(cfg)) return null
@@ -267,7 +378,15 @@ export function OtherToolsGroup({
                 </Text>
                 <Text style={st.otherName}>{t}</Text>
               </View>
-              <ToolSendLine name={t} cfg={cfg} patch={patch} enabled def={!skill} dim={skill} />
+              <ToolSendLine
+                name={t}
+                cfg={cfg}
+                patch={patch}
+                enabled
+                def={!skill}
+                dim={skill}
+                view={view}
+              />
             </View>
           )
         })}
@@ -280,22 +399,40 @@ export function OtherToolsGroup({
   )
 }
 
-/** Folha da definição que vai de uma tool (compacta ou completa, conforme a config). */
+/**
+ * Folha da definição que vai de uma tool (compacta ou completa, conforme a config; num modo de busca
+ * nativa, o item exato da Messages API — adiado ou carregado).
+ */
 export function ToolDefinitionSheet({
   name,
   cfg,
   fullDef,
+  view = null,
   visible,
   onClose
 }: {
   name: string
   cfg: CompactCfg
   fullDef: NonNullable<ReturnType<typeof phoneToolDefinition>>
+  /** Modo nativo (1.12.0): mostra o item exato de `tools[]`. */
+  view?: ToolSearchModeView | null
   visible: boolean
   onClose: () => void
 }) {
   const compact = sendsCompact(name, cfg)
   const native = cfg.nativeTools !== false
+  if (view && isNativeMode(view.mode) && isCompactable(name))
+    return (
+      <NativeToolDefinitionSheet
+        name={name}
+        fullDef={fullDef}
+        deferred={compact}
+        nativeTools={native}
+        view={view}
+        visible={visible}
+        onClose={onClose}
+      />
+    )
   return (
     <Sheet
       visible={visible}
@@ -311,7 +448,7 @@ export function ToolDefinitionSheet({
             <Text style={st.p} testID="tool-def-mode-compact">
               <Text style={st.strong}>Vai compacta</Text>: só o nome e a descrição curta (“
               {shortToolDescription(name, fullDef.function.description)}”), com os parâmetros
-              vazios. A definição completa volta ao modelo pela search_tool (e no erro, se ele a
+              vazios. A definição completa volta ao modelo pela tool_search (e no erro, se ele a
               chamar com argumentos inválidos). Marque “completa” para mandá-la inteira.
             </Text>
           ) : (
@@ -339,9 +476,78 @@ export function ToolDefinitionSheet({
   )
 }
 
+/** Definição de uma tool num modo de busca nativa: o item exato da Messages API (adiada ou carregada). */
+function NativeToolDefinitionSheet({
+  name,
+  fullDef,
+  deferred,
+  nativeTools,
+  view,
+  visible,
+  onClose
+}: {
+  name: string
+  fullDef: NonNullable<ReturnType<typeof phoneToolDefinition>>
+  deferred: boolean
+  nativeTools: boolean
+  view: ToolSearchModeView
+  visible: boolean
+  onClose: () => void
+}) {
+  const item = nativeToolItem(view, name, fullDef, deferred)
+  const who = view.mode === 'native-anthropic' ? 'da Anthropic' : 'do OpenRouter'
+  return (
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      title={toolLabel(name)}
+      subtitle={`${name} · vai ${deferred ? 'adiada' : 'carregada'}`}
+      maxHeight="90%"
+      testID={`tool-def-sheet-${name}`}
+    >
+      {visible ? (
+        <View style={st.sheetBody}>
+          {deferred ? (
+            <Text style={st.p} testID="tool-def-mode-deferred">
+              <Text style={st.strong}>Vai adiada</Text> (defer_loading: true): a definição completa
+              vai na request, mas o modelo só a vê depois de encontrá-la pela busca nativa {who}.
+              Marque “carregada” para ele vê-la desde o início.
+            </Text>
+          ) : (
+            <Text style={st.p} testID="tool-def-mode-loaded">
+              <Text style={st.strong}>Vai carregada</Text> desde o início (sem defer_loading).
+              {item.cache_control
+                ? ' Leva o ponto de cache (cache_control): é a última tool carregada.'
+                : ''}
+            </Text>
+          )}
+          {!nativeTools ? (
+            <Text style={st.p}>“Tools nativas” está desligado: o campo tools não é enviado.</Text>
+          ) : null}
+          <Text style={st.codeLabel}>Item exato do array tools (formato da Messages API):</Text>
+          <Code testID="tool-def-json">{JSON.stringify(item, null, 2)}</Code>
+        </View>
+      ) : null}
+    </Sheet>
+  )
+}
+
 const st = StyleSheet.create({
   pad: { paddingHorizontal: spacing.lg, paddingTop: 2, paddingBottom: 10 },
   status: { color: colors.subtle, fontSize: 12.5, lineHeight: 17 },
+  modeLabel: { color: colors.fg, fontWeight: '600' },
+  notice: {
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'flex-start',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 181, 68, 0.32)',
+    backgroundColor: colors.warningSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 6
+  },
+  noticeText: { flex: 1, color: colors.warning, fontSize: 12.5, lineHeight: 17 },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',

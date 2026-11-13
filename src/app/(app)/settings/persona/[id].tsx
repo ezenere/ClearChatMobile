@@ -2,7 +2,9 @@
 // as abas Modelo (par provedor + modelo ou "usar o padrão", parâmetros), Chat (system prompt,
 // janela/compactação, assinatura do app, opções do computador), Ferramentas (as que rodam também no
 // celular e, esmaecidas, as só do computador — mesma lista em todo aparelho, §4.3.6; e como vão:
-// "Enviar tools compactadas", o chip "compacta"/"completa" e a definição de cada uma — 1.11.0) e
+// "Enviar tools compactadas", o chip "compacta"/"completa" e a definição de cada uma — 1.11.0; o modo
+// efetivo com o modelo da persona — busca nativa do provedor ou versão local, com o motivo e o aviso,
+// "adiada"/"carregada" e o item exato de `tools[]` — 1.12.0) e
 // Memória (coleções ativas e onde grava — é a persona que define a memória dos chats novos) e
 // Voz (a chamada de voz da persona — `VoiceConfigEditor`).
 // Campos não alterados seguem "Novos chats"; os que o celular não edita ficam como estão.
@@ -24,6 +26,8 @@ import { followersByPreset } from '@/data/inherit'
 import { store } from '@/data/native'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
 import { CompactToolsCard, OtherToolsGroup, ToolSendLine } from '@/settings/ToolsSend'
+import { toolSearchViewOf } from '@/settings/toolSearchUi'
+import { useToolSearchCapsVersion } from '@/settings/useToolSearch'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
 import { useVoiceCallInheritance } from '@/settings/voiceUi'
@@ -36,7 +40,7 @@ import {
 import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { resolvePresetConfig } from '@/settings/records'
-import { settings } from '@/settings/react'
+import { readAt, settings } from '@/settings/react'
 import { FieldLabel, IconPicker, Multiline, Note, Segmented, SettingsScreen } from '@/settings/ui'
 import { BottomBarButton } from '@/ui/BottomBar'
 import { TextButton } from '@/ui/Button'
@@ -108,6 +112,11 @@ export default function PersonaEditor() {
   const info =
     models.pid === cfg.providerId ? (models.list?.find((m) => m.id === cfg.model) ?? null) : null
   const ownModel = !!draft.model?.trim() && !missingProvider
+  // busca nativa (1.12.0): o modo efetivo com o modelo da persona (só a config — sem histórico)
+  const tv = useToolSearchCapsVersion()
+  const toolView = readAt(tv, () =>
+    toolSearchViewOf({ cfg, provider, model: cfg.model, models: models.list })
+  )
 
   const save = () => {
     try {
@@ -314,6 +323,7 @@ export default function PersonaEditor() {
             cfg={cfg}
             onChange={(toolsCompact) => patch({ toolsCompact })}
             sent={portable.filter((t) => tools.includes(t))}
+            view={toolView}
             testID="persona-tools-compact"
           />
           <Note>
@@ -338,17 +348,18 @@ export default function PersonaEditor() {
                   cfg={cfg}
                   patch={patch}
                   enabled={tools.includes(t)}
+                  view={toolView}
                   testID={`persona-tool-send-${t}`}
                 />
               </View>
             ))}
           </Card>
-          <OtherToolsGroup cfg={cfg} patch={patch} testID="persona-tools-other" />
+          <OtherToolsGroup cfg={cfg} patch={patch} view={toolView} testID="persona-tools-other" />
           <ComputerToolsGroup
             tools={tools}
             onToggle={toggleTool}
             rowTestID={(t) => `persona-tool-${t}`}
-            send={{ cfg, patch }}
+            send={{ cfg, patch, view: toolView }}
           />
         </>
       ) : null}
@@ -373,6 +384,7 @@ export default function PersonaEditor() {
           device={voiceInherit.device}
           chatTools={cfg.enabledTools ?? null}
           compactCfg={cfg}
+          toolSearch={toolView}
         />
       ) : null}
     </SettingsScreen>

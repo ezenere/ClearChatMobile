@@ -10,7 +10,10 @@
 // Tudo que a tela mostra é a config EFETIVA — o mesmo que vai ao modelo (nada escondido). As tools
 // só do computador (§4.3.6) ficam na lista do chat, esmaecidas e alternáveis, com a nota de que o
 // celular não as manda ao modelo. Tools compactadas (1.11.0): "Enviar tools compactadas" com o que vai
-// junto (prompt fixo e search_tool), o chip "compacta"/"completa" e a definição que vai de cada tool.
+// junto (prompt fixo e tool_search), o chip "compacta"/"completa" e a definição que vai de cada tool;
+// busca nativa (1.12.0): o modo efetivo deste chat + modelo calculado aqui com o resolvedor da
+// request (busca nativa da Anthropic / do OpenRouter / versão local com o motivo e o aviso), chips
+// "adiada"/"carregada" e o item exato de `tools[]` de cada tool.
 import { useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
@@ -48,6 +51,8 @@ import { useLiveVersion } from '@/live/react'
 import { remote } from '@/remote/native'
 import { ComputerToolsGroup } from '@/settings/ComputerTools'
 import { CompactToolsCard, OtherToolsGroup, ToolSendLine } from '@/settings/ToolsSend'
+import { toolSearchViewOf } from '@/settings/toolSearchUi'
+import { useToolSearchCapsVersion } from '@/settings/useToolSearch'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor } from '@/settings/ParamsEditor'
@@ -174,6 +179,7 @@ export default function ChatConfigScreen() {
   const sv = useSettingsVersion()
   const cv = useChatVersion(id)
   const lv = useLiveVersion()
+  const tv = useToolSearchCapsVersion()
   // as versões são os gatilhos de releitura (o React Compiler memoiza chamadas a objetos externos)
   const src = readAt(sv + cv + lv, () => readSource(id, isLive))
   const providers = readAt(sv, () => settings.providers())
@@ -236,6 +242,20 @@ export default function ChatConfigScreen() {
     eff && models.pid === eff.providerId
       ? (models.list?.find((m) => m.id === eff.model) ?? null)
       : null
+  // busca nativa (1.12.0): o modo efetivo deste chat + modelo (o mesmo resolvedor da request; o
+  // histórico da principal decide a mídia enviada — chats ao vivo de outro host, sem ele)
+  const toolView = readAt(cv + tv, () => {
+    if (!eff) return null
+    const sid = isLive ? null : (hostStack.repo.chat(id)?.mainSessionId ?? null)
+    return toolSearchViewOf({
+      cfg: eff,
+      provider,
+      model: eff.model,
+      chatId: id,
+      ...(sid ? { sessionId: sid, history: hostStack.repo.path(sid) } : {}),
+      models: models.list
+    })
+  })
 
   if (!src || !record || !eff || !view)
     return (
@@ -412,6 +432,7 @@ export default function ChatConfigScreen() {
           cfg={eff}
           onChange={(toolsCompact) => patch({ toolsCompact })}
           sent={portable.filter((t) => tools.includes(t))}
+          view={toolView}
           wrap={(row) => (
             <InheritInline units={['toolsCompact']} testID="inherit-mark-toolsCompact">
               {row}
@@ -437,18 +458,19 @@ export default function ChatConfigScreen() {
                   cfg={eff}
                   patch={patch}
                   enabled={tools.includes(t)}
+                  view={toolView}
                   testID={`chat-tool-send-${t}`}
                 />
               </InheritInline>
             </View>
           ))}
         </Card>
-        <OtherToolsGroup cfg={eff} patch={patch} />
+        <OtherToolsGroup cfg={eff} patch={patch} view={toolView} />
         <ComputerToolsGroup
           tools={tools}
           onToggle={toggleTool}
           rowTestID={(t) => `chat-tool-${t}`}
-          send={{ cfg: eff, patch }}
+          send={{ cfg: eff, patch, view: toolView }}
           wrap={(t, row) => (
             <InheritInline units={[`enabledTools.${t}`]} testID={`inherit-mark-tool-${t}`}>
               {row}
