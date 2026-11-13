@@ -19,7 +19,6 @@ import type {
   StreamDraft
 } from '@shared/types'
 import type { Subkeys } from '@/crypto'
-import { runConfigOf } from '@/data/inherit'
 import type { LocalStore } from '@/data/store'
 import type { ChatState } from '@/data/types'
 import { sealCommand, sealResult, type Envelope } from '@/remote/crypto'
@@ -29,7 +28,6 @@ import type { Runner } from '@/agent/runner'
 import type { ChatRepo } from './repo'
 import type { ContentWriter } from './writer'
 import type { DivergenceService } from './divergence'
-import { LOCAL_TOOLS_REFUSAL, usesLocalTools } from './policy'
 
 export interface HostWs {
   request(
@@ -289,16 +287,6 @@ export class HostService {
     }
   }
 
-  /**
-   * Por que o celular não pode executar este chat (null = pode). Sobre a config com que o chat
-   * RODA: a efetiva (herança ao vivo da persona, §4.3.6) com a voz da persona em camadas.
-   */
-  refusal(chatId: string): string | null {
-    const p = this.d.store.getPlain('chat', chatId)
-    if (!p) return null
-    return usesLocalTools(runConfigOf(this.d.store, p.config)) ? LOCAL_TOOLS_REFUSAL : null
-  }
-
   // ---------------- WebSocket ----------------
 
   onConnection(online: boolean): void {
@@ -407,8 +395,6 @@ export class HostService {
    * continuam mesmo sem conexão — o conteúdo vai pela outbox quando a conexão voltar.
    */
   async ensureWindow(chatId: string, purpose: 'run' | 'edit' | 'replay' = 'run'): Promise<void> {
-    const refused = this.refusal(chatId)
-    if (refused) throw new HostError('local_tools', refused)
     if (this.localOnlyChat(chatId)) {
       // sem conta / só neste aparelho não há janela: o turno só depende do app em primeiro plano
       if (!this.foreground) throw new HostError('background', 'O app está em segundo plano.')
@@ -576,13 +562,14 @@ export class HostService {
 
   // ---------------- troca de host (§8.8) ----------------
 
-  /** "Executar neste dispositivo" (chats sem ferramentas locais). */
+  /**
+   * "Executar neste dispositivo". Um chat com ferramentas locais roda aqui sem elas (§4.3.6, §8.9 —
+   * a tela confirma com o aviso forte antes).
+   */
   async takeover(
     chatId: string,
     opts: { mode: 'next_turn' | 'force'; confirmPinned?: boolean }
   ): Promise<'granted' | 'pending'> {
-    const refused = this.refusal(chatId)
-    if (refused) throw new HostError('local_tools', refused)
     if (this.localOnly)
       throw new HostError('no_account', 'Entre numa conta para trocar chats entre dispositivos.')
     if (this.d.store.isLocalOnly(chatId))

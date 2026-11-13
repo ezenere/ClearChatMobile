@@ -93,7 +93,10 @@ const GROUPS = {
       'push.ts',
       // 1.10.0: herança ao vivo da persona (config efetiva, edição/voltar a herdar, migração,
       // congelamento, troca de persona, merge por unidade de `overrides`)
-      'chatInherit.ts'
+      'chatInherit.ts',
+      // 1.10.0: tools de um tipo de aparelho (só no computador / só no celular — nomes, rótulos
+      // das do celular, padrão do app, `withTool` que preserva as desconhecidas, `chatRanOn`)
+      'deviceTools.ts'
     ]
   },
   desktop: {

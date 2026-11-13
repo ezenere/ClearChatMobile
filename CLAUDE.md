@@ -13,8 +13,11 @@
   `src/vendor/` por `npm run vendor` (lista em `scripts/vendor.mjs`). Nunca edite `src/vendor/` à mão:
   corrija na origem e revendore. `npm run vendor:check` confere byte a byte.
 - A cripto DEVE passar em todos os vetores de `docs/test-vectors` (`npm test`).
-- `client: 'mobile'`, `can_host: true` — mas o celular **recusa ser host** de chats com ferramentas locais
-  (§8.9: shell, arquivos, processos, skills). Como controle remoto, faz tudo o que o desktop faz.
+- `client: 'mobile'`, `can_host: true`. Desde 1.10.0 o celular **hospeda** chats com ferramentas locais
+  **sem elas** (§4.3.6 "Tools de um tipo de aparelho", §8.9): a lista de tools é a mesma em todo
+  aparelho, ele só manda ao modelo as que executa, mostra as do computador esmaecidas e nunca as marca
+  como próprias do chat por causa do aparelho; assumir um chat assim pede o aviso forte. Como controle
+  remoto, faz tudo o que o desktop faz.
 - Chave de dados (DEK) e refresh token só no `expo-secure-store` (Keychain/Keystore), nunca em SQLite,
   AsyncStorage ou logs.
 - UI e textos em pt-BR; identificadores em inglês. Tema escuro com os tokens do app desktop.

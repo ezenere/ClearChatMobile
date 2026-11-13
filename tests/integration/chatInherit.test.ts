@@ -3,7 +3,10 @@
 // motor, host e Configurações reais). O chat antigo do desktop migra no celular depois do pull; o
 // chat novo do celular sobe com `overrides` só do que mudou; a persona editada no desktop muda os
 // chats no celular ao vivo; edições concorrentes em campos diferentes mantêm as duas marcas; a
-// persona apagada no celular congela os chats e o tombstone chega ao servidor DEPOIS deles.
+// persona apagada no celular congela os chats e o tombstone chega ao servidor DEPOIS deles. Tools de
+// um tipo de aparelho (§4.3.6): chat novo de uma persona sem tools sobe SEM nenhuma tool própria; na
+// migração, a diferença numa tool do computador só fica própria no chat que rodou num computador
+// (`hostCwd`) e a do celular só no que rodou no celular; "voltar a herdar tudo" não tem caso especial.
 import { afterAll, describe, expect, it } from 'vitest'
 import type { InheritConfig } from '@shared/chatInherit'
 import { AccountService } from '../../src/account/service'
@@ -14,6 +17,7 @@ import { LocalStore } from '../../src/data/store'
 import { createHostStack } from '../../src/host/stack'
 import { finalizeNewChat, presetFromPlain, resolveNewChat } from '../../src/host/newChat'
 import { SettingsService } from '../../src/settings/service'
+import { revertPatch } from '../../src/chat/inheritUi'
 import { openRecord, sealRecord } from '../../src/crypto'
 import type { Change } from '../../src/data/types'
 import { openNodeSql } from '../nodeSql'
@@ -75,7 +79,71 @@ describe.skipIf(!enabled)('herança ao vivo da persona contra o servidor real', 
       enabledTools: ['web_search', 'ask_user'],
       params: { temperature: 0.3 }
     }
+    // persona sem tools: herda o padrão do app (todas — as do computador e as do celular)
+    const tudo = { providerId: 'prov-pc', model: 'modelo-da-persona', systemPrompt: 'Tudo.' }
+    const phoneRuns = [
+      'web_search',
+      'browse_url',
+      'list_models',
+      'delegate_task',
+      'get_chat_info',
+      'list_chats',
+      'send_to_chat',
+      'read_history',
+      'check_subagents',
+      'wait_subagents',
+      'cancel_subagent',
+      'message_subagent',
+      'ask_user'
+    ]
+    const desktopOld = [
+      'list_dir',
+      'read_file',
+      'search_files',
+      'find_files',
+      'present_file',
+      'write_file',
+      'edit_file',
+      'process_start',
+      'process_logs',
+      'process_list',
+      'process_stop',
+      ...phoneRuns
+    ]
     await push(desk, [
+      await item(desk, 'preset', 'p-tudo', null, {
+        sv: 1,
+        name: 'Tudo',
+        description: '',
+        icon: 'sparkles',
+        config: tudo,
+        createdAt: 1,
+        updatedAt: 1
+      }),
+      // celular < 1.10.0: só as tools que ele roda, com "Lugares próximos" e sem "Localização"
+      await item(desk, 'chat', 'c-cel', 'c-cel', {
+        sv: 1,
+        title: 'Do celular',
+        config: {
+          ...tudo,
+          presetId: 'p-tudo',
+          cacheEnabled: false,
+          enabledTools: [...phoneRuns, 'nearby_places']
+        },
+        mainSessionId: 's-cel',
+        createdAt: 3,
+        updatedAt: 3
+      }),
+      // desktop < 1.10.0 (rodou num computador — hostCwd): o shell desligado, sem as do celular
+      await item(desk, 'chat', 'c-pc', 'c-pc', {
+        sv: 1,
+        title: 'Do PC',
+        config: { ...tudo, presetId: 'p-tudo', cacheEnabled: false, enabledTools: desktopOld },
+        mainSessionId: 's-pc',
+        createdAt: 4,
+        updatedAt: 4,
+        hostCwd: { deviceId: 'pc', path: '/home/ana/proj' }
+      }),
       await item(desk, 'provider', 'prov-pc', null, {
         sv: 1,
         name: 'OpenAI do PC',
@@ -181,6 +249,26 @@ describe.skipIf(!enabled)('herança ao vivo da persona contra o servidor real', 
     const old = (await plainOf(desk, 'chat', 'c-antigo'))!.plain
     expect(cfgOf(old).overrides).toEqual({ systemPrompt: true })
     expect(old.updatedAt).toBe(5)
+    // tools de um tipo de aparelho: só o que difere no tipo em que o chat rodou fica próprio
+    for (const id of ['c-cel', 'c-pc'])
+      await waitFor(
+        async () => !!cfgOf((await plainOf(desk, 'chat', id))?.plain).overrides,
+        `${id} migrado no servidor`,
+        20_000
+      )
+    expect(cfgOf((await plainOf(desk, 'chat', 'c-cel'))!.plain).overrides).toEqual({
+      'enabledTools.get_location': true
+    })
+    expect(cfgOf((await plainOf(desk, 'chat', 'c-pc'))!.plain).overrides).toEqual({
+      'enabledTools.shell': true
+    })
+    expect(stack.repo.chat('c-cel')!.config.enabledTools).toEqual(
+      expect.arrayContaining(['shell', 'read_file', 'nearby_places'])
+    )
+    expect(stack.repo.chat('c-pc')!.config.enabledTools).toEqual(
+      expect.arrayContaining(['get_location', 'nearby_places', 'read_file'])
+    )
+    expect(stack.repo.chat('c-pc')!.config.enabledTools).not.toContain('shell')
 
     // ---- 2. chat novo no celular: overrides só do que mudou no formulário ----
     const p = presetFromPlain('p-rev', store.getPlain('preset', 'p-rev')!)
@@ -207,6 +295,37 @@ describe.skipIf(!enabled)('herança ao vivo da persona contra o servidor real', 
     expect(novo.overrides).toEqual({ 'params.temperature': true })
     expect(novo.systemPrompt).toBe('Seja breve.') // cópia informativa completa
     expect(novo).not.toHaveProperty('cwd')
+
+    // ---- 2b. persona sem tools: o chat novo do celular não marca nenhuma tool como própria ----
+    const pt = presetFromPlain('p-tudo', store.getPlain('preset', 'p-tudo')!)
+    const bt = resolveNewChat({}, providers, pt)
+    const { chat: chatTudo } = stack.repo.createChat({
+      config: finalizeNewChat(
+        bt,
+        {
+          providerId: bt.providerId,
+          model: bt.model,
+          params: bt.params ?? {},
+          tools: bt.enabledTools,
+          presetId: 'p-tudo'
+        },
+        providers
+      )
+    })
+    await waitFor(() => chatSent(chatTudo.id), 'chat novo (persona sem tools) enviado', 20_000)
+    const tudoCfg = cfgOf((await plainOf(desk, 'chat', chatTudo.id))!.plain)
+    expect(tudoCfg.overrides).toEqual({})
+    expect(tudoCfg.enabledTools).toEqual(
+      expect.arrayContaining(['shell', 'read_file', 'get_location', 'nearby_places'])
+    )
+    // "voltar a herdar tudo" no chat migrado do celular: sem caso especial
+    const celRec = stack.repo.record('c-cel')!
+    stack.repo.updateChat('c-cel', {
+      config: revertPatch(celRec, Object.keys(celRec.overrides ?? {}))
+    })
+    await waitFor(() => chatSent('c-cel'), 'voltar a herdar enviado', 20_000)
+    expect(cfgOf((await plainOf(desk, 'chat', 'c-cel'))!.plain).overrides).toEqual({})
+    expect(stack.repo.chat('c-cel')!.config.enabledTools).toContain('get_location')
 
     // ---- 3. o desktop muda a persona: os chats do celular acompanham ao vivo ----
     await putAs(desk, 'preset', 'p-rev', null, {

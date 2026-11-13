@@ -1,7 +1,8 @@
 // Faixas de estado do host no lugar do composer (SYNC_PROTOCOL.md §8.7–8.9, §9): host offline
-// ("Executar neste dispositivo" nos chats sem ferramentas locais; os outros o celular não executa),
-// chat sem host, sem conexão, troca de host em andamento e divergência — com "Descartar a versão de
-// <D>" (manter a online, §9.3), a única resolução que o celular pode fazer com segurança.
+// ("Executar neste dispositivo" — um chat com ferramentas locais roda aqui sem elas, §4.3.6; a tela
+// confirma com o aviso forte), chat sem host, sem conexão, troca de host em andamento e divergência —
+// com "Descartar a versão de <D>" (manter a online, §9.3), a única resolução que o celular pode
+// fazer com segurança.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
@@ -66,7 +67,7 @@ export function HostStateBanner({
   mode: HostMode
   state: ChatState | null
   localTools: boolean
-  /** "Executar neste dispositivo" (§8.7–8.8) — só chats sem ferramentas locais. */
+  /** "Executar neste dispositivo" (§8.7–8.8; com ferramentas locais, a tela avisa antes). */
   onTakeover?: () => void
 }) {
   const toast = useToast()
@@ -137,12 +138,12 @@ export function HostStateBanner({
         }
         text={
           localTools
-            ? `Este chat usa ferramentas locais (shell, arquivos, processos ou skills) no ${name}. O celular não executa chats assim — abra o ClearChat no ${name} para continuar.`
+            ? `Comandos remotos só funcionam com o host online. Você pode continuar o chat neste celular — sem as ferramentas locais (arquivos, shell, processos, skills), que só rodam no computador.`
             : `Comandos remotos só funcionam com o host online. Você pode continuar o chat neste celular.`
         }
         testID="banner-host-offline"
       >
-        {!localTools && onTakeover ? (
+        {onTakeover ? (
           <Button
             title="Executar neste dispositivo"
             size="sm"
@@ -161,20 +162,10 @@ export function HostStateBanner({
         title="Este chat não tem host"
         text={
           localTools
-            ? 'Ele usa ferramentas locais (arquivos, shell, processos ou skills) — o celular não executa chats assim. Abra-o num computador com o ClearChat.'
+            ? 'Envie uma mensagem para executá-lo neste celular — sem as ferramentas locais (arquivos, shell, processos, skills), que só rodam no computador.'
             : 'Envie uma mensagem para executá-lo neste celular.'
         }
         testID="banner-no-host"
-      />
-    )
-  if (mode === 'local' && localTools)
-    return (
-      <Panel
-        icon="phone-portrait-outline"
-        tone="warning"
-        title="Este chat usa ferramentas locais"
-        text="O celular não executa chats com arquivos, shell, processos ou skills. Execute-o num computador (“Executar neste dispositivo” lá)."
-        testID="banner-local-tools"
       />
     )
   if (handover)

@@ -1,19 +1,16 @@
 // Config de um chat novo criado no celular (porta de ClearChatDesktop/src/renderer/src/lib/
-// presets.ts: padrões de "Novos chats" + persona por cima, provedor e modelo andando juntos) com as
-// regras do celular: só as tools portáveis ficam ligadas, skills desligadas e as tools locais da
-// chamada de voz removidas — o chat nasce sem ferramentas locais (§8.9). Com persona o chat HERDA
-// dela ao vivo (protocolo 1.10.0): o repo grava como próprias só as unidades em que esta config
-// difere do valor efetivo da persona (`newInheritingChatConfig`) e a voz não é copiada. Puro.
+// presets.ts: padrões de "Novos chats" + persona por cima, provedor e modelo andando juntos). A
+// lista de tools é a MESMA de qualquer aparelho (protocolo 1.10.0, §4.3.6 — "Tools de um tipo de
+// aparelho"): o celular não desliga as do computador nem liga as dele — só roda as que executa
+// (`availableTools`); as outras ficam esmaecidas na tela. Com persona o chat HERDA dela ao vivo: o
+// repo grava como próprias só as unidades em que esta config difere do valor efetivo da persona
+// (`newInheritingChatConfig`) — as escolhas do usuário — e a voz não é copiada. Puro.
 import { DEFAULT_CHAT_CONFIG, supportsCacheControl } from '@shared/defaults'
 import { defaultModelRef, resolvePresetModel } from '@shared/models'
 import { applyPreset, DEFAULT_PRESET_NAME } from '@shared/presets'
 import { isChatProvider, providerKind } from '@shared/providerKinds'
-import { normalizeVoiceCallConfig } from '@shared/voice'
 import type { ChatConfig, ChatParams, Preset, Provider, ToolName } from '@shared/types'
 import type { Plain } from '@/data/types'
-import { MOBILE_TOOLS } from '@/agent/request'
-import { LOCATION_TOOLS } from '@/location/service'
-import { LOCAL_TOOLS } from './policy'
 
 export function presetFromPlain(id: string, p: Plain): Preset {
   return {
@@ -70,13 +67,9 @@ export function resolveNewChat(
     kind: prov ? providerKind(prov) : undefined
   })
   // a voz da persona NÃO vira cópia (1.9.0/1.10.0): cada campo da `voice` do chat herda dela ao
-  // vivo — trocar a voz da persona muda a dos chats dela. Só as tools da chamada, se a persona
-  // liga uma tool local, ficam no chat (sem ela): o celular não executa tools locais (§8.9)
+  // vivo — trocar a voz da persona muda a dos chats dela (as tools da chamada inclusive)
   const cfg = applyPreset(base, preset?.config)
   delete cfg.voice
-  const vt = preset?.config.voice?.tools
-  if (vt?.enabledTools?.some((t) => LOCAL_TOOLS.includes(String(t) === 'bash' ? 'shell' : t)))
-    cfg.voice = normalizeVoiceCallConfig({ tools: vt })
   const { ref: r } = resolvePresetModel(
     { providerId: base.providerId, model: base.model },
     preset?.config,
@@ -90,40 +83,12 @@ export function resolveNewChat(
     const p = chatProviders.find((x) => x.id === cfg.providerId)
     if (p) cfg.cacheEnabled = supportsCacheControl(providerKind(p))
   }
-  cfg.enabledTools = portableOf(cfg.enabledTools)
-  // localização (só no celular, fora do TOOL_NAMES do desktop): ligada quando a persona não escolhe
-  // as tools — como as outras ferramentas no DEFAULT_CHAT_CONFIG; cada uso pergunta por padrão
-  if (!preset?.config.enabledTools)
-    cfg.enabledTools = [
-      ...cfg.enabledTools,
-      ...LOCATION_TOOLS.filter((t) => !cfg.enabledTools.includes(t))
-    ]
-  return mobileSafe(cfg)
+  // o celular não tem raiz; as tools/skills ficam como a persona (ou o padrão do app) define
+  cfg.cwd = ''
+  return cfg
 }
 
-export const portableOf = (tools: readonly ToolName[] | undefined): ToolName[] =>
-  (tools ?? []).filter((t) => MOBILE_TOOLS.includes(t))
-
-/** Tools locais da persona que ficam de fora no celular (para avisar). */
-export const droppedLocalTools = (preset: Preset | null): string[] =>
-  (preset?.config.enabledTools ?? []).filter((t) =>
-    LOCAL_TOOLS.includes(String(t) === 'bash' ? 'shell' : t)
-  )
-
-/** Sem ferramentas locais: tools portáveis, skills desligadas, tools locais da voz fora, sem cwd. */
-export function mobileSafe(cfg: ChatConfig): ChatConfig {
-  const out = { ...cfg, enabledTools: portableOf(cfg.enabledTools), cwd: '' }
-  if (out.skills?.enabled) out.skills = { ...out.skills, enabled: false }
-  const vt = out.voice?.tools?.enabledTools
-  if (out.voice && vt)
-    out.voice = {
-      ...out.voice,
-      tools: { ...out.voice.tools!, enabledTools: vt.filter((t) => !LOCAL_TOOLS.includes(t)) }
-    }
-  return out
-}
-
-/** Config final com as escolhas da tela. */
+/** Config final com as escolhas da tela (`tools` = a lista inteira, com as do computador). */
 export function finalizeNewChat(
   base: ChatConfig,
   pick: {
@@ -139,14 +104,14 @@ export function finalizeNewChat(
     ...base,
     providerId: pick.providerId,
     model: pick.model,
-    params: pick.params
+    params: pick.params,
+    enabledTools: [...pick.tools]
   }
-  cfg.enabledTools = portableOf(pick.tools)
   if (pick.providerId !== base.providerId) {
     const p = providers.find((x) => x.id === pick.providerId)
     if (p) cfg.cacheEnabled = supportsCacheControl(providerKind(p))
   }
-  const out: Partial<ChatConfig> = mobileSafe(cfg)
+  const out: Partial<ChatConfig> = { ...cfg }
   delete out.cwd
   if (pick.presetId) out.presetId = pick.presetId
   else delete out.presetId

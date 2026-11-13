@@ -272,8 +272,8 @@ export interface DefaultsForPreset {
 
 /**
  * Config de um chat novo com a persona por cima (= `newChatBase` + `resolvePreset` do renderer do
- * desktop, sem pasta): o editor mostra o efetivo e grava só o que o usuário muda. Sem as regras do
- * celular (as tools locais da persona continuam valendo nos chats do computador).
+ * desktop, sem pasta): o editor mostra o efetivo e grava só o que o usuário muda. A lista de tools é
+ * a mesma em todo aparelho (§4.3.6): as do computador valem quando o chat roda num computador.
  */
 export function resolvePresetConfig(
   defaults: DefaultsForPreset,

@@ -1,6 +1,8 @@
-// Regras do host no celular (SYNC_PROTOCOL.md §8.9): o celular recusa hospedar chats com
-// ferramentas locais. A regra vem do desktop (@shared/sync, vendorado).
-import type { ToolName } from '@shared/types'
+// Ferramentas locais no celular (SYNC_PROTOCOL.md §8.9 e §4.3.6 — "Tools de um tipo de aparelho",
+// desde 1.10.0): o celular HOSPEDA chats com ferramentas locais, sem elas — só manda ao modelo as
+// tools que executa (`availableTools`); as do computador ficam na lista do chat, esmaecidas na tela.
+// Ao assumir um chat assim, um aviso forte (com confirmação) diz que elas ficam desligadas enquanto
+// o celular for o host. A regra de "usa ferramentas locais" vem do desktop (@shared/sync, vendorado).
 import { LOCAL_TOOLS, usesLocalTools as sharedUsesLocalTools } from '@shared/sync'
 
 export { LOCAL_TOOLS }
@@ -10,13 +12,18 @@ export function usesLocalTools(config: Record<string, unknown> | null | undefine
   return !!config && sharedUsesLocalTools(config)
 }
 
-/** Tools locais ligadas (para o texto que explica a recusa). */
-export function localToolsOf(config: Record<string, unknown> | null | undefined): ToolName[] {
-  const tools = Array.isArray(config?.enabledTools) ? (config.enabledTools as string[]) : []
-  return tools
-    .map((t) => (t === 'bash' ? 'shell' : t))
-    .filter((t) => LOCAL_TOOLS.includes(t)) as ToolName[]
+/**
+ * Aviso forte ao assumir (ou "Executar neste dispositivo") um chat com ferramentas locais (§8.9):
+ * elas ficam desligadas enquanto o celular for o host.
+ */
+export function localToolsTakeoverText(
+  /** `chat.hostCwd` do registro (`{ deviceId, path }`, informativo — §4.3.6). */
+  hostCwd: unknown,
+  hostName: string | null | undefined
+): string {
+  const p = hostCwd && typeof hostCwd === 'object' ? (hostCwd as { path?: unknown }).path : null
+  const path = typeof p === 'string' && p ? p : null
+  const host = hostName || 'computador'
+  const where = path ? ` (diretório raiz ${path} no ${host})` : hostName ? ` no ${hostName}` : ''
+  return `Este chat usa ferramentas locais${where}; no celular ele roda sem elas.`
 }
-
-export const LOCAL_TOOLS_REFUSAL =
-  'Este chat usa ferramentas locais (arquivos, shell, processos ou skills) — o celular não executa esse tipo de chat. Execute-o num computador.'

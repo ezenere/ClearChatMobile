@@ -1,6 +1,7 @@
 // Configurações → Personas → editar/criar (= editor do desktop, enxuto): ícone, nome, descrição e
 // as abas Modelo (par provedor + modelo ou "usar o padrão", parâmetros), Chat (system prompt,
-// janela/compactação, assinatura do app, opções do computador), Ferramentas (as que rodam também no celular e as só do computador) e
+// janela/compactação, assinatura do app, opções do computador), Ferramentas (as que rodam também no
+// celular e, esmaecidas, as só do computador — mesma lista em todo aparelho, §4.3.6) e
 // Memória (coleções ativas e onde grava — é a persona que define a memória dos chats novos) e
 // Voz (a chamada de voz da persona — `VoiceConfigEditor`).
 // Campos não alterados seguem "Novos chats"; os que o celular não edita ficam como estão.
@@ -10,7 +11,8 @@ import { Pressable, StyleSheet, View } from 'react-native'
 import { DEFAULT_SYSTEM_PROMPT } from '@shared/defaults'
 import { normalizeMemoryConfig, type MemoryCollection } from '@shared/memory'
 import { patchPresetConfig, type PresetConfig } from '@shared/presets'
-import { TOOL_LABELS, TOOL_NAMES } from '@shared/tools'
+import { withTool } from '@shared/deviceTools'
+import { TOOL_NAMES } from '@shared/tools'
 import type { ChatConfig, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { MOBILE_TOOLS } from '@/agent/request'
@@ -19,6 +21,7 @@ import { LOCATION_TOOLS } from '@/location/service'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { followersByPreset } from '@/data/inherit'
 import { store } from '@/data/native'
+import { ComputerToolsGroup } from '@/settings/ComputerTools'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
 import { useVoiceCallInheritance } from '@/settings/voiceUi'
@@ -132,13 +135,10 @@ export default function PersonaEditor() {
     )
 
   const tools = cfg.enabledTools ?? []
-  const toggleTool = (t: ToolName, on: boolean) =>
-    patch({
-      enabledTools: on ? [...tools.filter((x) => x !== t), t] : tools.filter((x) => x !== t)
-    })
+  // a lista inteira: as do computador e as desconhecidas ficam (§4.3.6)
+  const toggleTool = (t: ToolName, on: boolean) => patch({ enabledTools: withTool(tools, t, on) })
   // "também no celular" = as tools que o celular executa (MOBILE_TOOLS); o resto só no computador
   const portable = [...TOOL_NAMES, ...LOCATION_TOOLS].filter((t) => MOBILE_TOOLS.includes(t))
-  const local = TOOL_NAMES.filter((t) => !MOBILE_TOOLS.includes(t))
 
   return (
     <SettingsScreen
@@ -306,24 +306,11 @@ export default function PersonaEditor() {
               </View>
             ))}
           </Card>
-          <FieldLabel>Só no computador</FieldLabel>
-          <Card padded={false}>
-            {local.map((t, i) => (
-              <View key={t} style={st.toolRow}>
-                {i ? <Divider /> : null}
-                <ToggleRow
-                  title={TOOL_LABELS[t]}
-                  value={tools.includes(t)}
-                  onChange={(v) => toggleTool(t, v)}
-                  testID={`persona-tool-${t}`}
-                />
-              </View>
-            ))}
-          </Card>
-          <Note>
-            Com uma ferramenta local ligada, os chats desta persona criados no celular nascem sem
-            ela (o celular não executa arquivos, shell nem processos); no computador ela vale.
-          </Note>
+          <ComputerToolsGroup
+            tools={tools}
+            onToggle={toggleTool}
+            rowTestID={(t) => `persona-tool-${t}`}
+          />
         </>
       ) : null}
 

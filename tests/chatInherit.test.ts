@@ -2,7 +2,9 @@
 // §23.7): config efetiva no host do celular, Novo chat com `overrides` só do que mudou, voltar a
 // herdar, trocar de persona e "Nenhuma", migração dos chats antigos depois do pull, congelamento
 // antes do tombstone da persona (e ao recebê-lo) e o merge por unidade de `overrides` — no
-// `rev_mismatch` do push e no pull com edição local pendente (a base guardada na outbox).
+// `rev_mismatch` do push e no pull com edição local pendente (a base guardada na outbox). Tools de
+// um tipo de aparelho (§4.3.6): o Novo chat não marca nada por causa do aparelho, o celular roda o
+// chat sem as tools do computador e a migração só as marca próprias se o chat rodou num computador.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyChatConfigPatch, withoutUnits, type InheritConfig } from '@shared/chatInherit'
 import type { ToolName } from '@shared/types'
@@ -84,7 +86,7 @@ const flushChat = async (chatId: string) => {
 }
 
 describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona', () => {
-  it('overrides só do que mudou no formulário (e o que o celular desliga); a persona muda o chat ao vivo; o host roda com a efetiva', async () => {
+  it('overrides só do que mudou no formulário (nada por causa do aparelho); a persona muda o chat ao vivo; o host roda com a efetiva sem as tools do computador', async () => {
     await preset('p1', 'Revisora', P1())
     await h.engine.sync()
     const { chat, session } = newChatFromForm('p1', (b) => ({
@@ -92,8 +94,8 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     }))
     const rec = h.stack.repo.record(chat.id)!
     expect(rec.presetId).toBe('p1')
-    // a temperatura mudada no formulário + o shell que o celular desliga (§8.9); o resto herda
-    expect(ownOf(chat.id)).toEqual(['enabledTools.shell', 'params.temperature'])
+    // só a temperatura mudada no formulário; o resto herda — o shell da persona inclusive (§4.3.6)
+    expect(ownOf(chat.id)).toEqual(['params.temperature'])
     expect(rec.voice).toBeUndefined()
     expect(h.store.getPlain('chat', chat.id)!.config).not.toHaveProperty('cwd')
     // cópia informativa completa
@@ -112,10 +114,10 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     expect(eff.model).toBe('fake/persona-2')
     expect(eff.systemPrompt).toBe('Seja muito breve.')
     expect(eff.params).toEqual({ temperature: 0.7, top_p: 0.5 })
-    expect(eff.enabledTools).not.toContain('shell')
+    // a lista é a mesma em todo aparelho: o shell da persona continua nela (o celular só não o roda)
+    expect(eff.enabledTools).toContain('shell')
     // a cópia não é regravada a cada edição da persona
     expect(h.stack.repo.record(chat.id)!.model).toBe('fake/persona')
-    expect(h.stack.host.refusal(chat.id)).toBeNull()
 
     // o host do celular roda com a efetiva (modelo e system prompt da persona nova)
     await h.stack.host.local(chat.id, 'send', { sessionId: session.id, text: 'olá' })
@@ -124,20 +126,26 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     expect(req.body.model).toBe('fake/persona-2')
     expect(JSON.stringify(req.body.messages)).toContain('Seja muito breve.')
     expect(req.body.temperature).toBe(0.7)
+    // só as tools que o celular executa vão ao modelo (as do computador ficam de fora, §4.3.6)
+    const sent = (r: { body: Record<string, unknown> }) =>
+      ((r.body.tools as { function: { name: string } }[]) ?? []).map((t) => t.function.name)
+    expect(sent(req)).toEqual(['web_search', 'ask_user'])
     // seguir a persona conta para "N chats seguem"
     expect(followersByPreset(h.store).get('p1')).toBe(1)
 
-    // uma tool local herdada da persona: o celular recusa o chat (§8.9, sobre a efetiva)
+    // mais tools locais herdadas da persona: o celular continua hospedando o chat, sem elas
     await preset('p1', 'Revisora', {
       ...P1(),
       enabledTools: ['web_search', 'shell', 'read_file'] as ToolName[]
     })
     await h.engine.sync()
-    expect(h.stack.host.refusal(chat.id)).not.toBeNull()
-    // desligar no chat (edição → própria) libera de novo
-    h.stack.repo.updateChat(chat.id, { config: { enabledTools: ['web_search', 'ask_user'] } })
-    expect(ownOf(chat.id)).toContain('enabledTools.read_file')
-    expect(h.stack.host.refusal(chat.id)).toBeNull()
+    await h.stack.host.local(chat.id, 'send', { sessionId: session.id, text: 'de novo' })
+    await until(() => !h.stack.runner.isRunning(session.id), 10_000, 'turno 2')
+    const req2 = h.llm.requests.filter((r) => r.path.endsWith('/chat/completions')).pop()!
+    expect(sent(req2)).toEqual(['web_search'])
+    expect(JSON.stringify(req2.body)).not.toMatch(/read_file|"shell"/)
+    // nada virou próprio por causa do aparelho
+    expect(ownOf(chat.id)).toEqual(['params.temperature'])
   })
 
   it('editar → própria; voltar a herdar → segue a persona (cópia atualizada); trocar de persona mantém as próprias; "Nenhuma" congela', async () => {
@@ -150,24 +158,24 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     })
     await h.engine.sync()
     const { chat } = newChatFromForm('p1', () => ({}))
-    expect(ownOf(chat.id)).toEqual(['enabledTools.shell'])
+    expect(ownOf(chat.id)).toEqual([])
     // edição na tela (sem `overrides`) → a unidade tocada vira própria
     h.stack.repo.updateChat(chat.id, { config: { systemPrompt: 'Meu prompt.' } })
     h.stack.repo.updateChat(chat.id, { config: { params: { temperature: 0.9 } } })
-    expect(ownOf(chat.id)).toEqual(['enabledTools.shell', 'params.temperature', 'systemPrompt'])
+    expect(ownOf(chat.id)).toEqual(['params.temperature', 'systemPrompt'])
     expect(h.stack.repo.chat(chat.id)!.config.systemPrompt).toBe('Meu prompt.')
 
     // voltar a herdar (o patch que a tela/o controle remoto mandam)
     const rec = h.stack.repo.record(chat.id)!
     h.stack.repo.updateChat(chat.id, { config: revertPatch(rec, ['params.temperature']) })
-    expect(ownOf(chat.id)).toEqual(['enabledTools.shell', 'systemPrompt'])
+    expect(ownOf(chat.id)).toEqual(['systemPrompt'])
     expect(h.stack.repo.record(chat.id)!.params).toEqual({ temperature: 0.3 })
 
     // trocar de persona: as próprias ficam; as herdadas seguem a nova
     h.stack.repo.updateChat(chat.id, { config: personaPatch('p2') })
     let eff = h.stack.repo.chat(chat.id)!.config
     expect(eff.presetId).toBe('p2')
-    expect(ownOf(chat.id)).toEqual(['enabledTools.shell', 'systemPrompt'])
+    expect(ownOf(chat.id)).toEqual(['systemPrompt'])
     expect(eff.model).toBe('fake/poeta')
     expect(eff.params).toEqual({ temperature: 1.2 })
     expect(eff.systemPrompt).toBe('Meu prompt.')
@@ -177,7 +185,7 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     const frozen = h.stack.repo.record(chat.id)!
     expect(frozen.presetId).toBeUndefined()
     expect(frozen.model).toBe('fake/poeta')
-    expect(ownOf(chat.id)).toEqual(['enabledTools.shell', 'systemPrompt'])
+    expect(ownOf(chat.id)).toEqual(['systemPrompt'])
     await preset('p2', 'Poeta', { providerId: h.providerId, model: 'fake/outro' })
     await h.engine.sync()
     eff = h.stack.repo.chat(chat.id)!.config
@@ -186,10 +194,7 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     await flushChat(chat.id)
     const sp = (await serverPlain('chat', chat.id))!
     expect((sp.config as InheritConfig).presetId).toBeUndefined()
-    expect((sp.config as InheritConfig).overrides).toEqual({
-      'enabledTools.shell': true,
-      systemPrompt: true
-    })
+    expect((sp.config as InheritConfig).overrides).toEqual({ systemPrompt: true })
   })
 
   it('padrões de "Novos chats" mudam os chats cuja persona não define o campo', async () => {
@@ -201,12 +206,11 @@ describe('Novo chat, config efetiva no host, voltar a herdar, trocar de persona'
     await h.engine.sync()
     const { chat } = newChatFromForm('p0', () => ({}))
     expect(ownOf(chat.id)).not.toContain('model')
-    // a persona não escolhe as tools: as locais (padrão do app) ficam desligadas como próprias
-    // (o celular não as executa) e as de localização ligadas como próprias
-    expect(ownOf(chat.id)).toEqual(
-      expect.arrayContaining(['enabledTools.shell', 'enabledTools.get_location'])
-    )
-    expect(ownOf(chat.id)).not.toContain('enabledTools.web_search')
+    // a persona não escolhe as tools: todas herdam o padrão do app (as do computador e as do
+    // celular inclusive) — nenhuma vira própria por causa do aparelho (antes: ~15 "neste chat")
+    expect(ownOf(chat.id)).toEqual([])
+    const tools = h.stack.repo.chat(chat.id)!.config.enabledTools
+    expect(tools).toEqual(expect.arrayContaining(['shell', 'read_file', 'get_location']))
     expect(h.stack.repo.chat(chat.id)!.config.model).toBe('fake/padrao')
     await h.desk.put('setting', 'defaultModel', null, {
       sv: 1,
@@ -271,6 +275,87 @@ describe('migração dos chats antigos (depois do pull completo)', () => {
   })
 })
 
+describe('migração: tools de um tipo de aparelho (§4.3.6)', () => {
+  it('a diferença numa tool do computador só vira própria se o chat rodou num computador (hostCwd)', async () => {
+    // persona sem tools: herda o padrão do app (todas, as do computador e as do celular)
+    await preset('p0', 'Padrão', { providerId: h.providerId, model: 'fake/persona' })
+    const old = (id: string, tools: string[], extra: Record<string, unknown> = {}) =>
+      h.desk.put('chat', id, id, {
+        sv: 1,
+        title: id,
+        config: {
+          providerId: h.providerId,
+          model: 'fake/persona',
+          presetId: 'p0',
+          cacheEnabled: false, // o herdado do provedor falso (openai)
+          enabledTools: tools
+        },
+        mainSessionId: `s-${id}`,
+        createdAt: 5,
+        updatedAt: 5,
+        ...extra
+      })
+    // chat de um celular antigo: só as tools que ele roda, com a localização desligada
+    const phoneTools = ['web_search', 'browse_url', 'list_models', 'delegate_task', 'get_chat_info']
+    await old('c-cel', [
+      ...phoneTools,
+      'list_chats',
+      'send_to_chat',
+      'read_history',
+      'check_subagents',
+      'wait_subagents',
+      'cancel_subagent',
+      'message_subagent',
+      'ask_user',
+      'nearby_places'
+    ])
+    // chat de um desktop antigo: rodou num computador (hostCwd), shell desligado, sem as do celular
+    const deskTools = [
+      'list_dir',
+      'read_file',
+      'search_files',
+      'find_files',
+      'present_file',
+      'write_file',
+      'edit_file',
+      'process_start',
+      'process_logs',
+      'process_list',
+      'process_stop',
+      'web_search',
+      'browse_url',
+      'list_models',
+      'delegate_task',
+      'get_chat_info',
+      'list_chats',
+      'send_to_chat',
+      'read_history',
+      'check_subagents',
+      'wait_subagents',
+      'cancel_subagent',
+      'message_subagent',
+      'ask_user'
+    ]
+    await old('c-pc', deskTools, { hostCwd: { deviceId: 'pc', path: '/home/ana/proj' } })
+    await h.engine.sync()
+    // celular: as do computador passam a herdar (ele roda sem elas); a localização desligada fica
+    expect(h.stack.repo.record('c-cel')!.overrides).toEqual({ 'enabledTools.get_location': true })
+    const cel = h.stack.repo.chat('c-cel')!.config.enabledTools
+    expect(cel).toEqual(expect.arrayContaining(['shell', 'read_file', 'nearby_places']))
+    expect(cel).not.toContain('get_location')
+    // computador: o shell desligado é escolha do chat; as do celular passam a herdar
+    expect(h.stack.repo.record('c-pc')!.overrides).toEqual({ 'enabledTools.shell': true })
+    const pc = h.stack.repo.chat('c-pc')!.config.enabledTools
+    expect(pc).not.toContain('shell')
+    expect(pc).toEqual(expect.arrayContaining(['get_location', 'nearby_places']))
+    // "voltar a herdar tudo" no chat do celular: tudo herda e o celular continua hospedando
+    const rec = h.stack.repo.record('c-cel')!
+    h.stack.repo.updateChat('c-cel', { config: revertPatch(rec, ['enabledTools.get_location']) })
+    expect(ownOf('c-cel')).toEqual([])
+    expect(h.stack.repo.chat('c-cel')!.config.enabledTools).toContain('get_location')
+  })
+})
+
 describe('persona apagada: congelar antes do tombstone (§7.7)', () => {
   it('apagada aqui: os chats congelam e sobem ANTES do tombstone da persona', async () => {
     await preset('p1', 'Revisora', P1())
@@ -288,7 +373,7 @@ describe('persona apagada: congelar antes do tombstone (§7.7)', () => {
     const rec = h.stack.repo.record(chat.id)!
     expect(rec.presetId).toBeUndefined()
     expect(rec.systemPrompt).toBe('Seja breve.')
-    expect(rec.overrides).toEqual({ 'enabledTools.shell': true })
+    expect(rec.overrides).toEqual({})
     expect(h.store.frozenPending('p1')).toEqual([chat.id])
     await until(
       () => !h.stack.memory.writer.pending() && !h.stack.writer.pending(chat.id),
@@ -389,7 +474,7 @@ describe('merge por unidade (§7.5) — sem perder marcas nem sobrescrever valor
     h.stack.repo.updateChat(chat.id, { config: { systemPrompt: 'Do celular.' } })
     await flushChat(chat.id)
     const sp = (await serverPlain('chat', chat.id))!.config as InheritConfig
-    expect(sp.overrides).toEqual({ 'enabledTools.shell': true, model: true, systemPrompt: true })
+    expect(sp.overrides).toEqual({ model: true, systemPrompt: true })
     expect(sp.model).toBe('fake/do-pc')
     expect(sp.systemPrompt).toBe('Do celular.')
     await h.engine.sync()
@@ -416,17 +501,13 @@ describe('merge por unidade (§7.5) — sem perder marcas nem sobrescrever valor
     const eff = h.stack.repo.chat(chat.id)!.config
     expect(eff.systemPrompt).toBe('PC 2')
     expect(eff.params.temperature).toBe(0.8)
-    expect(ownOf(chat.id)).toEqual(['enabledTools.shell', 'params.temperature', 'systemPrompt'])
+    expect(ownOf(chat.id)).toEqual(['params.temperature', 'systemPrompt'])
     h.stack.writer.resume()
     await flushChat(chat.id)
     const sp = (await serverPlain('chat', chat.id))!.config as InheritConfig
     expect(sp.systemPrompt).toBe('PC 2')
     expect(sp.params).toEqual({ temperature: 0.8 })
-    expect(sp.overrides).toEqual({
-      'enabledTools.shell': true,
-      'params.temperature': true,
-      systemPrompt: true
-    })
+    expect(sp.overrides).toEqual({ 'params.temperature': true, systemPrompt: true })
   })
 })
 
@@ -435,7 +516,7 @@ describe('chat.update de um chat só ao vivo (§23.7): os patches que o celular 
     await preset('p1', 'Revisora', P1())
     await preset('p2', 'Poeta', { providerId: h.providerId, model: 'fake/poeta' })
     await h.engine.sync()
-    const ctx = patchContextOf(h.store)
+    const ctx = patchContextOf(h.store, null)
     // o registro como o host do PC manda no `rec` (próprios + cópia + overrides)
     let rec: InheritConfig = {
       ...effectiveConfigOf(h.store, { ...P1(), presetId: 'p1', overrides: {} }),

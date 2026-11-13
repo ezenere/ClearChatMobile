@@ -163,6 +163,7 @@ export function ToggleRow({
   value,
   onChange,
   disabled,
+  dim,
   testID
 }: {
   title: string
@@ -170,6 +171,8 @@ export function ToggleRow({
   value: boolean
   onChange: (v: boolean) => void
   disabled?: boolean
+  /** Esmaecida mas alternável (ex.: tool que só roda no computador — não vale neste celular). */
+  dim?: boolean
   testID?: string
 }) {
   return (
@@ -179,7 +182,7 @@ export function ToggleRow({
       accessibilityRole="switch"
       accessibilityLabel={title}
       accessibilityState={{ checked: value, disabled: !!disabled }}
-      style={[styles.toggle, disabled && { opacity: 0.5 }]}
+      style={[styles.toggle, (disabled || dim) && { opacity: disabled ? 0.5 : 0.55 }]}
     >
       <View style={styles.itemText}>
         <Text style={styles.toggleTitle}>{title}</Text>

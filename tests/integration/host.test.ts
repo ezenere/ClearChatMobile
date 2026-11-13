@@ -1,9 +1,10 @@
 // Host no celular (fase 4a) contra o servidor de sync REAL local, com o provedor LLM FALSO: o
 // "celular" (AccountService + SyncEngine + host reais — os mesmos módulos do aparelho) cria um chat,
 // roda turnos dentro de janelas (host.begin/host.end, chat_bases + host_epochs) com web_search e
-// aprovação; um "desktop" (dispositivo can_host no WebSocket real) vê os registros, recebe a recusa
-// do controle remoto, não consegue nada com chats de tools locais e assume o chat do celular no meio
-// de um turno (§8.8) continuando de onde parou. Segundo plano → turno interrompido e janela fechada.
+// aprovação; um "desktop" (dispositivo can_host no WebSocket real) vê os registros e recebe a recusa
+// do controle remoto; um chat com tools locais roda no celular sem elas (§4.3.6, §8.9); o desktop
+// assume o chat do celular no meio de um turno (§8.8) continuando de onde parou. Segundo plano →
+// turno interrompido e janela fechada.
 import { afterAll, describe, expect, it } from 'vitest'
 import { AccountService } from '../../src/account/service'
 import { MemoryKeyValueStore, MemorySecretStore } from '../../src/account/storage'
@@ -16,7 +17,6 @@ import { RemoteController } from '../../src/remote/controller'
 import { openResult, sealCommand, type Envelope } from '../../src/remote/crypto'
 import { bindHost } from '../../src/host/binding'
 import { REMOTE_REFUSAL } from '../../src/host/host'
-import { LOCAL_TOOLS_REFUSAL } from '../../src/host/policy'
 import { createHostStack } from '../../src/host/stack'
 import { setSearchBases } from '../../src/agent/tools/web'
 import { DEFAULT_CHAT_CONFIG } from '../../src/vendor/shared/defaults'
@@ -86,7 +86,7 @@ async function serverChat(d: Desktop, chatId: string) {
 }
 
 describe.skipIf(!enabled)('host no celular contra o servidor real (provedor falso)', () => {
-  it('turnos com janelas e revisões, controle remoto recusado, tools locais recusadas, troca de host no meio do turno, segundo plano', async () => {
+  it('turnos com janelas e revisões, controle remoto recusado, chat com tools locais rodando sem elas, troca de host no meio do turno, segundo plano', async () => {
     const llm = await startFakeLlm(0, { delay: 15 })
     cleanup.push(() => llm.close())
     setSearchBases({ ddg: `${llm.url}/ddg` })
@@ -301,15 +301,17 @@ describe.skipIf(!enabled)('host no celular contra o servidor real (provedor fals
     expect(r).toMatchObject({ status: 'rejected', error: REMOTE_REFUSAL })
     expect(runner.isRunning(s1.id)).toBe(false)
 
-    // ---- 4. chat com ferramentas locais: o celular recusa (nada no servidor) ----
+    // ---- 4. chat com ferramentas locais: o celular hospeda SEM elas (§4.3.6, §8.9) ----
     const { chat: cLocal, session: sLocal } = newChat(['shell', 'web_search'])
-    await expect(
-      host.local(cLocal.id, 'send', { sessionId: sLocal.id, text: 'rode ls' })
-    ).rejects.toThrow(LOCAL_TOOLS_REFUSAL)
-    await expect(host.takeover(cLocal.id, { mode: 'next_turn' })).rejects.toThrow(
-      LOCAL_TOOLS_REFUSAL
-    )
-    expect((await serverState(cLocal.id))?.host ?? null).toBeNull()
+    await stack.writer.whenIdle(cLocal.id)
+    await host.local(cLocal.id, 'send', { sessionId: sLocal.id, text: 'olá, chat local' })
+    await idle(sLocal.id)
+    const reqLocal = llm.requests.filter((r) => r.path.endsWith('/chat/completions')).pop()!
+    expect(
+      ((reqLocal.body.tools as { function: { name: string } }[]) ?? []).map((t) => t.function.name)
+    ).toEqual(['web_search'])
+    expect((await serverState(cLocal.id))?.host?.device_id).toBe(phoneId)
+    expect(repo.chat(cLocal.id)!.config.enabledTools).toEqual(['shell', 'web_search'])
 
     // ---- 5. o desktop assume o chat do celular no meio de um turno ----
     await host.local(c1.id, 'send', { sessionId: s1.id, text: '/slow' })

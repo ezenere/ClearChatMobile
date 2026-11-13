@@ -174,8 +174,8 @@ export class ChatRepo {
   /**
    * Config de um chat novo (§4.3.6): com uma persona que existe aqui, o chat HERDA ao vivo —
    * `overrides` = os enviados ou, sem eles, as unidades em que a config do formulário difere do
-   * valor efetivo da persona (o que o usuário mudou e o que o celular desliga para poder rodar:
-   * tools locais, skills); a `config` sai completa (cópia das herdadas). A voz só vai se vier (cada
+   * valor efetivo da persona (só o que o usuário mudou — nada por causa do aparelho: as tools do
+   * computador ficam na lista, o celular só não as roda); a `config` sai completa (cópia das herdadas). A voz só vai se vier (cada
    * campo herda a persona ao vivo). Sem persona (ou persona que não existe aqui): como veio, sem
    * `overrides` — a migração decide quando ela chegar.
    */
@@ -216,7 +216,7 @@ export class ChatRepo {
     if (!record) return
     const { cwd: _c, ...cfg } = patch.config
     void _c
-    this.writeRecord(chatId, patchedRecord(this.store, record, cfg), p)
+    this.writeRecord(chatId, patchedRecord(this.store, chatId, record, cfg), p)
   }
 
   /** Ordem da lista (§4.3.6: o host reenvia o `chat` a cada mensagem). */

@@ -1,8 +1,8 @@
 // send_to_chat entre dispositivos (SYNC_PROTOCOL.md §8): decide onde entregar a mensagem pelo
 // estado do chat de destino — executado (ou executável) neste celular → local, com a janela aberta
 // antes; executado por outro dispositivo ONLINE → comando `send` ao host dele (§8.6), como faria o
-// controle remoto; host offline/em tolerância, divergente ou chat com ferramentas locais sem host
-// online → recusa com texto claro (não há fila guardada no servidor, §8.7). Com wait_for_reply a
+// controle remoto; host offline/em tolerância ou divergente → recusa com texto claro (não há fila
+// guardada no servidor, §8.7). Um chat com ferramentas locais executado aqui roda sem elas (§4.3.6). Com wait_for_reply a
 // resposta é lida dos registros sincronizados depois que a janela do turno fecha. O `send` leva a
 // origem (`meta`, protocolo ≥ 1.6.0): o host grava como mensagem entre chats e conta os saltos.
 // Sem React Native.
@@ -10,13 +10,11 @@ import { contentText } from '@shared/attachments'
 import { activePath } from '@shared/branches'
 import { isDisplayOnly } from '@shared/context'
 import type { InterChatSendMeta } from '@shared/interChat'
-import { runConfigOf } from '@/data/inherit'
 import type { LocalStore } from '@/data/store'
 import type { ChatState } from '@/data/types'
 import type { ChatListEntry } from '@/agent/tools/util'
 import type { InterChatRoute, InterChatRouter } from '@/agent/runner'
 import { divergedOf } from '@/remote/types'
-import { usesLocalTools } from './policy'
 
 export interface InterChatDeps {
   store: LocalStore
@@ -72,17 +70,8 @@ export class InterChatBridge implements InterChatRouter {
       }
     const host = st?.host ?? null
     const mine = !host || host.device_id === this.d.me()
-    const raw = this.d.store.getPlain('chat', chatId)?.config
-    // a config com que o chat roda (efetiva — herança ao vivo da persona, §4.3.6)
-    const cfg = raw === undefined ? undefined : runConfigOf(this.d.store, raw)
-    if (mine) {
-      if (usesLocalTools(cfg))
-        return {
-          kind: 'refuse',
-          error: `o chat ${name} usa ferramentas locais e não tem um computador online executando-o — o celular não executa esse chat.`
-        }
-      return { kind: 'local' }
-    }
+    // executado (ou executável) aqui — um chat com ferramentas locais roda sem elas (§4.3.6)
+    if (mine) return { kind: 'local' }
     if (!this.d.connected())
       return {
         kind: 'refuse',

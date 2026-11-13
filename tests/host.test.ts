@@ -1,5 +1,5 @@
 // Host no celular: janelas (host.begin/host.end), revisões com chat_bases/host_epochs (§8.4),
-// recusa de chats com ferramentas locais (§8.9), comandos remotos recusados na hora (o celular não
+// chats com ferramentas locais hospedados sem elas (§4.3.6, §8.9), comandos remotos recusados na hora (o celular não
 // é controlado remotamente), troca de host pedida por outro dispositivo no meio do turno, segundo
 // plano e o espelho local da tela.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -7,7 +7,7 @@ import { DEFAULT_CHAT_CONFIG } from '../src/vendor/shared/defaults'
 import type { ChatConfig } from '../src/vendor/shared/types'
 import { openResult, sealCommand, type Envelope } from '../src/remote/crypto'
 import { REMOTE_REFUSAL } from '../src/host/host'
-import { LOCAL_TOOLS_REFUSAL, usesLocalTools } from '../src/host/policy'
+import { localToolsTakeoverText, usesLocalTools } from '../src/host/policy'
 import { makeHarness, until, type Harness } from './hostHarness'
 
 let h: Harness
@@ -69,20 +69,45 @@ describe('janela e revisões (§8.3–8.5)', () => {
     await idle(sid)
   })
 
-  it('recusa chats com ferramentas locais (§8.9) — enviar e assumir', async () => {
+  it('hospeda chats com ferramentas locais SEM elas (§4.3.6, §8.9) — só manda as que executa', async () => {
     expect(usesLocalTools({ enabledTools: ['web_search', 'bash'] })).toBe(true)
     expect(usesLocalTools({ enabledTools: ['web_search'], skills: { enabled: true } })).toBe(true)
     expect(usesLocalTools({ voice: { tools: { enabledTools: ['read_file'] } } })).toBe(true)
     expect(usesLocalTools({ enabledTools: ['web_search', 'ask_user'] })).toBe(false)
-    const { chatId, sid } = newChat({ enabledTools: ['shell', 'web_search'] })
-    await expect(
-      h.stack.host.local(chatId, 'send', { sessionId: sid, text: 'oi' })
-    ).rejects.toThrow(LOCAL_TOOLS_REFUSAL)
-    await expect(h.stack.host.takeover(chatId, { mode: 'next_turn' })).rejects.toThrow(
-      LOCAL_TOOLS_REFUSAL
+    const { chatId, sid } = newChat({
+      enabledTools: ['shell', 'web_search', 'read_file', 'present_file'],
+      skills: {
+        enabled: true,
+        disabled: [],
+        supportPrompt: { enabled: true, text: null },
+        subagents: true
+      },
+      toolsInPrompt: true
+    })
+    await h.stack.host.local(chatId, 'send', { sessionId: sid, text: 'oi' })
+    expect(h.ws.count('host.begin')).toBe(1)
+    await idle(sid)
+    const req = h.llm.requests.filter((r) => r.path.endsWith('/chat/completions')).pop()!
+    const names = ((req.body.tools as { function: { name: string } }[]) ?? []).map(
+      (t) => t.function.name
     )
-    expect(h.ws.count('host.begin')).toBe(0)
-    expect(h.ws.count('host.takeover')).toBe(0)
+    expect(names).toEqual(['web_search'])
+    // nem no texto das tools no system prompt
+    expect(JSON.stringify(req.body.messages)).not.toMatch(/read_file|present_file|skill_load/)
+    // a lista do chat continua a mesma (nada vira próprio nem some por causa do aparelho)
+    expect(h.stack.repo.chat(chatId)!.config.enabledTools).toEqual([
+      'shell',
+      'web_search',
+      'read_file',
+      'present_file'
+    ])
+    // o aviso forte ao assumir (§8.9)
+    expect(localToolsTakeoverText({ deviceId: 'pc', path: '/home/ana/proj' }, 'PC da Ana')).toBe(
+      'Este chat usa ferramentas locais (diretório raiz /home/ana/proj no PC da Ana); no celular ele roda sem elas.'
+    )
+    expect(localToolsTakeoverText(null, 'PC')).toBe(
+      'Este chat usa ferramentas locais no PC; no celular ele roda sem elas.'
+    )
   })
 
   it('sem conexão não executa; janela de outro dispositivo → espera; recusa do host.begin em pt-BR', async () => {
@@ -238,8 +263,8 @@ describe('troca de host e segundo plano', () => {
     expect(h.stack.repo.path(sid).pop()!.message.content).toBe('ok: voltei')
   })
 
-  it('"Executar neste dispositivo" num chat do PC sem ferramentas locais', async () => {
-    const { chatId } = newChat()
+  it('"Executar neste dispositivo" num chat do PC (com ferramentas locais: roda sem elas)', async () => {
+    const { chatId } = newChat({ enabledTools: ['shell', 'web_search'] })
     await h.stack.writer.flush(chatId)
     h.ws.host = 'dev-pc'
     h.store.upsertChatState({

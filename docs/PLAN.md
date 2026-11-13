@@ -592,9 +592,9 @@ do sistema + erro legível no chat. Screenshots em `scratchpad/mobile/location/`
 Pendências / TODO:
 - **iOS não testado** (só o prebuild): diálogo "durante o uso", precisão total temporária com a
   "Localização Precisa" desligada, `maps://` abrindo o Apple Mapas, `CLGeocoder`.
-- Desktop: incluir `get_location`/`nearby_places` no `ToolName`/`TOOL_LABELS` (e um card próprio) para
-  o histórico aparecer com rótulo lá; o editor de tools do desktop descarta os nomes desconhecidos de
-  `enabledTools` ao salvar.
+- Desktop: um card próprio para `get_location`/`nearby_places` no histórico (desde o 1.10.0 o desktop
+  conhece os nomes e rótulos — `@shared/deviceTools` —, preserva-os nas listas e os mostra esmaecidos
+  em "Só no celular").
 - Política de privacidade do site: acrescentar o parágrafo de localização (texto no relatório desta
   entrega; não editado aqui).
 - Overpass público às vezes leva perto de 1 min (fila da instância): avaliar mostrar "ainda buscando…"
@@ -655,6 +655,17 @@ Pendências / TODO:
 - "Salvar como persona" a partir do chat (o desktop tem) não existe no celular.
 - Os campos sem editor no celular (aprovações, Smart-Approve, skills, tools no prompt…) só aparecem
   com o valor e a origem (e "voltar a herdar" quando são do chat); editar é no computador.
+
+## Tools de um tipo de aparelho (protocolo 1.10.0) — estado (2026-11-13)
+
+Feito (vendor do desktop 1badaa2, `@shared/deviceTools`): a lista de tools é a mesma em todo aparelho;
+o Novo chat não marca mais nada como próprio por causa do aparelho (antes: ~15 "neste chat" — as do
+computador desligadas e as de localização ligadas); o celular hospeda chats com ferramentas locais sem
+elas (sem a recusa; `availableTools` só oferece o que roda) e, ao assumir um chat assim, mostra o aviso
+forte com confirmação; as do computador aparecem esmaecidas e alternáveis (configurações do chat,
+persona, Novo chat, tools da chamada) e a contagem "N são ferramentas só do computador" saiu; a
+migração só marca própria a diferença numa tool do tipo de aparelho em que o chat rodou (`hostCwd`);
+"Voltar a herdar tudo" não torna mais o chat inexecutável aqui (sem nenhum caso especial).
 
 ## Ideias
 

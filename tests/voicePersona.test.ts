@@ -197,7 +197,8 @@ describe('voz da persona/chat no celular (1.9.0)', () => {
       updatedAt: 0
     })
     expect(cfg.voice).toBeUndefined()
-    // só as tools da chamada ficam no chat quando a persona liga uma tool local (sem ela)
+    // nem as tools da chamada com uma tool local (§4.3.6: a lista é a mesma em todo aparelho — o
+    // celular só não a roda; antes o chat ganhava uma cópia sem ela)
     const local = resolveNewChat({}, [], {
       id: 'p2',
       name: 'Com shell',
@@ -215,9 +216,7 @@ describe('voz da persona/chat no celular (1.9.0)', () => {
       createdAt: 0,
       updatedAt: 0
     })
-    expect(local.voice?.tools?.enabledTools).toEqual(['web_search'])
-    expect(local.voice?.enabled).toBeNull()
-    expect(local.voice?.voicePrompt).toBeNull()
+    expect(local.voice).toBeUndefined()
   })
 })
 

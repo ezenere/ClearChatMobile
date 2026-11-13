@@ -83,7 +83,10 @@ export interface ChatRuntime {
   mode: HostMode
   /** Este celular executa (ou vai executar, no 1º envio) o chat. */
   local: boolean
-  /** O chat usa ferramentas locais (o celular não o executa). */
+  /**
+   * O chat usa ferramentas locais (§8.9): o celular o executa SEM elas (§4.3.6) — só muda os
+   * avisos (assumir pede confirmação forte).
+   */
   localTools: boolean
   view: MirrorView | null
   driver: ChatDriver
@@ -113,13 +116,14 @@ export function useChatRuntime(
     // a config com que o chat roda: efetiva (herança ao vivo da persona) com a voz em camadas
     const raw = store.getPlain('chat', chatId)?.config
     const localTools = usesLocalTools(raw !== undefined ? runConfigOf(store, raw) : config)
-    // sem conta / "Só neste aparelho": todo chat sem ferramentas locais roda aqui, sem servidor
+    // sem conta / "Só neste aparelho": todo chat roda aqui, sem servidor (as ferramentas locais
+    // ficam de fora — o celular só manda ao modelo as tools que executa, §4.3.6)
     if (host.localOnlyChat(chatId))
       return {
         mode: 'local' as HostMode,
-        local: !localTools,
+        local: true,
         localTools,
-        view: localTools ? null : host.view(chatId),
+        view: host.view(chatId),
         driver: localDriver,
         connected: true
       }
@@ -127,8 +131,7 @@ export function useChatRuntime(
     // sem servidor, um chat que este celular executa continua local: o turno em andamento termina
     // aqui (a outbox sobe depois); começar outro turno espera a conexão
     const local =
-      !localTools &&
-      (mode === 'local' || (mode === 'none' && !st?.host) || (mine && mode !== 'diverged'))
+      mode === 'local' || (mode === 'none' && !st?.host) || (mine && mode !== 'diverged')
     return {
       mode: mine && mode !== 'diverged' ? 'local' : mode,
       local,

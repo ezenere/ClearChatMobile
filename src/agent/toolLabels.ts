@@ -1,12 +1,9 @@
 // Rótulo curto (pt-BR) de qualquer tool: as do desktop (TOOL_LABELS vendorado) e as só do celular
-// (localização).
-import { TOOL_LABELS } from '@shared/tools'
-import type { ToolName } from '@shared/types'
-import { LOCATION_TOOL_HELP, LOCATION_TOOL_LABELS, isLocationTool } from '@/location/service'
+// (localização) — `toolLabel` de @shared/deviceTools (o desktop usa o mesmo).
+import { isPhoneTool, PHONE_TOOL_HELP } from '@shared/deviceTools'
 
-export const toolLabel = (name: string): string =>
-  isLocationTool(name) ? LOCATION_TOOL_LABELS[name] : (TOOL_LABELS[name as ToolName] ?? name)
+export { toolLabel } from '@shared/deviceTools'
 
 /** Explicação de uma linha das tools do celular que têm uma (lista de tools da tela). */
 export const locationToolHelp = (name: string): string | undefined =>
-  isLocationTool(name) ? LOCATION_TOOL_HELP[name] : undefined
+  isPhoneTool(name) ? PHONE_TOOL_HELP[name] : undefined

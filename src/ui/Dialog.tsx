@@ -55,7 +55,8 @@ export function ConfirmDialog({
   onConfirm,
   onClose,
   destructive,
-  busy
+  busy,
+  warning
 }: {
   visible: boolean
   title: string
@@ -65,6 +66,8 @@ export function ConfirmDialog({
   onClose: () => void
   destructive?: boolean
   busy?: boolean
+  /** Aviso forte acima da mensagem (caixa âmbar) — ex.: assumir um chat com ferramentas locais. */
+  warning?: string | null
 }) {
   // rótulo longo (ex.: "Apagar a outra versão e manter esta", §9.2): botões empilhados, sem cortar
   const stacked = confirmLabel.length > 22
@@ -108,7 +111,16 @@ export function ConfirmDialog({
         )
       }
     >
-      {message}
+      {warning ? (
+        <>
+          <View style={styles.warn} testID="dialog-warning">
+            <Text style={styles.warnText}>{warning}</Text>
+          </View>
+          <Text style={styles.text}>{message}</Text>
+        </>
+      ) : (
+        message
+      )}
     </Dialog>
   )
 }
@@ -134,6 +146,14 @@ const styles = StyleSheet.create({
   },
   title: { color: colors.fg, fontSize: 18, fontWeight: '600' },
   text: { color: colors.muted, fontSize: 15, lineHeight: 22 },
+  warn: {
+    borderWidth: 1,
+    borderColor: `${colors.warning}66`,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.lg,
+    padding: spacing.md
+  },
+  warnText: { color: colors.warning, fontSize: 14.5, lineHeight: 21, fontWeight: '500' },
   actions: { flexDirection: 'row', gap: spacing.sm },
   action: { flex: 1 },
   stack: { flex: 1, gap: spacing.sm }

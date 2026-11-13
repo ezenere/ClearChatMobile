@@ -6,7 +6,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CHAT_CONFIG } from '../src/vendor/shared/defaults'
 import type { Chat, ChatConfig, ToolName } from '../src/vendor/shared/types'
-import { availableTools, buildRequest, setLocationSource } from '../src/agent/request'
+import { availableTools, buildRequest, MOBILE_TOOLS, setLocationSource } from '../src/agent/request'
+import {
+  APP_TOOL_NAMES,
+  COMPUTER_TOOL_NAMES,
+  PHONE_TOOLS,
+  runsOn
+} from '../src/vendor/shared/deviceTools'
 import { DENIED_TEXT } from '../src/agent/runner'
 import { lexMarkdown } from '../src/chat/markdownTokens'
 import {
@@ -609,9 +615,19 @@ describe('aprovação e oferta', () => {
     })
     const names = (req.body.tools as { function: { name: string } }[]).map((t) => t.function.name)
     expect(names).toEqual(['web_search', 'get_location', 'nearby_places'])
-    // Novo chat: ligadas por padrão quando a persona não escolhe as tools
+    // os nomes são os do protocolo (@shared/deviceTools, §4.3.6): as só do celular e o que ele roda
+    expect(LOCATION_TOOLS).toEqual(PHONE_TOOLS)
+    expect([...MOBILE_TOOLS].sort()).toEqual(
+      APP_TOOL_NAMES.filter((t) => runsOn(t, 'phone')).sort()
+    )
+    // as do computador ficam na lista do chat mas nunca vão daqui (nem com o padrão do app)
+    const all = chat({ enabledTools: [...APP_TOOL_NAMES] })
+    const sent = availableTools(all, { depth: 0 })
+    expect(sent).toEqual(expect.arrayContaining(['web_search', 'get_location', 'nearby_places']))
+    for (const t of COMPUTER_TOOL_NAMES) expect(sent).not.toContain(t)
+    // Novo chat: o padrão do app (persona sem tools) já as traz ligadas — e as do computador também
     const base = resolveNewChat({}, [], null)
-    expect(base.enabledTools).toEqual(expect.arrayContaining(['get_location', 'nearby_places']))
+    expect(base.enabledTools).toEqual([...APP_TOOL_NAMES])
     const persona = resolveNewChat({}, [], {
       id: 'x',
       name: 'Só web',

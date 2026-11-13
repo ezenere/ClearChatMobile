@@ -1,7 +1,8 @@
 // Novo chat executado NESTE celular: persona (personas sincronizadas), provedor + modelo (provedores
 // sincronizados; modelos pelo /models do provedor, com busca), parâmetros que o modelo aceita
-// (@shared/modelParams) e as tools portáveis (pesquisa na web, abrir páginas, listar modelos,
-// perguntar ao usuário). O chat nasce sem ferramentas locais (§8.9) e roda aqui ao enviar.
+// (@shared/modelParams) e as tools: as que o celular roda e, esmaecidas, as só do computador — a
+// lista do chat é a mesma em todo aparelho (§4.3.6); o celular só manda ao modelo as que executa.
+// Nada vira próprio do chat por causa do aparelho, só o que o usuário muda aqui. Roda aqui ao enviar.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useRouter } from 'expo-router'
 import { useMemo, useState } from 'react'
@@ -9,6 +10,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { providerKind } from '@shared/providerKinds'
 import { ENGINE_META } from '@shared/webSearchSettings'
+import { withTool } from '@shared/deviceTools'
 import type { ChatParams, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { useSession } from '@/account/react'
@@ -28,13 +30,13 @@ import {
 } from '@/host/storageChoice'
 import { useLiveSupported } from '@/live/react'
 import {
-  droppedLocalTools,
   finalizeNewChat,
   initialPresetId,
   presetFromPlain,
   resolveNewChat,
   type NewChatSettings
 } from '@/host/newChat'
+import { ComputerToolsGroup } from '@/settings/ComputerTools'
 import { ModelPicker, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { Button } from '@/ui/Button'
@@ -106,7 +108,6 @@ export default function NewChatScreen() {
   const models = useModels(provider)
   const modelList = models.pid === providerId ? models.list : null
   const info = modelList?.find((m) => m.id === model) ?? null
-  const dropped = droppedLocalTools(preset)
   const engines = searchPlan((id) => store.setting(id)).map((e) => ENGINE_META[e.id].label)
 
   const create = async () => {
@@ -298,9 +299,7 @@ export default function NewChatScreen() {
               title={toolLabel(t)}
               subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
               value={tools.includes(t)}
-              onChange={(v) =>
-                setTools((x) => (v ? [...x.filter((y) => y !== t), t] : x.filter((y) => y !== t)))
-              }
+              onChange={(v) => setTools((x) => withTool(x, t, v))}
               testID={`tool-${t}`}
             />
           ))}
@@ -311,13 +310,8 @@ export default function NewChatScreen() {
                 : 'Nenhum buscador habilitado nas configurações sincronizadas.'}
             </Text>
           ) : null}
-          {dropped.length ? (
-            <Text style={st.hint} testID="new-dropped-tools">
-              Ferramentas locais da persona ({dropped.map((t) => toolLabel(t)).join(', ')}) ficam
-              desligadas: o celular não executa arquivos, shell nem processos.
-            </Text>
-          ) : null}
         </View>
+        <ComputerToolsGroup tools={tools} onToggle={(t, v) => setTools((x) => withTool(x, t, v))} />
       </ScrollView>
       <BottomBarButton
         title="Começar conversa"

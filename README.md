@@ -237,8 +237,8 @@ card da tool negada; faixa de subagentes rodando com "Parar"; toque longo numa m
 copiar, selecionar texto, editar no lugar, editar como nova versão, regenerar, tentar de novo/compactar e
 tentar de novo, apagar; ‹ i/n › troca a versão **no host** (`branch.select`) na principal ociosa; menu do
 chat: fixar/desafixar host, arquivos do host, processos, compactar, extrair memórias, parar subagentes.
-Host offline/sem host/sem conexão/divergente/troca de host: faixa explicando (o celular não executa chats
-com ferramentas locais; nos outros, "Executar neste dispositivo" — fase 4a). Arquivos do host:
+Host offline/sem host/sem conexão/divergente/troca de host: faixa explicando, com "Executar neste
+dispositivo" (fase 4a; um chat com ferramentas locais roda aqui sem elas — aviso forte antes, §8.9). Arquivos do host:
 `files/[chat]` (pastas primeiro, raiz/confinamento do host) e `file/[chat]` (Markdown/código/texto em
 páginas de 128 KiB com "Carregar mais", imagem inteira com progresso, demais tipos "Baixar e abrir").
 Folhas inferiores próprias (`src/ui/Sheet.tsx`).
@@ -259,7 +259,8 @@ chat com `shell` em "Perguntar" e expõe um controle HTTP local para conferir o 
 
 ## Host no celular (fase 4a)
 
-O celular executa os **próprios** chats (sem ferramentas locais, §8.9) chamando os provedores direto (as
+O celular executa os **próprios** chats (sem as ferramentas locais, que só rodam no computador — §4.3.6,
+§8.9) chamando os provedores direto (as
 chaves vêm dos registros `provider` sincronizados, decifrados no aparelho; nunca vão para logs).
 **Decisão de produto:** chats executados no celular não são controlados remotamente — as tools são só
 conversacionais. O celular não publica o stream (§11) e responde todo `remote.command` na hora com
@@ -305,26 +306,28 @@ Host (`src/host/`, sem React Native):
 - `host.ts` — janelas `host.begin`/`host.end` (fecha ocioso e com a outbox vazia), `normalizeStale` ao
   virar host, "Executar neste dispositivo" (`host.takeover`, com `confirm_pinned`), troca pedida por
   outro dispositivo (`host.handover_request`: o turno para **na hora**, a outbox sobe, a janela fecha e
-  `host.release` repassa a fila), perda do host (`host.revoked`/`chat.state`), recusa de chats com
-  ferramentas locais e de comandos remotos, ações da tela (`local(kind, payload)` com os mesmos kinds do
+  `host.release` repassa a fila), perda do host (`host.revoked`/`chat.state`), recusa de comandos
+  remotos, ações da tela (`local(kind, payload)` com os mesmos kinds do
   §8.6) e o **espelho local**: os eventos do runner alimentam o mesmo `LiveMirror` do controle remoto.
 - Segundo plano: `AccountService.beforeBackground` roda antes de fechar o WebSocket — para os turnos
   (parcial `interrupted`, sessão `interrupted`, fila descartada), envia a outbox **sem timers** (o
   Android pausa os timers do JS em segundo plano) e fecha as janelas. `hello.active_windows` reabre as
   janelas numa reconexão rápida.
 - `stack.ts` monta tudo (o mesmo código no aparelho — `native.ts` — e na integração no Node);
-  `policy.ts` = `usesLocalTools` (cópia da regra do desktop); `newChat.ts` = config de um chat novo
-  (padrões de "Novos chats" + persona; só tools portáveis, skills desligadas).
+  `policy.ts` = `usesLocalTools` (a regra do desktop) e o texto do aviso forte ao assumir um chat com
+  ferramentas locais; `newChat.ts` = config de um chat novo (padrões de "Novos chats" + persona; a
+  lista de tools inteira — o celular só não roda as do computador).
 
 Telas: **Novo chat** (botão na lista): persona, provedor + modelo (lista do `/models` com busca ou id
-digitado), parâmetros que o modelo aceita (`paramRules` vendorado), ferramentas portáveis e os buscadores
-configurados. A conversa (`useChatRuntime`) decide quem executa: este celular (selo "Executando neste
-celular", composer e cards ligados ao runner local) ou outro dispositivo (controle remoto da fase 3);
-"Executar neste dispositivo" no menu e na faixa de host offline (só chats sem ferramentas locais);
-chats com ferramentas locais mostram por que o celular não os executa.
+digitado), parâmetros que o modelo aceita (`paramRules` vendorado), as ferramentas (as do celular e, esmaecidas,
+as só do computador) e os buscadores configurados. A conversa (`useChatRuntime`) decide quem executa:
+este celular (selo "Executando neste celular", composer e cards ligados ao runner local) ou outro
+dispositivo (controle remoto da fase 3); "Executar neste dispositivo" no menu e na faixa de host
+offline — num chat com ferramentas locais, com o aviso forte "Este chat usa ferramentas locais
+(diretório raiz … no …); no celular ele roda sem elas." e confirmação.
 
 Testes: `tests/agent.test.ts` (acumulação OpenAI/Anthropic, request, runner contra o provedor falso
-HTTP), `tests/host.test.ts` (janelas, revisões, recusas, troca de host no meio do turno, segundo plano,
+HTTP), `tests/host.test.ts` (janelas, revisões, recusas, chat com tools locais rodando sem elas, troca de host no meio do turno, segundo plano,
 espelho) e `tests/integration/host.test.ts` (servidor real). Provedor falso: `tests/fakes/fakeLlm.ts`
 (SSE OpenAI-compatible e Anthropic, `/models`, DuckDuckGo e páginas falsas; roda sozinho com
 `node tests/fakes/fakeLlm.ts 8790` para o E2E). No app de desenvolvimento,
@@ -361,9 +364,9 @@ Tudo o que o desktop faz num chat sem ferramentas locais roda agora no celular, 
   celular** → entrega local com a janela aberta antes; destino executado por **outro dispositivo
   online** → comando `send` ao host dele (§8.6, como o controle remoto); com `wait_for_reply` a
   resposta é lida dos registros sincronizados quando a janela do turno remoto fecha
-  (`src/host/interChat.ts`). Host do destino offline/em tolerância, divergente, ou chat com
-  ferramentas locais sem computador online → recusa com texto claro (não existe fila no servidor,
-  §8.7). O cabeçalho não sugere responder por `send_to_chat` (o celular não aceita comandos).
+  (`src/host/interChat.ts`). Host do destino offline/em tolerância ou divergente → recusa com texto
+  claro (não existe fila no servidor, §8.7); destino com ferramentas locais executado aqui roda sem
+  elas. O cabeçalho não sugere responder por `send_to_chat` (o celular não aceita comandos).
 - **read_history** (`tools/history.ts` vendorado) com o `HistoryStore` do celular
   (`src/agent/historyStore.ts`): índice `history_fts` (corpo × tools, bm25 3:1, texto do
   `searchableText` vendorado) mantido junto com as mensagens do cache (migração 4 reindexa o que já
@@ -793,13 +796,12 @@ entra com a principal sobrecarregada (429/5xx/timeout/rede); consulta recusada (
 Decisões:
 
 - **Ligar a tool é por chat, como as outras** (`config.enabledTools`, sincronizado): o Novo chat e a
-  persona listam "Localização" e "Lugares próximos" junto das tools do celular; chats novos as trazem
-  ligadas quando a persona não escolhe as tools. Os nomes ficam **fora** do `ToolName`/`TOOL_NAMES`
-  do desktop (não dá para editar o outro repositório): o desktop trata nomes desconhecidos em
-  `enabledTools` sem quebrar — `normalizeToolList` os mantém, `availableTools` filtra por
-  `TOOL_NAMES` (não oferece), `usesLocalTools` não os conta como locais (o celular continua podendo
-  executar o chat) e o editor de tools do desktop só os perde se o usuário mexer nas tools lá.
-  Mensagens antigas com `get_location` viram card genérico no desktop.
+  persona listam "Localização" e "Lugares próximos" junto das tools do celular; o padrão do app
+  ("Novos chats", persona sem tools) as inclui (protocolo 1.10.0, §4.3.6). Os nomes, rótulos e ajudas
+  são do protocolo, em `@shared/deviceTools` (vendorado; `src/location/service.ts` os reexporta): o
+  desktop não as executa (`availableTools` filtra por `TOOL_NAMES`), mas as preserva nas listas e as
+  mostra esmaecidas em "Só no celular"; `usesLocalTools` não as conta como locais. Mensagens antigas
+  com `get_location` viram card genérico no desktop (com o rótulo "Localização").
 - **Aprovação no aparelho, fora dos `approvalModes`**: o desktop normaliza esse setting por
   `APPROVAL_ITEMS` (descartaria um item novo na próxima gravação), o tipo `ApprovalMode` não tem
   "nunca" e a localização é deste aparelho. O runner usa o `ApprovalRegistry` de sempre (mesmo card,
@@ -919,11 +921,19 @@ rótulos); aqui só a leitura do cache e a fiação:
   próprias; `overrides` no patch = como enviado ("voltar a herdar"); `presetId` = trocar de persona
   (`null` = "Nenhuma" = congelar). O registro sai sem `cwd`.
 - **Novo chat**: com persona, `newInheritingChatConfig` (modo diferença) grava como próprias só as
-  unidades em que o formulário difere do valor efetivo da persona — o que o usuário mudou e o que o
-  celular desliga para poder rodar (tools locais, skills); a voz não é copiada (só as tools da chamada,
-  sem as locais, se a persona liga uma).
+  unidades em que o formulário difere do valor efetivo da persona — só o que o usuário mudou (nada
+  por causa do aparelho: as tools do computador ficam na lista; skills como a persona define); a voz
+  não é copiada.
 - **Migração** (chats com `presetId` sem `overrides`): no fim de cada pull completo/lote ao vivo
-  contíguo (gancho `caughtUp` do motor) e na inicialização sem conta; não mexe no `updatedAt`.
+  contíguo (gancho `caughtUp` do motor) e na inicialização sem conta; não mexe no `updatedAt`. Uma
+  diferença numa tool de um tipo de aparelho só vira própria se o chat rodou naquele tipo (`hostCwd`
+  no registro = computador; sem = celular — `chatRanOn`).
+- **Tools de um tipo de aparelho** (§4.3.6): a lista de tools do chat é a mesma em todo aparelho; o
+  celular hospeda chats com ferramentas locais sem elas (`availableTools` só oferece `MOBILE_TOOLS`,
+  nem na request nem no texto das tools) e as do computador aparecem esmaecidas e alternáveis em "Só
+  no computador" (`src/settings/ComputerTools.tsx` — configurações do chat, persona, Novo chat, tools
+  da chamada), com a nota de que não vão ao modelo neste celular. Ligar/desligar usa `withTool`
+  (preserva o que o app não conhece). Assumir um chat assim mostra o aviso forte com confirmação.
 - **Persona apagada**: aqui (`SettingsService.deletePreset`) ou pelo tombstone/resync (gancho
   `beforePresetGone`, dentro da transação, antes de a persona sair do cache) → os chats dela congelam
   (`freezeChat`) e vão à outbox; a outbox LWW segura o tombstone da persona enquanto houver chat

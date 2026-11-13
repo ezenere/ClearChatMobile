@@ -5,9 +5,8 @@
 // o "Prompt do modo voz" e logo abaixo as tags de voz (os dois textos que a chamada acrescenta, na
 // ordem da request — sem prévia que os repita), "o agente pode encerrar", preâmbulos, frases de
 // ferramenta e tools próprias. As escolhas com herança seguem o `InheritChoice` (★ na opção igual
-// ao herdado — nunca uma opção "Padrão" duplicando o padrão). Tools da chamada que só rodam no
-// computador aparecem marcadas e ficam como estão (a chamada no celular só existe em chats sem
-// ferramentas locais, §8.9).
+// ao herdado — nunca uma opção "Padrão" duplicando o padrão). As tools da chamada que só rodam no
+// computador ficam na lista, esmaecidas e alternáveis (§4.3.6: o celular não as manda ao modelo).
 import {
   DEFAULT_VOICE_CALL_DEFAULTS,
   VOICE_CALL_PROMPT_MODES,
@@ -19,12 +18,14 @@ import {
   type VoiceCallPromptMode
 } from '@shared/voice'
 import { DEFAULT_AUDIO_TAGS_PROMPT } from '@shared/audioTags'
+import { withTool } from '@shared/deviceTools'
 import { TOOL_NAMES } from '@shared/tools'
 import type { Provider, ToolName } from '@shared/types'
 import { Text, View } from 'react-native'
 import { MOBILE_TOOLS } from '@/agent/request'
 import { toolLabel } from '@/agent/toolLabels'
 import { LOCATION_TOOLS } from '@/location/service'
+import { ComputerToolsGroup } from '@/settings/ComputerTools'
 import { ModelField } from '@/settings/ModelPicker'
 import { FieldLabel, Multiline, Note, NumberField } from '@/settings/ui'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
@@ -93,12 +94,10 @@ export function VoiceConfigEditor({
   const resolved = resolveVoiceCallConfig(v, defaults, pv)
   const tools = v.tools?.enabledTools ?? null
   const portable = [...TOOL_NAMES, ...LOCATION_TOOLS].filter((t) => MOBILE_TOOLS.includes(t))
-  const localOn = (tools ?? []).filter((t) => !MOBILE_TOOLS.includes(t))
   const toggleTool = (t: ToolName, on: boolean) => {
-    const cur = tools ?? []
     set({
       tools: {
-        enabledTools: on ? [...cur.filter((x) => x !== t), t] : cur.filter((x) => x !== t),
+        enabledTools: withTool(tools ?? [], t, on),
         maxToolOutputChars: v.tools?.maxToolOutputChars ?? null
       }
     })
@@ -293,7 +292,8 @@ export function VoiceConfigEditor({
             set({
               tools: on
                 ? {
-                    enabledTools: (chatTools ?? []).filter((t) => MOBILE_TOOLS.includes(t)),
+                    // a lista inteira do chat (as do computador inclusive — §4.3.6)
+                    enabledTools: [...(chatTools ?? [])],
                     maxToolOutputChars: v.tools?.maxToolOutputChars ?? null
                   }
                 : v.tools?.maxToolOutputChars != null
@@ -319,11 +319,13 @@ export function VoiceConfigEditor({
           ))}
         </Card>
       ) : null}
-      {localOn.length ? (
-        <Text style={{ color: colors.warning, fontSize: 12.5, lineHeight: 17 }}>
-          Ligadas no computador: {localOn.map((t) => toolLabel(t)).join(', ')} — com elas a chamada
-          (e o chat) só roda no computador.
-        </Text>
+      {tools ? (
+        <ComputerToolsGroup
+          tools={tools}
+          onToggle={toggleTool}
+          testID={`${testID}-tools-computer`}
+          rowTestID={(t) => `${testID}-tool-${t}`}
+        />
       ) : null}
       <NumberField
         label="Teto da saída das tools"

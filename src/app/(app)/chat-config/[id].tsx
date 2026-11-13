@@ -7,7 +7,9 @@
 // herdado e escolhê-la volta a herdar — nunca uma opção "herdar" duplicada.
 // Chats do cache (executados aqui ou em outro dispositivo): grava o registro `chat` (LWW, §7.5).
 // Chats só ao vivo de outro host (`?live=1`, §23.7): cada mudança vai ao host por `chat.update`.
-// Tudo que a tela mostra é a config EFETIVA — o mesmo que vai ao modelo (nada escondido).
+// Tudo que a tela mostra é a config EFETIVA — o mesmo que vai ao modelo (nada escondido). As tools
+// só do computador (§4.3.6) ficam na lista do chat, esmaecidas e alternáveis, com a nota de que o
+// celular não as manda ao modelo.
 import { useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
@@ -15,7 +17,8 @@ import { readUnit, type InheritConfig } from '@shared/chatInherit'
 import { DEFAULT_SYSTEM_PROMPT } from '@shared/defaults'
 import { normalizeMemoryConfig, type MemoryCollection } from '@shared/memory'
 import type { ParamKey } from '@shared/modelParams'
-import { TOOL_LABELS, TOOL_NAMES } from '@shared/tools'
+import { withTool } from '@shared/deviceTools'
+import { TOOL_NAMES } from '@shared/tools'
 import type { ChatConfig, ReasoningEffort, ToolName } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { MOBILE_TOOLS } from '@/agent/request'
@@ -42,7 +45,7 @@ import { hostStack } from '@/host/native'
 import { live } from '@/live/native'
 import { useLiveVersion } from '@/live/react'
 import { remote } from '@/remote/native'
-import { LOCAL_TOOLS } from '@/host/policy'
+import { ComputerToolsGroup } from '@/settings/ComputerTools'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor } from '@/settings/ParamsEditor'
@@ -84,9 +87,6 @@ const OTHER_UNITS = [
   'smartApprove',
   'skills'
 ]
-
-const isLocalTool = (t: string): boolean =>
-  LOCAL_TOOLS.includes((t === 'bash' ? 'shell' : t) as ToolName)
 
 interface Source {
   title: string
@@ -249,19 +249,13 @@ export default function ChatConfigScreen() {
     <InheritLabel key={title} title={title} units={units} right={right} />
   )
   const own = view.own
-  const ownLocalTools = own.filter(
-    (u) => u.startsWith('enabledTools.') && isLocalTool(u.slice(13)) && !readUnit(eff, u)
-  ).length
   const tools = eff.enabledTools ?? []
-  const toggleTool = (t: ToolName, on: boolean) =>
-    patch({
-      enabledTools: on ? [...tools.filter((x) => x !== t), t] : tools.filter((x) => x !== t)
-    })
+  // a lista inteira: as do computador e as desconhecidas ficam (§4.3.6)
+  const toggleTool = (t: ToolName, on: boolean) => patch({ enabledTools: withTool(tools, t, on) })
   const portable = [
     ...TOOL_NAMES,
     ...(MOBILE_TOOLS.filter((t) => !TOOL_NAMES.includes(t)) as ToolName[])
   ].filter((t) => MOBILE_TOOLS.includes(t))
-  const localList = TOOL_NAMES.filter((t) => !MOBILE_TOOLS.includes(t))
   const paramUnits = Object.keys(eff.params ?? {})
     .concat(Object.keys(record.params ?? {}))
     .filter((k) => k !== 'extraBody')
@@ -344,9 +338,7 @@ export default function ChatConfigScreen() {
             {view.active ? (
               <View style={st.ownLine}>
                 <Text style={st.ownText} testID="inherit-own-count">
-                  {own.length
-                    ? `${ownCountText(own.length)}${ownLocalTools ? ` (${ownLocalTools === 1 ? '1 é uma ferramenta só do computador desligada' : `${ownLocalTools} são ferramentas só do computador desligadas`} — sem elas o chat também roda no celular)` : ''}.`
-                    : 'Nenhum campo próprio deste chat.'}
+                  {own.length ? `${ownCountText(own.length)}.` : 'Nenhum campo próprio deste chat.'}
                 </Text>
                 {own.length ? (
                   <TextButton
@@ -429,26 +421,16 @@ export default function ChatConfigScreen() {
             </View>
           ))}
         </Card>
-        <FieldLabel>Só no computador</FieldLabel>
-        <Card padded={false}>
-          {localList.map((t, i) => (
-            <View key={t} style={st.toolRow}>
-              {i ? <Divider /> : null}
-              <InheritInline units={[`enabledTools.${t}`]} testID={`inherit-mark-tool-${t}`}>
-                <ToggleRow
-                  title={TOOL_LABELS[t]}
-                  value={tools.includes(t)}
-                  onChange={(v) => toggleTool(t, v)}
-                  testID={`chat-tool-${t}`}
-                />
-              </InheritInline>
-            </View>
-          ))}
-        </Card>
-        <Note>
-          O celular não executa arquivos, shell, processos nem skills: com uma delas ligada o chat
-          só roda num computador.
-        </Note>
+        <ComputerToolsGroup
+          tools={tools}
+          onToggle={toggleTool}
+          rowTestID={(t) => `chat-tool-${t}`}
+          wrap={(t, row) => (
+            <InheritInline units={[`enabledTools.${t}`]} testID={`inherit-mark-tool-${t}`}>
+              {row}
+            </InheritInline>
+          )}
+        />
 
         {/* ---------------- memória ---------------- */}
         {label('Memória', ['memory'])}

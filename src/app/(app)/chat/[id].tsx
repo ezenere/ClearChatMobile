@@ -41,6 +41,7 @@ import { BUSY_STATUS, liveStatus } from '@/remote/mirror'
 import { remote, useRemoteNotices } from '@/remote/react'
 import { chatActions, host, hostStack, onHostNotice, useChatRuntime } from '@/host/react'
 import { HostError } from '@/host/host'
+import { localToolsTakeoverText } from '@/host/policy'
 import type { DivergenceDetails } from '@/host/divergence'
 import { divergedOf, handoverOf } from '@/remote/types'
 import { normalizeMemoryConfig } from '@shared/memory'
@@ -492,7 +493,7 @@ export default function ChatScreen() {
           <Ionicons name="folder-open-outline" size={20} color={colors.muted} />
         </Pressable>
       ) : null}
-      {local && !localTools && loaded ? (
+      {local && loaded ? (
         <Pressable
           onPress={() =>
             callHere
@@ -866,7 +867,7 @@ export default function ChatScreen() {
             testID="chat-action-pin"
           />
         ) : null}
-        {(remoteOn || mode === 'host-offline') && !localTools ? (
+        {remoteOn || mode === 'host-offline' ? (
           <SheetItem
             icon="phone-portrait-outline"
             label="Executar neste dispositivo"
@@ -1093,10 +1094,17 @@ export default function ChatScreen() {
       <ConfirmDialog
         visible={takeover}
         title="Executar neste dispositivo?"
+        // §8.9: chat com ferramentas locais → aviso forte (elas ficam desligadas enquanto o
+        // celular for o host — §4.3.6) e confirmação explícita
+        warning={
+          localTools
+            ? localToolsTakeoverText(store.getPlain('chat', id)?.hostCwd, state?.host?.name)
+            : null
+        }
         message={
           state?.pinned
             ? `O host deste chat está fixado no ${hostName}. Executar aqui mesmo assim? O chat passa a rodar neste celular${remoteOn ? ` quando o ${hostName} terminar o turno atual` : ''}.`
-            : `O chat passa a rodar neste celular${remoteOn ? ` quando o ${hostName} terminar o turno atual` : ''}. Ele não usa ferramentas locais.`
+            : `O chat passa a rodar neste celular${remoteOn ? ` quando o ${hostName} terminar o turno atual` : ''}.${localTools ? '' : ' Ele não usa ferramentas locais.'}`
         }
         confirmLabel={state?.pinned ? 'Executar aqui mesmo assim' : 'Executar aqui'}
         busy={takingOver}

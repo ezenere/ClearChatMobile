@@ -1,7 +1,8 @@
 // Construção da request no celular — adaptação de ClearChatDesktop/src/main/agent/request.ts (lá
 // depende de os/shell/fs). Mesma montagem (system → histórico ativo sanitizado → tools → params
 // filtrados pelo modelo → cache_control), com estas diferenças:
-// - só as tools PORTÁVEIS vão (`MOBILE_TOOLS`): o resto nunca é oferecido ao modelo;
+// - só as tools PORTÁVEIS vão (`MOBILE_TOOLS`): as só do computador (§4.3.6) ficam na lista do
+//   chat, mas nunca são oferecidas ao modelo daqui (nem na request nem no texto das tools);
 // - <environment> sem raiz/shell (o celular não executa tools locais): só o SO;
 // - anexos: o leitor (base64) vem pronto do runner, que baixou os blobs antes (§14);
 // - memória: fontes registráveis (índice congelado + help, tools pela config — como o desktop);
@@ -46,9 +47,10 @@ export interface BuiltRequest {
 export { buildHeaders, chatCompletionsUrl }
 
 /**
- * Tools que o celular executa (habilitáveis no chat): conversacionais, subagentes, entre chats e
- * read_history. As de memória entram pela config de memória (não por enabledTools). Tools locais
- * nunca: o celular recusa hospedar esses chats (§8.9).
+ * Tools que o celular executa (habilitáveis no chat): conversacionais, subagentes, entre chats,
+ * read_history e as só do celular (localização). As de memória entram pela config de memória (não
+ * por enabledTools). As só do computador (@shared/deviceTools — arquivos, shell, processos; skills
+ * por `config.skills`) nunca: o celular hospeda esses chats sem elas (§4.3.6, §8.9).
  */
 export const MOBILE_TOOLS: readonly ToolName[] = [
   'web_search',
@@ -64,7 +66,8 @@ export const MOBILE_TOOLS: readonly ToolName[] = [
   'list_chats',
   'send_to_chat',
   'read_history',
-  // só no celular (src/location): fora do TOOL_NAMES do desktop, que as ignora em enabledTools
+  // só no celular (src/location; nomes em @shared/deviceTools): o desktop as preserva nas listas
+  // e as mostra esmaecidas, mas não as executa
   ...LOCATION_TOOLS
 ]
 

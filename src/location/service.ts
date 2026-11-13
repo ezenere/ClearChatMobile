@@ -7,6 +7,14 @@
 //                   pelo nome) pelo Overpass, com distância calculada aqui e links para o app de mapas.
 // Modo "Aproximada" (padrão): a posição vai arredondada a ~1 km para o modelo, o OSM e o geocodificador.
 // A aprovação (perguntar/sempre/nunca) é do aparelho (./settings.ts) e o runner a aplica.
+import {
+  isPhoneTool,
+  PHONE_TOOL_HELP,
+  PHONE_TOOL_LABELS,
+  PHONE_TOOL_NAMES,
+  PHONE_TOOLS,
+  type PhoneToolName
+} from '@shared/deviceTools'
 import type { ToolDefinition } from '@shared/tools'
 import type { ToolName } from '@shared/types'
 import {
@@ -48,26 +56,16 @@ import type { LocationSettings } from './settings'
 import { resolveQuery } from './tags'
 
 // ---------------- nomes e definições ----------------
+// Os nomes, rótulos e ajudas são os do protocolo (§4.3.6 — tools "só no celular"), em
+// @shared/deviceTools: o desktop os conhece para mostrá-las esmaecidas e preservá-las nas listas.
 
-export const LOCATION_TOOL_NAMES = ['get_location', 'nearby_places'] as const
-export type LocationToolName = (typeof LOCATION_TOOL_NAMES)[number]
-/** Os nomes no tipo das tools do protocolo (o tipo do desktop não os conhece — ver README). */
-export const LOCATION_TOOLS: readonly ToolName[] = [
-  ...LOCATION_TOOL_NAMES
-] as string[] as ToolName[]
-
-export const isLocationTool = (n: string): n is LocationToolName =>
-  (LOCATION_TOOL_NAMES as readonly string[]).includes(n)
-
-export const LOCATION_TOOL_LABELS: Record<LocationToolName, string> = {
-  get_location: 'Localização',
-  nearby_places: 'Lugares próximos'
-}
-
-export const LOCATION_TOOL_HELP: Record<LocationToolName, string> = {
-  get_location: 'Sua posição atual (com a sua aprovação; Configurações → Localização).',
-  nearby_places: 'Restaurantes, farmácias, mercados… por perto (OpenStreetMap).'
-}
+export const LOCATION_TOOL_NAMES = PHONE_TOOL_NAMES
+export type LocationToolName = PhoneToolName
+/** Os nomes no tipo das tools do protocolo (o `ToolName` do desktop não os conhece). */
+export const LOCATION_TOOLS: readonly ToolName[] = PHONE_TOOLS
+export const isLocationTool = isPhoneTool
+export const LOCATION_TOOL_LABELS = PHONE_TOOL_LABELS
+export const LOCATION_TOOL_HELP = PHONE_TOOL_HELP
 
 const def = (
   name: LocationToolName,

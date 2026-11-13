@@ -18,6 +18,7 @@ import {
   type InheritEnv
 } from '@shared/chatInherit'
 import { DEFAULT_CHAT_CONFIG } from '@shared/defaults'
+import { chatRanOn, type ChatRanOn } from '@shared/deviceTools'
 import { sanitizePresetConfig, type PresetConfig } from '@shared/presets'
 import { isChatProvider } from '@shared/providerKinds'
 import { migrateConfigTools } from '@shared/toolRename'
@@ -129,12 +130,25 @@ export function runConfigOf(
   } as unknown as Record<string, unknown>
 }
 
-/** Contexto da interpretação de patches de config (persona e padrões lidos agora). */
+/**
+ * Em que tipos de aparelho o chat já rodou (§4.3.6, migração das tools de um tipo de aparelho):
+ * num computador se o registro tem `hostCwd` (o host computador o grava); num celular, se não tem.
+ */
+export function chatRanOnOf(plain: Plain | null | undefined): ChatRanOn {
+  return chatRanOn(plain?.hostCwd)
+}
+
+/** Contexto da interpretação de patches de config do chat (persona e padrões lidos agora). */
 export function patchContextOf(
-  store: Pick<LocalStore, 'setting' | 'plainsOf' | 'getPlain'>
+  store: Pick<LocalStore, 'setting' | 'plainsOf' | 'getPlain'>,
+  chatId: string | null
 ): ChatPatchContext {
   const env = inheritEnvOf(store)
-  return { env, persona: (id) => presetConfigOf(store, id) }
+  return {
+    env,
+    persona: (id) => presetConfigOf(store, id),
+    ranOn: chatRanOnOf(chatId ? store.getPlain('chat', chatId) : null)
+  }
 }
 
 /**
@@ -144,14 +158,15 @@ export function patchContextOf(
  */
 export function patchedRecord(
   store: LocalStore,
+  chatId: string,
   record: InheritConfig,
   patch: Partial<InheritConfig> & { presetId?: string | null }
 ): InheritConfig {
-  return applyChatConfigPatch(record, patch, patchContextOf(store))
+  return applyChatConfigPatch(record, patch, patchContextOf(store, chatId))
 }
 
 /** Chats com `presetId` e sem `overrides` (anteriores à 1.10.0): ainda não migrados. */
-function legacyChats(store: LocalStore): { id: string; config: unknown }[] {
+function legacyChats(store: LocalStore): { id: string; config: unknown; ranOn: ChatRanOn }[] {
   return store.sql
     .all<{ id: string; plain: string }>(
       `SELECT id, plain FROM records WHERE type = 'chat' AND deleted = 0 AND state = 0
@@ -161,7 +176,8 @@ function legacyChats(store: LocalStore): { id: string; config: unknown }[] {
     )
     .flatMap((r) => {
       try {
-        return [{ id: r.id, config: (JSON.parse(r.plain) as Plain).config }]
+        const plain = JSON.parse(r.plain) as Plain
+        return [{ id: r.id, config: plain.config, ranOn: chatRanOnOf(plain) }]
       } catch {
         return []
       }
@@ -171,7 +187,9 @@ function legacyChats(store: LocalStore): { id: string; config: unknown }[] {
 /**
  * Migração única dos chats antigos (com `presetId` e sem `overrides`) contra a persona e os padrões
  * DAQUI (§4.3.6) — depois de um pull completo (com conta) ou na inicialização (sem conta; chats
- * "Só neste aparelho" também). Devolve os registros novos (quem chama grava e envia).
+ * "Só neste aparelho" também). Uma diferença numa tool de um tipo de aparelho só vira própria se o
+ * chat rodou naquele tipo (`hostCwd` no registro = computador; sem = celular). Devolve os registros
+ * novos (quem chama grava e envia).
  */
 export function inheritanceMigrations(
   store: LocalStore
@@ -182,7 +200,7 @@ export function inheritanceMigrations(
   const out: { chatId: string; config: InheritConfig }[] = []
   for (const r of rows) {
     const rec = chatRecordFrom(store, r.config)
-    const next = migrateChatOverrides(rec, presetConfigOf(store, rec.presetId), env)
+    const next = migrateChatOverrides(rec, presetConfigOf(store, rec.presetId), env, r.ranOn)
     if (next) out.push({ chatId: r.id, config: next })
   }
   return out
