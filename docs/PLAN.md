@@ -493,6 +493,12 @@ padrão dos TextView com `useBoundsForWidth=false`); vale para chat local, contr
 mesmo `MessageRow`). O desktop/site não têm o problema (HTML). Verificado no AVD com o APK debug
 refeito; o APK de `dist/` precisa ser refeito para levar a correção.
 
+Depois (= desktop a7946ab, sem mudança no vendor): **sem a prévia "O que a chamada muda no prompt"**
+(`VoicePromptPreview.tsx` apagado — repetia os dois campos de texto). Na aba Voz da persona/chat a
+ordem é "Prompt na chamada" → "Prompt do modo voz" → "Tags de voz" (com a instrução), os dois textos
+que a chamada acrescenta na ordem da request; Configurações → Voz fica só com a nota de que o app não
+acrescenta prompt próprio. `voicePromptLayout` (vendorado) continua no cálculo da request.
+
 ## Notificações push (1.7.0) — estado (2026-11-06)
 
 Feito: `src/push/` (decisão §22.7 pura com `K_push`/AAD e os vetores de `push.json`; tarefa do

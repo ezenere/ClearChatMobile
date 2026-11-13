@@ -14,7 +14,6 @@ import {
   DEFAULT_FILLER_DELAY_MS,
   FILLER_DELAY_MS_RANGE,
   resolveBargeIn,
-  voicePromptLayout,
   type AudioInputSettings,
   type SttSettings,
   type TtsSettings,
@@ -32,7 +31,6 @@ import { AudioTagsField } from '@/settings/AudioTagsField'
 import { DelayPhrasesSettings } from '@/settings/DelayPhrasesSettings'
 import { MicActivationLevel } from '@/settings/MicActivationLevel'
 import { ToolPhrasesSettings } from '@/settings/ToolPhrasesSettings'
-import { VoicePromptPreview } from '@/settings/VoicePromptPreview'
 import {
   CatalogField,
   DICTATION_LANGUAGES,
@@ -414,18 +412,6 @@ export default function VoiceSettings() {
           testID="voice-call-endcall"
         />
       </Card>
-      {/* transparência: o que uma chamada sem prompt próprio na persona/chat muda no prompt */}
-      <VoicePromptPreview
-        layout={voicePromptLayout({
-          voicePrompt: null,
-          promptMode: 'append',
-          audioTags: d.audioTags,
-          audioTagsPrompt: d.audioTagsPrompt ?? DEFAULT_AUDIO_TAGS_PROMPT,
-          audioTagsActive: true
-        })}
-        voiceFrom={null}
-        tagsFrom="padrão deste aparelho"
-      />
       <Note>
         O app não acrescenta prompt próprio na chamada: o único texto a mais é o “Prompt do modo
         voz” de cada persona/chat (aba Voz — vazio por padrão, com “Usar sugestão”) e, com as tags

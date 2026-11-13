@@ -1,19 +1,19 @@
 // Aba "Voz" da persona (e a mesma edição para um chat): a chamada de voz (`VoiceCallConfig`,
 // §4.3.3/§4.3.6) com os campos que HERDAM (null) — chat → persona → Configurações → Voz. Mesmos
 // campos do desktop (VoiceChoiceSections + VoiceCallConfigSection): a voz (Fala) e a transcrição da
-// persona/chat (protocolo 1.9.0), disponível, modelo da chamada, tools próprias, como o prompt do
-// modo voz compõe e o prompt, preâmbulos, frases de ferramenta, tags de voz e "o agente pode
-// encerrar". As
-// escolhas com herança seguem o `InheritChoice` (★ na opção igual ao herdado — nunca uma opção
-// "Padrão" duplicando o padrão). Tools da chamada que só rodam no computador aparecem marcadas e
-// ficam como estão (a chamada no celular só existe em chats sem ferramentas locais, §8.9).
+// persona/chat (protocolo 1.9.0), disponível, modelo da chamada, como o prompt do modo voz compõe,
+// o "Prompt do modo voz" e logo abaixo as tags de voz (os dois textos que a chamada acrescenta, na
+// ordem da request — sem prévia que os repita), "o agente pode encerrar", preâmbulos, frases de
+// ferramenta e tools próprias. As escolhas com herança seguem o `InheritChoice` (★ na opção igual
+// ao herdado — nunca uma opção "Padrão" duplicando o padrão). Tools da chamada que só rodam no
+// computador aparecem marcadas e ficam como estão (a chamada no celular só existe em chats sem
+// ferramentas locais, §8.9).
 import {
   DEFAULT_VOICE_CALL_DEFAULTS,
   VOICE_CALL_PROMPT_MODES,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
   SUGGESTED_VOICE_PROMPT,
-  voicePromptLayout,
   type VoiceCallConfig,
   type VoiceCallDefaults,
   type VoiceCallPromptMode
@@ -32,7 +32,6 @@ import { colors, spacing } from '@/ui/theme'
 import type { VoiceSettings } from '@/voice/endpoints'
 import { TextButton } from '@/ui/Button'
 import { AudioTagsField } from './AudioTagsField'
-import { VoicePromptPreview } from './VoicePromptPreview'
 import { InheritChoice } from './InheritChoice'
 import { VoiceChoiceSections } from './VoiceChoiceSections'
 
@@ -220,28 +219,16 @@ export function VoiceConfigEditor({
           />
         </>
       ) : null}
-      {/* transparência: o MESMO cálculo da request — o que a chamada acrescenta e de onde vem */}
-      <VoicePromptPreview
-        layout={voicePromptLayout({ ...resolved, audioTagsActive: true })}
-        voiceFrom={
-          v.voicePrompt
-            ? scope === 'chat'
-              ? 'deste chat'
-              : 'desta persona'
-            : pv?.voicePrompt
-              ? `da persona “${persona?.name ?? ''}”`
-              : null
-        }
-        tagsFrom={
-          v.audioTags != null
-            ? scope === 'chat'
-              ? 'deste chat'
-              : 'desta persona'
-            : pv?.audioTags != null
-              ? `da persona “${persona?.name ?? ''}”`
-              : 'padrão deste aparelho (Configurações → Voz)'
-        }
-        testID={`${testID}-prompt-preview`}
+      <AudioTagsField
+        value={v.audioTags ?? null}
+        inherited={inheritedTags}
+        inheritedFrom={from(pv?.audioTags != null)}
+        prompt={v.audioTagsPrompt ?? null}
+        inheritedPrompt={inheritedTagsPrompt}
+        onChange={(audioTags) => set({ audioTags })}
+        onPromptChange={(audioTagsPrompt) => set({ audioTagsPrompt })}
+        support={tagsSupport}
+        testID={`${testID}-audio-tags`}
       />
 
       <FieldLabel>O agente pode encerrar a chamada</FieldLabel>
@@ -295,18 +282,6 @@ export function VoiceConfigEditor({
         Uma frase curta sobre a 1ª ferramenta do turno (no máximo uma por turno), com a voz da
         chamada. As frases ficam em Configurações → Voz.
       </Note>
-
-      <AudioTagsField
-        value={v.audioTags ?? null}
-        inherited={inheritedTags}
-        inheritedFrom={from(pv?.audioTags != null)}
-        prompt={v.audioTagsPrompt ?? null}
-        inheritedPrompt={inheritedTagsPrompt}
-        onChange={(audioTags) => set({ audioTags })}
-        onPromptChange={(audioTagsPrompt) => set({ audioTagsPrompt })}
-        support={tagsSupport}
-        testID={`${testID}-audio-tags`}
-      />
 
       <FieldLabel>Tools na chamada</FieldLabel>
       <Card>

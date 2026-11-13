@@ -529,8 +529,8 @@ ativação** — `MicActivationLevel`: valor, medidor ao vivo com a linha do ní
 "Testar", o único que abre o microfone), transcrição, fala (provedor/modelo/voz pela listagem do
 provedor — modelo sem lista de vozes, como o Fish Audio pelo OpenRouter, mostra a dica e aceita o
 link `fish.audio/m/<id>` colado —, a nota das tags de voz do modelo, parâmetros do modelo pelos specs
-do desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, a prévia "O que a chamada
-muda no prompt", modelo, preâmbulos — "Espera do preâmbulo": só fala se a resposta passar de 2,5 s —,
+do desktop, "Testar voz"), padrões da chamada (disponível, `end_call`, a nota de que o app não
+acrescenta prompt próprio, modelo, preâmbulos — "Espera do preâmbulo": só fala se a resposta passar de 2,5 s —,
 **Frases de espera** (`src/settings/DelayPhrasesSettings.tsx` — "Manter viva após (silêncio)", 8 s;
 "Agradecer se a última frase foi há mais de", 4,5 s; os pools "manter viva — pensando", "— ferramenta
 rodando" e "obrigado por aguardar", cada um com "Restaurar padrão"), "Falar por cima da resposta" — abaixar a voz depois
@@ -540,10 +540,11 @@ editável, fim de turno) e "Neste aparelho" (falar por cima com fone, microfone 
 "Gerar clipes dos preâmbulos"). Persona → aba **Voz** (`src/settings/VoiceConfigEditor.tsx`): as
 escolhas com herança usam o `InheritChoice` (`src/settings/InheritChoice.tsx`, = desktop): só as
 opções reais, ★ na igual ao herdado (persona → global), sem override a ★ fica selecionada e tocar
-nela limpa o override — Disponível, Prompt na chamada ("Prompt do modo voz" vazio por padrão, com
-"Usar sugestão" que põe o texto sugerido no campo, e a prévia "O que a chamada muda no prompt" —
-`voicePromptLayout` vendorado, o mesmo cálculo da request), O agente pode encerrar, Preâmbulos e Tags de
-voz (com o texto da instrução, "Usar o padrão" e o aviso quando a voz atual não interpreta tags);
+nela limpa o override — Disponível, Prompt na chamada, "Prompt do modo voz" (vazio por padrão, com
+"Usar sugestão" que põe o texto sugerido no campo) e logo abaixo Tags de voz (com o texto da
+instrução, "Usar o padrão" e o aviso quando a voz atual não interpreta tags) — os dois textos que a
+chamada acrescenta, na ordem da request, sem prévia que os repita —, O agente pode encerrar e
+Preâmbulos;
 "Tools próprias na chamada" virou um interruptor (desligado = as do chat, como no desktop).
 **Mensagens da chamada** (`src/chat/voiceText.ts` + `Markdown` `voiceTags`/`dimFrom`, nos chats
 deste celular, no controle remoto e no viewer ao vivo): tags de voz no lugar, com os colchetes, em
