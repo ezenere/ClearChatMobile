@@ -55,6 +55,11 @@ export interface SettingsDeps {
   notify?: (list: boolean) => void
   /** Provedor salvo/apagado: esquece a lista de modelos em cache. */
   invalidateModels?: (providerId: string) => void
+  /**
+   * Antes de apagar uma persona (§4.3.6, §7.7, desde 1.10.0): congela os chats dela (valores
+   * efetivos gravados, `presetId` removido) — eles sobem antes do tombstone.
+   */
+  freezePresetChats?: (presetId: string) => void
   now?: () => number
   uuid?: () => string
 }
@@ -175,8 +180,13 @@ export class SettingsService {
     })
   }
 
-  /** Apaga a persona; se era a padrão do Novo chat, a padrão volta a "nenhuma" (= desktop). */
+  /**
+   * Apaga a persona; se era a padrão do Novo chat, a padrão volta a "nenhuma" (= desktop). Os
+   * chats que a seguem congelam ANTES (ficam com os valores atuais, sem persona — §7.7).
+   */
   deletePreset(id: string): void {
+    if (!this.d.store.getPlain('preset', id)) return
+    this.d.freezePresetChats?.(id)
     this.remove({ type: 'preset', id })
     if (this.setting(DEFAULT_PRESET_SETTING) === id) this.setSetting(DEFAULT_PRESET_SETTING, null)
     this.d.notify?.(true)

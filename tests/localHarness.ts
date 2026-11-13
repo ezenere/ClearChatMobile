@@ -141,7 +141,8 @@ export async function makeLocalPhone(
     store,
     writer: stack.memory.writer,
     memory: stack.memory.index,
-    notify: (list) => engine.notifySettings(list)
+    notify: (list) => engine.notifySettings(list),
+    freezePresetChats: (id) => void stack.freezePresetChats(id)
   })
   const binding = bindAccount(account as unknown as AccountService, engine, null, {
     http: server,

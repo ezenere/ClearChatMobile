@@ -12,8 +12,7 @@ import {
   selKey,
   type BranchSel
 } from '@shared/branches'
-import { DEFAULT_CHAT_CONFIG } from '@shared/defaults'
-import { normalizeVoiceCallConfig } from '@shared/voice'
+import { newInheritingChatConfig, type InheritConfig } from '@shared/chatInherit'
 import type {
   ApiMessage,
   Chat,
@@ -24,6 +23,13 @@ import type {
   StoredMessage
 } from '@shared/types'
 import { chatFromPlain, sessionFromPlain } from '@/data/decode'
+import {
+  chatRecordFrom,
+  effectiveOf,
+  inheritEnvOf,
+  patchedRecord,
+  presetConfigOf
+} from '@/data/inherit'
 import type { ChatStorage, LocalStore } from '@/data/store'
 import type { Plain } from '@/data/types'
 import type { ContentWriter } from './writer'
@@ -84,30 +90,37 @@ export class ChatRepo {
 
   // ---------------- chat ----------------
 
-  /** Chat com a config completa (padrões do app por baixo do que veio no registro). */
+  /**
+   * Chat com a config EFETIVA (herança ao vivo da persona, protocolo 1.10.0 — §4.3.6): os valores
+   * próprios do registro e, nas unidades herdadas, os da persona e de "Novos chats" deste aparelho
+   * lidos agora. É o que roda (agente, subagentes, compactação, memória, voz) e o que a tela mostra;
+   * `config.overrides` vai junto. O registro gravado é `record`.
+   */
   chat(chatId: string): Chat | null {
     const p = this.store.getPlain('chat', chatId)
     if (!p) return null
     const c = chatFromPlain(chatId, p)
-    const fallback = DEFAULT_CHAT_CONFIG('')
-    const cfg = c.config as Partial<ChatConfig>
     return {
       id: chatId,
       title: c.title,
-      config: {
-        ...fallback,
-        ...cfg,
-        // normalizada como na persona (`sanitizePresetConfig`): campos legados de registros antigos
-        // (`interjections` — §4.3.6) somem aqui (= `toChat` do desktop)
-        ...(cfg.voice && typeof cfg.voice === 'object'
-          ? { voice: normalizeVoiceCallConfig(cfg.voice) }
-          : {}),
-        cwd: ''
-      } as ChatConfig,
+      config: effectiveOf(this.store, chatRecordFrom(this.store, c.config)),
       mainSessionId: c.mainSessionId,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt
     }
+  }
+
+  /** Registro do chat (próprios + cópia das herdadas + `overrides`), normalizado; null = não existe. */
+  record(chatId: string): InheritConfig | null {
+    const p = this.store.getPlain('chat', chatId)
+    return p ? chatRecordFrom(this.store, chatFromPlain(chatId, p).config) : null
+  }
+
+  /** Grava a `config` inteira do registro (sem `cwd`, local do aparelho — §4.4). */
+  writeRecord(chatId: string, config: InheritConfig, extra: Plain = {}): void {
+    const { cwd: _cwd, ...rest } = config
+    void _cwd
+    this.writer.writeChatConfig(chatId, rest as Plain, extra)
   }
 
   /** Cria o chat (registro + sessão principal) — o push leva o chat antes do conteúdo. */
@@ -124,7 +137,7 @@ export class ChatRepo {
     const now = this.now()
     // o modo vem ANTES da primeira escrita (a outbox nunca vê um chat só deste aparelho)
     if (input.storage && input.storage !== 'online') this.store.setStorage(chatId, input.storage)
-    const { cwd: _cwd, ...config } = input.config
+    const { cwd: _cwd, ...config } = this.newConfig(input.config)
     void _cwd
     const sid = this.uuid()
     this.writer.writeChat(
@@ -158,15 +171,52 @@ export class ChatRepo {
     return { chat: this.chat(chatId)!, session }
   }
 
-  updateChat(chatId: string, patch: { title?: string; config?: Partial<ChatConfig> }): void {
-    const p: Plain = { updatedAt: this.now() }
-    if (patch.title !== undefined) p.title = patch.title
-    if (patch.config) {
-      const { cwd: _c, ...rest } = patch.config
-      void _c
-      p.config = rest
+  /**
+   * Config de um chat novo (§4.3.6): com uma persona que existe aqui, o chat HERDA ao vivo —
+   * `overrides` = os enviados ou, sem eles, as unidades em que a config do formulário difere do
+   * valor efetivo da persona (o que o usuário mudou e o que o celular desliga para poder rodar:
+   * tools locais, skills); a `config` sai completa (cópia das herdadas). A voz só vai se vier (cada
+   * campo herda a persona ao vivo). Sem persona (ou persona que não existe aqui): como veio, sem
+   * `overrides` — a migração decide quando ela chegar.
+   */
+  private newConfig(input: Partial<InheritConfig>): Partial<InheritConfig> {
+    const persona = presetConfigOf(this.store, input.presetId)
+    if (input.presetId && persona)
+      return newInheritingChatConfig(
+        { ...input, cwd: '', presetId: input.presetId },
+        persona,
+        inheritEnvOf(this.store)
+      )
+    const { overrides: _ov, ...rest } = input
+    void _ov
+    return rest
+  }
+
+  /**
+   * Título/config. A config é um patch com a semântica da herança (@shared/chatInherit →
+   * `applyChatConfigPatch`): sem `overrides` = edição (as unidades tocadas viram próprias); com
+   * `overrides` = como enviado (voltar a herdar); `presetId` = trocar de persona (null = congelar).
+   * Grava o REGISTRO (a cópia das herdadas não é regravada numa edição comum).
+   */
+  updateChat(
+    chatId: string,
+    patch: {
+      title?: string
+      config?: Partial<InheritConfig> & { presetId?: string | null }
+      updatedAt?: boolean
     }
-    this.writer.writeChat(chatId, p)
+  ): void {
+    const p: Plain = patch.updatedAt === false ? {} : { updatedAt: this.now() }
+    if (patch.title !== undefined) p.title = patch.title
+    if (!patch.config) {
+      this.writer.writeChat(chatId, p)
+      return
+    }
+    const record = this.record(chatId)
+    if (!record) return
+    const { cwd: _c, ...cfg } = patch.config
+    void _c
+    this.writeRecord(chatId, patchedRecord(this.store, record, cfg), p)
   }
 
   /** Ordem da lista (§4.3.6: o host reenvia o `chat` a cada mensagem). */

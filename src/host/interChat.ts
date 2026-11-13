@@ -10,6 +10,7 @@ import { contentText } from '@shared/attachments'
 import { activePath } from '@shared/branches'
 import { isDisplayOnly } from '@shared/context'
 import type { InterChatSendMeta } from '@shared/interChat'
+import { runConfigOf } from '@/data/inherit'
 import type { LocalStore } from '@/data/store'
 import type { ChatState } from '@/data/types'
 import type { ChatListEntry } from '@/agent/tools/util'
@@ -71,7 +72,9 @@ export class InterChatBridge implements InterChatRouter {
       }
     const host = st?.host ?? null
     const mine = !host || host.device_id === this.d.me()
-    const cfg = this.d.store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined
+    const raw = this.d.store.getPlain('chat', chatId)?.config
+    // a config com que o chat roda (efetiva — herança ao vivo da persona, §4.3.6)
+    const cfg = raw === undefined ? undefined : runConfigOf(this.d.store, raw)
     if (mine) {
       if (usesLocalTools(cfg))
         return {

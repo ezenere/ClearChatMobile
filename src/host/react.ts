@@ -6,6 +6,7 @@ import type { ApprovalItemDecision } from '@shared/approvalPolicy'
 import type { ApiMessage, AttachmentInfo, QuestionAnswer } from '@shared/types'
 import type { VoiceMessageMeta } from '@shared/voiceCallMarks'
 import type { ChatState } from '@/data/types'
+import { runConfigOf } from '@/data/inherit'
 import { engine, store } from '@/data/native'
 import type { MirrorView } from '@/remote/mirror'
 import { remote } from '@/remote/native'
@@ -109,9 +110,9 @@ export function useChatRuntime(
   return useMemo(() => {
     const st = host.state(chatId) ?? state
     const mode = remote.mode(chatId)
-    const localTools = usesLocalTools(
-      config ?? (store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined)
-    )
+    // a config com que o chat roda: efetiva (herança ao vivo da persona) com a voz em camadas
+    const raw = store.getPlain('chat', chatId)?.config
+    const localTools = usesLocalTools(raw !== undefined ? runConfigOf(store, raw) : config)
     // sem conta / "Só neste aparelho": todo chat sem ferramentas locais roda aqui, sem servidor
     if (host.localOnlyChat(chatId))
       return {

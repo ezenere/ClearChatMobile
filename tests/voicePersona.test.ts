@@ -177,7 +177,7 @@ describe('voz da persona/chat no celular (1.9.0)', () => {
     )
   })
 
-  it('Novo chat de uma persona: a voz/transcrição NÃO entram no snapshot (o chat herda ao vivo)', () => {
+  it('Novo chat de uma persona: a voz NÃO é copiada (cada campo herda a persona ao vivo, 1.10.0)', () => {
     const cfg = resolveNewChat({}, [], {
       id: 'p1',
       name: 'Narradora',
@@ -196,9 +196,28 @@ describe('voz da persona/chat no celular (1.9.0)', () => {
       createdAt: 0,
       updatedAt: 0
     })
-    expect(cfg.voice).toMatchObject({ enabled: true, voicePrompt: 'Fale curto.' })
-    expect(cfg.voice).not.toHaveProperty('tts')
-    expect(cfg.voice).not.toHaveProperty('stt')
+    expect(cfg.voice).toBeUndefined()
+    // só as tools da chamada ficam no chat quando a persona liga uma tool local (sem ela)
+    const local = resolveNewChat({}, [], {
+      id: 'p2',
+      name: 'Com shell',
+      description: '',
+      icon: 'sparkles',
+      config: {
+        voice: {
+          enabled: true,
+          model: null,
+          tools: { enabledTools: ['web_search', 'shell'], maxToolOutputChars: null },
+          voicePrompt: 'Fale curto.',
+          fillers: null
+        }
+      },
+      createdAt: 0,
+      updatedAt: 0
+    })
+    expect(local.voice?.tools?.enabledTools).toEqual(['web_search'])
+    expect(local.voice?.enabled).toBeNull()
+    expect(local.voice?.voicePrompt).toBeNull()
   })
 })
 

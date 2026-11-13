@@ -5,6 +5,7 @@
 // tem e `host_epochs[X]` = epoch da janela aberta (sem janela = replay, §8.4 B). Sem React Native.
 import { SyncApiError, SyncNetworkError } from '@vendor/desktop/sync/http'
 import { blobIdFromSha256, fromHex, openRecord, sealRecord, type Subkeys } from '@/crypto'
+import { mergeChatPatch, mergeChatRecord } from '@/data/chatMerge'
 import { outgoingPlain } from '@/data/legacy'
 import type { LocalStore, OutboxRow } from '@/data/store'
 import type { Change, Plain, PushBody, PushConflict, PushItem, PushResult } from '@/data/types'
@@ -39,16 +40,8 @@ const MAX_ITEMS = 100
 const MAX_BYTES = 3 * 1024 * 1024
 const REF_RE = /clearchat-attachment:\/\/([0-9a-f]{64}(?:\.[a-z0-9]{1,10})?)/g
 
-/** Registro `chat` do servidor + os campos mudados aqui (a `config` mescla por chave). */
-export function mergeChat(server: Plain, patch: Plain | null): Plain {
-  if (!patch) return server
-  const out: Plain = { ...server, ...patch }
-  const sc = server.config
-  const pc = patch.config
-  if (pc && typeof pc === 'object')
-    out.config = { ...(sc && typeof sc === 'object' ? sc : {}), ...(pc as Plain) }
-  return out
-}
+/** Registro `chat` atual + campos (a `config` mescla por chave). */
+export const mergeChat = mergeChatPatch
 
 const isNetwork = (e: unknown): boolean => e instanceof SyncNetworkError
 
@@ -96,7 +89,10 @@ export class ContentWriter {
     this.schedule(chatId)
   }
 
-  /** Registro `chat`: `full` cria (ou substitui) inteiro; senão mescla `patch` no atual. */
+  /**
+   * Registro `chat`: `full` cria (ou substitui) inteiro; senão mescla `patch` no atual. A outbox
+   * guarda a base (o registro antes da primeira edição pendente) para o merge 3-way do §7.5.
+   */
   writeChat(chatId: string, patch: Plain, full?: Plain): void {
     const cur = this.d.store.getPlain('chat', chatId)
     const plain = full ?? mergeChat(cur ?? { sv: 1 }, patch)
@@ -110,6 +106,17 @@ export class ContentWriter {
     })
     this.d.notify([chatId])
     this.schedule(chatId)
+  }
+
+  /**
+   * Troca a `config` inteira do registro `chat` (herança da persona, §4.3.6: edição, voltar a
+   * herdar, trocar de persona, congelar, migrar — chaves podem sair, ex.: `presetId` ao congelar).
+   * `extra` = outros campos do registro (título, `updatedAt`).
+   */
+  writeChatConfig(chatId: string, config: Plain, extra: Plain = {}): void {
+    const cur = this.d.store.getPlain('chat', chatId)
+    if (!cur) return
+    this.writeChat(chatId, { ...extra, config }, { ...cur, ...extra, config })
   }
 
   /** Apaga o chat aqui (tombstone + cascata no cache) — chats sem conta; sobe como os outros. */
@@ -303,7 +310,15 @@ export class ContentWriter {
         const res = await this.post({ push_id: this.uuid(), items: [item] })
         const r = res.results.find((x) => x.type === 'chat' && x.id === chatId) ?? res.results[0]
         store.commitOutbox([
-          { type: 'chat', id: chatId, mark: row.mark, rev: item.rev, seq: r?.seq ?? 0, blobs }
+          {
+            type: 'chat',
+            id: chatId,
+            mark: row.mark,
+            rev: item.rev,
+            seq: r?.seq ?? 0,
+            blobs,
+            sent: row.plain
+          }
         ])
         this.d.notify([chatId])
         break
@@ -317,7 +332,10 @@ export class ContentWriter {
         }
         if (c.reason !== 'rev_mismatch' || !c.current) throw e
         const server = await this.decrypt(keys, c.current)
-        store.rebaseOutbox('chat', chatId, c.current.rev, mergeChat(server, row.patch))
+        // a linha pode ter mudado durante o envio (edição nova, merge no pull): relida aqui
+        const cur = store.chatOutboxRow(chatId)
+        if (!cur) break
+        store.rebaseOutbox('chat', chatId, c.current.rev, mergeChatRecord(server, cur), server)
       }
     }
     // 2. conteúdo

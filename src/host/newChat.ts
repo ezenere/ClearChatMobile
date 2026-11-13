@@ -1,12 +1,14 @@
 // Config de um chat novo criado no celular (porta de ClearChatDesktop/src/renderer/src/lib/
 // presets.ts: padrões de "Novos chats" + persona por cima, provedor e modelo andando juntos) com as
 // regras do celular: só as tools portáveis ficam ligadas, skills desligadas e as tools locais da
-// chamada de voz removidas — o chat nasce sem ferramentas locais (§8.9). Puro.
+// chamada de voz removidas — o chat nasce sem ferramentas locais (§8.9). Com persona o chat HERDA
+// dela ao vivo (protocolo 1.10.0): o repo grava como próprias só as unidades em que esta config
+// difere do valor efetivo da persona (`newInheritingChatConfig`) e a voz não é copiada. Puro.
 import { DEFAULT_CHAT_CONFIG, supportsCacheControl } from '@shared/defaults'
 import { defaultModelRef, resolvePresetModel } from '@shared/models'
 import { applyPreset, DEFAULT_PRESET_NAME } from '@shared/presets'
-import { withoutVoiceChoice } from '@vendor/renderer/voice/voiceChoice'
 import { isChatProvider, providerKind } from '@shared/providerKinds'
+import { normalizeVoiceCallConfig } from '@shared/voice'
 import type { ChatConfig, ChatParams, Preset, Provider, ToolName } from '@shared/types'
 import type { Plain } from '@/data/types'
 import { MOBILE_TOOLS } from '@/agent/request'
@@ -67,9 +69,14 @@ export function resolveNewChat(
     baseUrl: prov?.baseUrl,
     kind: prov ? providerKind(prov) : undefined
   })
-  // a voz/transcrição da persona (`voice.tts`/`voice.stt`, 1.9.0) NÃO vira snapshot: o chat as herda
-  // AO VIVO da persona de origem (`presetId`) — trocar a voz da persona muda a dos chats dela
-  const cfg = withoutVoiceChoice(applyPreset(base, preset?.config))
+  // a voz da persona NÃO vira cópia (1.9.0/1.10.0): cada campo da `voice` do chat herda dela ao
+  // vivo — trocar a voz da persona muda a dos chats dela. Só as tools da chamada, se a persona
+  // liga uma tool local, ficam no chat (sem ela): o celular não executa tools locais (§8.9)
+  const cfg = applyPreset(base, preset?.config)
+  delete cfg.voice
+  const vt = preset?.config.voice?.tools
+  if (vt?.enabledTools?.some((t) => LOCAL_TOOLS.includes(String(t) === 'bash' ? 'shell' : t)))
+    cfg.voice = normalizeVoiceCallConfig({ tools: vt })
   const { ref: r } = resolvePresetModel(
     { providerId: base.providerId, model: base.model },
     preset?.config,

@@ -3,7 +3,7 @@
 // `memory_collection` com só os campos que mudaram como "sujos" (§7.5) — o desktop vê pelo sync
 // normal. Sem React Native: o aparelho (native.ts) e os testes montam com o seu `Sql`.
 import type { Subkeys } from '@/crypto'
-import { LwwWriter } from '@/data/lww'
+import { LwwWriter, type LwwDeps } from '@/data/lww'
 import type { Sql } from '@/data/sql'
 import type { LocalStore } from '@/data/store'
 import type { Plain } from '@/data/types'
@@ -20,6 +20,8 @@ export interface MemorySystemDeps {
   log?: (msg: string) => void
   now?: () => number
   writerTiming?: { debounceMs?: number; retryMs?: number }
+  /** Registro da outbox LWW que ainda não pode subir (tombstone de persona antes dos chats dela). */
+  hold?: LwwDeps['hold']
 }
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
@@ -47,6 +49,7 @@ export function createMemorySystem(d: MemorySystemDeps): MemorySystem {
     keys: d.keys,
     notify: d.notify,
     log: d.log,
+    hold: d.hold,
     ...d.writerTiming
   })
   const sync = (collectionId: string | null, memoryId: string | null): void => {

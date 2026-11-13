@@ -12,7 +12,8 @@ export const settings = new SettingsService({
   writer: hostStack.memory.writer,
   memory: hostStack.memory.index,
   notify: (list) => engine.notifySettings(list),
-  invalidateModels
+  invalidateModels,
+  freezePresetChats: (id) => void hostStack.freezePresetChats(id)
 })
 
 let started = false

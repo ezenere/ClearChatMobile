@@ -19,6 +19,7 @@ import type {
   StreamDraft
 } from '@shared/types'
 import type { Subkeys } from '@/crypto'
+import { runConfigOf } from '@/data/inherit'
 import type { LocalStore } from '@/data/store'
 import type { ChatState } from '@/data/types'
 import { sealCommand, sealResult, type Envelope } from '@/remote/crypto'
@@ -288,10 +289,14 @@ export class HostService {
     }
   }
 
-  /** Por que o celular não pode executar este chat (null = pode). */
+  /**
+   * Por que o celular não pode executar este chat (null = pode). Sobre a config com que o chat
+   * RODA: a efetiva (herança ao vivo da persona, §4.3.6) com a voz da persona em camadas.
+   */
   refusal(chatId: string): string | null {
-    const cfg = this.d.store.getPlain('chat', chatId)?.config
-    return usesLocalTools(cfg as Record<string, unknown> | undefined) ? LOCAL_TOOLS_REFUSAL : null
+    const p = this.d.store.getPlain('chat', chatId)
+    if (!p) return null
+    return usesLocalTools(runConfigOf(this.d.store, p.config)) ? LOCAL_TOOLS_REFUSAL : null
   }
 
   // ---------------- WebSocket ----------------

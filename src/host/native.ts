@@ -103,6 +103,9 @@ export function startHost(): void {
   // 1.8.0 (§23.1): quem já sincronizava continua criando chats online por padrão
   initStorageDefault(kv, store.cursor > 0)
   bindHost(account, host, hostStack.runner)
+  // sem conta (§4.3.6): os chats antigos migram para a herança ao vivo já na inicialização (com
+  // conta, depois de cada pull completo — o motor chama)
+  if (isLocalMode()) hostStack.migrateInheritance()
   // dados sem conta unidos à conta (§12): o conteúdo gravado aqui sobe
   onAfterMerge(() => hostStack.writer.resume())
   AppState.addEventListener('change', (s) => {

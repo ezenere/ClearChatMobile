@@ -1,7 +1,10 @@
 // Ligações React dos chats só ao vivo: a lista agrupada por host, o chat aberto (inscrição +
 // histórico em memória enquanto a tela está montada) e os avisos (saiu da lista, epoch novo).
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { effectiveConfigOf } from '@/data/inherit'
+import { store } from '@/data/native'
 import type { LoadedChat } from '@/data/store'
+import { useSettingsVersion } from '@/settings/react'
 import type { HistoryPhase } from './history'
 import type { LiveEntry, LiveGroup } from './list'
 import { live } from './native'
@@ -33,24 +36,39 @@ export interface LiveChatView {
   progress: number
 }
 
-/** Chat ao vivo aberto na tela: inscrição no stream + histórico enquanto montado. */
+/**
+ * Chat ao vivo aberto na tela: inscrição no stream + histórico enquanto montado. O host manda o
+ * registro do chat (próprios + cópia + `overrides`, §4.3.6): a config mostrada é a EFETIVA, com as
+ * personas e os padrões DESTE aparelho (sincronizados — iguais aos do host).
+ */
 export function useLiveChat(chatId: string): LiveChatView {
   useEffect(() => {
     live.open(chatId)
     return () => live.close(chatId)
   }, [chatId])
   const v = useLiveVersion()
+  const sv = useSettingsVersion()
   return useMemo(() => {
+    void sv
     const h = live.history(chatId)
+    const l = h?.loaded ?? null
     return {
       entry: live.entry(chatId),
       phase: h ? h.phase : 'none',
       error: h?.error ?? null,
-      loaded: h?.loaded ?? null,
+      loaded: l
+        ? {
+            ...l,
+            chat: {
+              ...l.chat,
+              config: effectiveConfigOf(store, l.chat.config) as unknown as Record<string, unknown>
+            }
+          }
+        : null,
       progress: h?.progress ?? 0
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `v` é o gatilho de releitura
-  }, [chatId, v])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `v`/`sv` são os gatilhos de releitura
+  }, [chatId, v, sv])
 }
 
 export function useLiveNotices(fn: (n: LiveNotice) => void): void {

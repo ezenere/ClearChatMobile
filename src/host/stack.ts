@@ -5,6 +5,7 @@ import {
   normalizeApprovalLists,
   validateListEntry
 } from '@shared/approvalPolicy'
+import type { InheritConfig } from '@shared/chatInherit'
 import { isChatProvider } from '@shared/providerKinds'
 import type { ApprovalListItem, ModelInfo, Provider } from '@shared/types'
 import type { InterChatSendMeta } from '@shared/interChat'
@@ -23,6 +24,12 @@ import type { LocalStore } from '@/data/store'
 import type { Plain } from '@/data/types'
 import type { Sql } from '@/data/sql'
 import { chatTitle } from '@/data/decode'
+import {
+  effectiveConfigOf,
+  freezesOfPreset,
+  inheritanceMigrations,
+  inheritEnvOf
+} from '@/data/inherit'
 import { historyStore } from '@/agent/historyStore'
 import { listModels as fetchModels } from '@/agent/providers'
 import {
@@ -114,6 +121,16 @@ export interface HostStack {
   deleteChatLocal: (chatId: string) => Promise<void>
   /** "Salvar online" de um chat só deste aparelho (§23.8). */
   saveOnline: (chatId: string) => number
+  /**
+   * Migração única dos chats antigos para a herança ao vivo da persona (§4.3.6): depois de um
+   * pull completo (o motor chama) e na inicialização sem conta. Devolve os ids migrados.
+   */
+  migrateInheritance: () => string[]
+  /**
+   * Persona saindo (apagada aqui ou tombstone recebido, §7.7): congela os chats locais dela antes
+   * — os frozen sobem antes do tombstone (a outbox LWW espera por eles). Devolve os ids.
+   */
+  freezePresetChats: (presetId: string) => string[]
 }
 
 export function createHostStack(d: HostStackDeps): HostStack {
@@ -168,7 +185,9 @@ export function createHostStack(d: HostStackDeps): HostStack {
     },
     notify: () => d.engine.notifyLocal([], false),
     log: d.log,
-    writerTiming: d.writerTiming
+    writerTiming: d.writerTiming,
+    // §7.7 (1.10.0): o tombstone de uma persona só sobe depois dos chats congelados dela
+    hold: (row) => row.type === 'preset' && row.deleted && d.store.frozenPending(row.id).length > 0
   })
   // fontes da request: índice congelado/help no system prompt e tools de memória (= desktop)
   setMemorySources({
@@ -222,16 +241,19 @@ export function createHostStack(d: HostStackDeps): HostStack {
     log: d.log,
     memory: memory.service,
     historyStore: () => historyStore(d.store),
-    listChats: () =>
-      d.store.listChats().map((c) => {
-        const cfg = d.store.getPlain('chat', c.id)?.config as Record<string, unknown> | undefined
+    listChats: () => {
+      const env = inheritEnvOf(d.store)
+      return d.store.listChats().map((c) => {
+        // o modelo efetivo (herança ao vivo da persona, §4.3.6)
+        const raw = d.store.getPlain('chat', c.id)?.config
         return {
           id: c.id,
           title: chatTitle(c.title),
-          model: typeof cfg?.model === 'string' ? cfg.model : '',
+          model: raw === undefined ? '' : effectiveConfigOf(d.store, raw, env).model || '',
           updatedAt: c.updatedAt
         }
-      }),
+      })
+    },
     interChat: bridge,
     location
   })
@@ -302,6 +324,32 @@ export function createHostStack(d: HostStackDeps): HostStack {
     log: d.log
   })
   d.engine.setHoldContent((chatId) => divergence.hold(chatId))
+  // herança ao vivo da persona (1.10.0): grava o registro sem mexer no `updatedAt` (a ordem da
+  // lista não muda) — o chat sobe pela outbox (nos "Só neste aparelho", fica aqui)
+  const writeRecords = (list: { chatId: string; config: InheritConfig }[]): string[] => {
+    for (const { chatId, config } of list) repo.writeRecord(chatId, config)
+    return list.map((x) => x.chatId)
+  }
+  const migrateInheritance = (): string[] => {
+    try {
+      const ids = writeRecords(inheritanceMigrations(d.store))
+      if (ids.length) d.log?.(`herança da persona: ${ids.length} chats migrados`)
+      return ids
+    } catch (e) {
+      d.log?.(`herança da persona: migração falhou (${(e as Error).message})`)
+      return []
+    }
+  }
+  const freezePresetChats = (presetId: string): string[] => {
+    const ids = writeRecords(freezesOfPreset(d.store, presetId))
+    if (ids.length) d.log?.(`herança da persona: ${ids.length} chats congelados`)
+    return ids
+  }
+  d.engine.setHooks({
+    beforePresetGone: freezePresetChats,
+    chatRebased: (chatId) => writer.schedule(chatId),
+    caughtUp: () => void migrateInheritance()
+  })
   const renameChatLocal = (chatId: string, title: string): void => {
     const t = title.trim().slice(0, 200)
     if (!t) throw new Error('Dê um nome ao chat.')
@@ -339,6 +387,8 @@ export function createHostStack(d: HostStackDeps): HostStack {
     providers,
     renameChatLocal,
     deleteChatLocal,
-    saveOnline
+    saveOnline,
+    migrateInheritance,
+    freezePresetChats
   }
 }

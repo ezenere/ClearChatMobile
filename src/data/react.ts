@@ -10,6 +10,7 @@ import {
   useState,
   useSyncExternalStore
 } from 'react'
+import { effectiveConfigOf } from './inherit'
 import { attachments, engine, firstLoginMerge, store } from './native'
 import type { MergeState } from './merge'
 import type { DataEvent, SyncStatus } from './engine'
@@ -76,6 +77,17 @@ export function useNow(): number {
   return now
 }
 
+/**
+ * Chat do cache com a config EFETIVA (herança ao vivo da persona, protocolo 1.10.0 — §4.3.6): os
+ * campos que o chat não mudou seguem a persona e "Novos chats" deste aparelho, lidos agora.
+ */
+export function loadEffectiveChat(chatId: string): LoadedChat | null {
+  const l = store.loadChat(chatId)
+  if (!l) return null
+  const config = effectiveConfigOf(store, l.chat.config) as unknown as Record<string, unknown>
+  return { ...l, chat: { ...l.chat, config } }
+}
+
 /** Conteúdo de um chat (undefined = carregando; null = não existe/apagado). */
 export function useChat(chatId: string): {
   loaded: LoadedChat | null | undefined
@@ -85,14 +97,15 @@ export function useChat(chatId: string): {
   const [state, setState] = useState<ChatState | null>(() => store.chatState(chatId))
   useEffect(() => {
     // carrega fora do render inicial (a tela abre na hora e mostra o "carregando")
-    const t = setTimeout(() => setLoaded(store.loadChat(chatId)), 0)
+    const t = setTimeout(() => setLoaded(loadEffectiveChat(chatId)), 0)
     let timer: ReturnType<typeof setTimeout> | null = null
     const off = engine.subscribe((e) => {
       if (e.kind === 'states' && e.chats.includes(chatId)) setState(store.chatState(chatId))
       if (e.kind !== 'data') return
-      if (!e.all && !e.chats.includes(chatId)) return
+      // persona, padrões de "Novos chats" ou provedores mudaram: a config efetiva muda junto
+      if (!e.all && !e.settings && !e.chats.includes(chatId)) return
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => setLoaded(store.loadChat(chatId)), 40)
+      timer = setTimeout(() => setLoaded(loadEffectiveChat(chatId)), 40)
     })
     return () => {
       clearTimeout(t)
