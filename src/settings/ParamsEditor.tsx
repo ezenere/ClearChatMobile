@@ -1,5 +1,9 @@
-// Parâmetros que o modelo aceita (@shared/modelParams: `paramRules`) — Novo chat e personas.
-// Vazio = padrão do provedor (o parâmetro não vai na request).
+// Parâmetros que o modelo aceita (@shared/modelParams: `paramRules`) — Novo chat, personas e as
+// configurações do chat. Vazio = padrão do provedor (o parâmetro não vai na request). No chat que
+// herda a persona (1.10.0) cada linha ganha a marca de próprio (`wrap`) e, no raciocínio, a ★ marca
+// o nível herdado — tocar nela volta a herdar (sem opção "herdar" duplicada).
+import Ionicons from '@expo/vector-icons/Ionicons'
+import { Fragment, type ReactNode } from 'react'
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { EFFORT_ORDER, PARAM_KEYS, paramRules, type ParamKey } from '@shared/modelParams'
 import { providerKind } from '@shared/providerKinds'
@@ -36,23 +40,36 @@ export function ParamsEditor({
   model,
   info,
   params,
-  onParam
+  onParam,
+  wrap,
+  inheritedEffort
 }: {
   provider: Provider
   model: string
   info: ModelInfo | null
   params: ChatParams
   onParam: (k: ParamKey, v: number | string | undefined) => void
+  /** Envolve a linha de cada parâmetro (a marca de próprio do chat). */
+  wrap?: (k: ParamKey, row: ReactNode) => ReactNode
+  /**
+   * Raciocínio herdado da persona: a ★ vai no nível herdado; com o valor próprio, tocar na ★ volta
+   * a herdar (`revert`).
+   */
+  inheritedEffort?: { value: ReasoningEffort | undefined; own: boolean; revert: () => void }
 }) {
   const rules = paramRules({ kind: providerKind(provider), model, info })
+  const wrapped = (k: ParamKey, row: ReactNode): ReactNode => (
+    <Fragment key={k}>{wrap ? wrap(k, row) : row}</Fragment>
+  )
   return (
     <View style={st.box}>
       {PARAM_KEYS.filter((k) => k !== 'reasoning_effort' && rules.supported.includes(k)).map(
         (k) => {
           const ui = PARAM_UI[k as Exclude<ParamKey, 'reasoning_effort'>]
           const v = params[k] as number | undefined
-          return (
-            <View key={k} style={st.paramRow}>
+          return wrapped(
+            k,
+            <View style={st.paramRow}>
               <Text style={st.paramLabel}>{ui.label}</Text>
               <TextInput
                 testID={`param-${k}`}
@@ -72,30 +89,46 @@ export function ParamsEditor({
           )
         }
       )}
-      {rules.effort ? (
-        <View style={{ gap: 6 }}>
-          <Text style={st.paramLabel}>Raciocínio</Text>
-          <View style={st.wrap}>
-            {[undefined, ...EFFORT_ORDER.filter((e) => rules.effort!.levels.includes(e))].map(
-              (e) => {
-                const on = params.reasoning_effort === e
-                return (
-                  <Pressable
-                    key={e ?? 'padrao'}
-                    onPress={() => onParam('reasoning_effort', e)}
-                    style={[st.chip, on && st.chipOn]}
-                    testID={`effort-${e ?? 'padrao'}`}
-                  >
-                    <Text style={[st.chipText, on && { color: colors.fg }]}>
-                      {e ? (EFFORT_LABEL[e] ?? e) : 'padrão'}
-                    </Text>
-                  </Pressable>
-                )
-              }
-            )}
-          </View>
-        </View>
-      ) : null}
+      {rules.effort
+        ? wrapped(
+            'reasoning_effort',
+            <View style={{ gap: 6 }}>
+              <Text style={st.paramLabel}>Raciocínio</Text>
+              <View style={st.wrap}>
+                {[undefined, ...EFFORT_ORDER.filter((e) => rules.effort!.levels.includes(e))].map(
+                  (e) => {
+                    const on = params.reasoning_effort === e
+                    const star = !!inheritedEffort && inheritedEffort.value === e
+                    return (
+                      <Pressable
+                        key={e ?? 'padrao'}
+                        onPress={() =>
+                          star && inheritedEffort.own
+                            ? inheritedEffort.revert()
+                            : onParam('reasoning_effort', e)
+                        }
+                        style={[st.chip, on && st.chipOn]}
+                        accessibilityLabel={`${e ? (EFFORT_LABEL[e] ?? e) : 'padrão'}${star ? ' (★ herdado da persona)' : ''}`}
+                        testID={`effort-${e ?? 'padrao'}${star ? '-star' : ''}`}
+                      >
+                        <Text style={[st.chipText, on && { color: colors.fg }]}>
+                          {e ? (EFFORT_LABEL[e] ?? e) : 'padrão'}
+                        </Text>
+                        {star ? (
+                          <Ionicons
+                            name="star"
+                            size={10}
+                            color={on ? colors.accentStrong : colors.subtle}
+                          />
+                        ) : null}
+                      </Pressable>
+                    )
+                  }
+                )}
+              </View>
+            </View>
+          )
+        : null}
       {PARAM_KEYS.some((k) => !rules.supported.includes(k)) ? (
         <Text style={st.hint}>
           O modelo não aceita: {PARAM_KEYS.filter((k) => !rules.supported.includes(k)).join(', ')} —
@@ -139,6 +172,9 @@ const st = StyleSheet.create({
   },
   wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: radius.pill,

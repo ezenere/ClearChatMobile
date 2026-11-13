@@ -775,6 +775,17 @@ export default function LiveChatScreen() {
             }}
             testID="chat-action-model"
           />
+          <SheetItem
+            icon="options-outline"
+            label="Configurações do chat…"
+            detail={`Persona, modelo, prompt, tools e memória — as mudanças vão para ${hostName}.`}
+            disabled={!active || !loaded}
+            onPress={() => {
+              setMenu(false)
+              router.push({ pathname: '/chat-config/[id]', params: { id, live: '1' } })
+            }}
+            testID="chat-action-config"
+          />
           {entry?.info.hostCwd ? (
             <SheetItem
               icon="folder-open-outline"

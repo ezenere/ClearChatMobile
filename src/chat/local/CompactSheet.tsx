@@ -4,6 +4,8 @@
 import { useEffect, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { describeError } from '@/account/errors'
+import { ChatInheritProvider, InheritInline } from '@/chat/InheritMark'
+import { useCacheChatInherit } from '@/chat/useChatInherit'
 import { hostStack } from '@/host/native'
 import { Button } from '@/ui/Button'
 import { ToggleRow } from '@/ui/Card'
@@ -49,6 +51,9 @@ export function CompactSheet({
   }, [visible, sessionId, toast])
 
   const pct = info?.used != null && info.window ? Math.min(1, info.used / info.window) : null
+  // herança ao vivo da persona (1.10.0): "↺ neste chat" no que o chat mudou para si
+  const inherit = useCacheChatInherit(chatId)
+  const auto = hostStack.repo.chat(chatId)?.config.autoCompact
 
   return (
     <Sheet
@@ -81,20 +86,26 @@ export function CompactSheet({
           ) : null}
         </View>
         {info ? (
-          <ToggleRow
-            title="Compactar automaticamente"
-            subtitle={`Ao passar de ${Math.round(info.threshold * 100)}% da janela de contexto, no próximo passo do agente.`}
-            value={info.auto}
-            onChange={(v) => {
-              setInfo({ ...info, auto: v })
-              try {
-                hostStack.repo.updateChat(chatId, { config: { autoCompact: v } })
-              } catch (e) {
-                toast(describeError(e), 'danger')
-              }
-            }}
-            testID="compact-auto"
-          />
+          <ChatInheritProvider value={inherit}>
+            <View style={{ paddingHorizontal: 6 }}>
+              <InheritInline units={['autoCompact']}>
+                <ToggleRow
+                  title="Compactar automaticamente"
+                  subtitle={`Ao passar de ${Math.round(info.threshold * 100)}% da janela de contexto, no próximo passo do agente.`}
+                  value={auto ?? info.auto}
+                  onChange={(v) => {
+                    setInfo({ ...info, auto: v })
+                    try {
+                      hostStack.repo.updateChat(chatId, { config: { autoCompact: v } })
+                    } catch (e) {
+                      toast(describeError(e), 'danger')
+                    }
+                  }}
+                  testID="compact-auto"
+                />
+              </InheritInline>
+            </View>
+          </ChatInheritProvider>
         ) : null}
         <View style={{ paddingHorizontal: 6, paddingTop: 8 }}>
           <Button

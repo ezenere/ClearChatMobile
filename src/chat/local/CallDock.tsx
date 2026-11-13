@@ -172,6 +172,10 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
   const [cfg] = useState(
     () => store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined
   )
+  // as tools que o chat usa (efetivas — herança ao vivo da persona, 1.10.0)
+  const [effTools] = useState<ToolName[] | null>(
+    () => hostStack.repo.chat(chatId)?.config.enabledTools ?? null
+  )
   const [value, setValue] = useState<VoiceCallConfig | null>(
     () => (cfg?.voice as VoiceCallConfig | undefined) ?? null
   )
@@ -194,7 +198,7 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
         tagsSupport={inherit.tagsSupport}
         device={inherit.device}
         persona={persona}
-        chatTools={Array.isArray(cfg?.enabledTools) ? (cfg.enabledTools as ToolName[]) : null}
+        chatTools={effTools}
         onChange={(voiceCfg) => {
           setValue(voiceCfg)
           hostStack.repo.updateChat(chatId, { config: { voice: voiceCfg } })

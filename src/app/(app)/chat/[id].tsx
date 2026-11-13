@@ -823,6 +823,20 @@ export default function ChatScreen() {
           }}
           testID="chat-action-rename"
         />
+        <SheetItem
+          icon="options-outline"
+          label="Configurações do chat…"
+          detail={
+            chatCfg?.presetId
+              ? 'Persona, modelo, prompt, tools e memória — o que segue a persona e o que é deste chat.'
+              : 'Persona, modelo, prompt, tools e memória deste chat.'
+          }
+          onPress={() => {
+            setMenu(false)
+            router.push({ pathname: '/chat-config/[id]', params: { id } })
+          }}
+          testID="chat-action-config"
+        />
         {localOnlyChat && !host.localOnly ? (
           <SheetItem
             icon="cloud-upload-outline"

@@ -16,9 +16,16 @@ import {
   type InheritEnv
 } from '@shared/chatInherit'
 import type { PresetConfig } from '@shared/presets'
-import { unitLabel, unitValueText } from '@vendor/renderer/inherit'
+import { unitLabel as desktopUnitLabel, unitValueText } from '@vendor/renderer/inherit'
+import { toolLabel } from '@/agent/toolLabels'
 
-export { unitLabel, unitValueText }
+export { unitValueText }
+
+/** Nome legível de uma unidade (as tools de localização do celular com o rótulo daqui). */
+export function unitLabel(unit: string): string {
+  if (unit.startsWith('enabledTools.')) return `Tool ${toolLabel(unit.slice(13))}`
+  return desktopUnitLabel(unit)
+}
 
 /** "Voltar a herdar": o mapa novo sem as unidades (a cópia é recalculada por quem guarda o chat). */
 export function revertPatch(

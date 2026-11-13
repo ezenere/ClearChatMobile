@@ -98,6 +98,12 @@ export default function DefaultsSettings() {
         Os padrões abaixo valem para os campos que a persona não define (a persona “Padrão” não
         define nenhum) e quando não há persona.
       </Note>
+      <Note style={{ marginTop: -spacing.sm }}>
+        <Text testID="defaults-inherit-note">
+          Personas que não definem um campo usam estes padrões — e os chats delas também, ao vivo:
+          mudar aqui muda esses chats (menos os campos que um chat mudou para si).
+        </Text>
+      </Note>
 
       <FieldLabel>Modelo padrão</FieldLabel>
       <ModelField

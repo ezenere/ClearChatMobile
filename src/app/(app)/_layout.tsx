@@ -92,6 +92,7 @@ export default function AppLayout() {
       >
         <Stack.Screen name="chats" />
         <Stack.Screen name="chat/[id]" />
+        <Stack.Screen name="chat-config/[id]" />
         <Stack.Screen name="live/[id]" />
         <Stack.Screen name="new" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="files/[chat]" />

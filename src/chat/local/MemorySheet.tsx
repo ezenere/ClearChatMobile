@@ -1,12 +1,15 @@
 // Memória de um chat executado neste celular (= aba Memória do desktop, enxuta): ligar/desligar,
 // coleções ativas por categoria e ONDE o agente grava (uma coleção de escrita por categoria),
 // extração automática depois da compactação, subagentes consultando e "Atualizar índice agora" (o
-// índice vai congelado por sessão). Grava `config.memory` do chat (LWW por chave, §4.3.6).
+// índice vai congelado por sessão). Grava `config.memory` do chat (LWW por chave, §4.3.6). Num
+// chat que herda a persona (1.10.0) mostra a memória EFETIVA; mudada aqui vira deste chat ("↺ neste
+// chat" volta a herdar).
 import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { normalizeMemoryConfig, type MemoryCollection, type MemoryConfig } from '@shared/memory'
 import { describeError } from '@/account/errors'
-import { store } from '@/data/native'
+import { ChatInheritProvider, InheritLabel } from '@/chat/InheritMark'
+import { useCacheChatInherit } from '@/chat/useChatInherit'
 import { hostStack } from '@/host/native'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { Button } from '@/ui/Button'
@@ -40,7 +43,8 @@ export function MemorySheet({
 
 /** Lê a config e as coleções ao abrir (montado só com a folha visível). */
 function loadMemory(chatId: string): { cfg: MemoryConfig; cols: MemoryCollection[] } {
-  const config = store.getPlain('chat', chatId)?.config as Record<string, unknown> | undefined
+  // a efetiva (herança ao vivo da persona)
+  const config = hostStack.repo.chat(chatId)?.config
   let cols: MemoryCollection[] = []
   try {
     cols = hostStack.memory.service.store.listCollections()
@@ -56,6 +60,14 @@ function MemoryBody({ chatId, sessionId }: { chatId: string; sessionId: string }
   const [cfg, setCfg] = useState<MemoryConfig | null>(initial.cfg)
   const cols = initial.cols
   const [refreshing, setRefreshing] = useState(false)
+  const inherit = useCacheChatInherit(chatId)
+  // voltou a herdar: o editor mostra o valor da persona de novo
+  const [seenOwn, setSeenOwn] = useState(!!inherit?.view.isOwn('memory'))
+  const ownNow = !!inherit?.view.isOwn('memory')
+  if (ownNow !== seenOwn) {
+    setSeenOwn(ownNow)
+    if (!ownNow) setCfg(loadMemory(chatId).cfg)
+  }
 
   const save = (next: MemoryConfig): void => {
     setCfg(next)
@@ -82,7 +94,17 @@ function MemoryBody({ chatId, sessionId }: { chatId: string; sessionId: string }
   }
 
   return (
-    <>
+    <ChatInheritProvider value={inherit}>
+      {inherit ? (
+        <View style={{ paddingHorizontal: 6 }}>
+          <InheritLabel
+            title={
+              inherit.view.isOwn('memory') ? 'Deste chat' : `Segue “${inherit.view.personaName}”`
+            }
+            units={['memory']}
+          />
+        </View>
+      ) : null}
       {cfg ? (
         <View style={st.body}>
           <MemoryConfigEditor cfg={cfg} cols={cols} onChange={save} />
@@ -104,7 +126,7 @@ function MemoryBody({ chatId, sessionId }: { chatId: string; sessionId: string }
           </View>
         </View>
       ) : null}
-    </>
+    </ChatInheritProvider>
   )
 }
 

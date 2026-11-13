@@ -17,6 +17,8 @@ import { MOBILE_TOOLS } from '@/agent/request'
 import { locationToolHelp, toolLabel } from '@/agent/toolLabels'
 import { LOCATION_TOOLS } from '@/location/service'
 import { ChatAvatar } from '@/chat/ChatBits'
+import { followersByPreset } from '@/data/inherit'
+import { store } from '@/data/native'
 import { MemoryConfigEditor } from '@/settings/MemoryConfigEditor'
 import { VoiceConfigEditor } from '@/settings/VoiceConfigEditor'
 import { useVoiceCallInheritance } from '@/settings/voiceUi'
@@ -84,6 +86,8 @@ export default function PersonaEditor() {
   const [icons, setIcons] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const voiceInherit = useVoiceCallInheritance()
+  // chats que seguem esta persona ao vivo (1.10.0): mudar aqui muda os campos que eles não mudaram
+  const [following] = useState(() => (isNew ? 0 : (followersByPreset(store).get(id) ?? 0)))
   const { cfg, missingProvider } = resolvePresetConfig(defaults, providers, draft)
   const patch = (p: Partial<ChatConfig>) => setDraft((d) => patchPresetConfig(d, p))
   const unset = (...keys: (keyof ChatConfig)[]) =>
@@ -202,7 +206,12 @@ export default function PersonaEditor() {
         onChange={setTab}
         testID="persona-tab"
       />
-      <Note>Campos não alterados seguem “Novos chats”.</Note>
+      <Note>
+        Campos não alterados seguem “Novos chats”.
+        {following
+          ? ` ${following === 1 ? '1 chat segue' : `${following} chats seguem`} esta persona ao vivo: o que eles não mudaram para si muda junto.`
+          : ''}
+      </Note>
 
       {tab === 'model' ? (
         <>

@@ -1,12 +1,15 @@
 // Configurações → Personas (= desktop): presets de chat sincronizados — modelo, system prompt,
 // parâmetros, tools, memória. Escolhidas no Novo chat; a estrela define a que vem selecionada
-// (setting `defaultPresetId`). Toque longo: duplicar, definir como padrão, apagar.
+// (setting `defaultPresetId`). Toque longo: duplicar, definir como padrão, apagar. Os chats seguem a
+// persona AO VIVO (1.10.0): a linha mostra quantos; apagar congela os chats dela antes.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useRouter } from 'expo-router'
 import { useState } from 'react'
 import { Pressable, View } from 'react-native'
 import type { Preset } from '@shared/types'
 import { ChatAvatar } from '@/chat/ChatBits'
+import { followersByPreset } from '@/data/inherit'
+import { store } from '@/data/native'
 import { resolvePresetConfig } from '@/settings/records'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { Note, Row, SettingsScreen } from '@/settings/ui'
@@ -51,6 +54,7 @@ function read() {
   }
   const providers = settings.providers()
   return {
+    following: followersByPreset(store),
     defaultId: settings.setting<string>('defaultPresetId') ?? null,
     list: settings.presets().map((p) => ({
       p,
@@ -63,7 +67,11 @@ export default function Personas() {
   const router = useRouter()
   const toast = useToast()
   const version = useSettingsVersion()
-  const { list, defaultId } = readAt(version, read)
+  const { list, defaultId, following } = readAt(version, read)
+  const followText = (id: string): string => {
+    const n = following.get(id) ?? 0
+    return n ? ` · ${n === 1 ? '1 chat segue' : `${n} chats seguem`}` : ''
+  }
   const [menu, setMenu] = useState<Preset | null>(null)
   const [del, setDel] = useState<Preset | null>(null)
   const open = (id: string) => router.push({ pathname: '/settings/persona/[id]', params: { id } })
@@ -95,7 +103,7 @@ export default function Personas() {
                 left={<ChatAvatar icon={p.icon} size={36} />}
                 title={p.name || 'Persona'}
                 badge={p.id === defaultId ? 'padrão' : null}
-                subtitle={`${model || 'sem modelo'} · ${p.description || summary(p)}`}
+                subtitle={`${model || 'sem modelo'} · ${p.description || summary(p)}${followText(p.id)}`}
                 onPress={() => open(p.id)}
                 onLongPress={() => setMenu(p)}
                 right={
@@ -170,7 +178,13 @@ export default function Personas() {
       <ConfirmDialog
         visible={!!del}
         title={`Apagar “${del?.name ?? ''}”?`}
-        message="A persona some de todos os seus dispositivos. Os chats criados com ela continuam como estão."
+        message={`A persona some de todos os seus dispositivos. ${
+          (del && following.get(del.id)) === 1
+            ? 'O chat que a segue fica com os valores que usa agora, sem persona.'
+            : del && following.get(del.id)
+              ? `Os ${following.get(del.id)} chats que a seguem ficam com os valores que usam agora, sem persona.`
+              : 'Os chats criados com ela ficam com os valores que usam agora, sem persona.'
+        }`}
         confirmLabel="Apagar"
         destructive
         onClose={() => setDel(null)}

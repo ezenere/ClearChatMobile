@@ -3,7 +3,10 @@
 // HTTP-Referer / X-Title), as opções que só valem no computador (raiz, sandbox) e o bloco de
 // ambiente (celular e computador; o texto do celular aparece por inteiro).
 // O diretório raiz da persona é local de cada dispositivo (§4.3.3/§4.4) — não aparece aqui.
-import { useState } from 'react'
+// Também nas configurações do chat (herança ao vivo da persona, 1.10.0): `label` desenha os
+// rótulos com a marca de campo próprio e, na assinatura, a ★ marca a herdada.
+import Ionicons from '@expo/vector-icons/Ionicons'
+import { useState, type ReactNode } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import {
   APP_SIGNATURES,
@@ -20,19 +23,31 @@ import { TextField } from '@/ui/TextField'
 import { colors, font, radius, spacing } from '@/ui/theme'
 
 type Patch = (p: Partial<ChatConfig>) => void
+/** Rótulo de uma seção (`units` = as unidades da herança que ela cobre). */
+export type LabelFn = (title: string, units: readonly string[], right?: ReactNode) => ReactNode
 interface Props {
   cfg: Partial<ChatConfig>
   patch: Patch
+  /** Rótulos (padrão: o FieldLabel simples). */
+  label?: LabelFn
+  /** "nesta persona" / "neste chat" (as notas). */
+  where?: string
 }
 
+const plainLabel: LabelFn = (title, _units, right) => (
+  <FieldLabel key={title} right={right}>
+    {title}
+  </FieldLabel>
+)
+
 /** Janela de contexto (manual), limite da compactação e prompt de compactação. */
-export function ContextEditor({ cfg, patch }: Props) {
+export function ContextEditor({ cfg, patch, label = plainLabel, where = 'nesta persona' }: Props) {
   const override = cfg.contextWindow != null && cfg.contextWindow > 0
   const pct = Math.round((cfg.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD) * 100)
   const [promptOpen, setPromptOpen] = useState(cfg.compactPrompt != null)
   return (
     <>
-      <FieldLabel>Janela e compactação</FieldLabel>
+      {label('Janela e compactação', ['contextWindow', 'compactThreshold', 'autoCompact'])}
       <Card padded={false}>
         <View style={st.row}>
           <ToggleRow
@@ -79,22 +94,20 @@ export function ContextEditor({ cfg, patch }: Props) {
           />
         </View>
       </Card>
-      <FieldLabel
-        right={
-          cfg.compactPrompt != null ? (
-            <TextButton
-              title="Restaurar padrão"
-              icon="arrow-undo-outline"
-              onPress={() => patch({ compactPrompt: null })}
-              testID="persona-compact-prompt-reset"
-            />
-          ) : !promptOpen ? (
-            <TextButton title="Editar" icon="create-outline" onPress={() => setPromptOpen(true)} />
-          ) : undefined
-        }
-      >
-        Prompt de compactação
-      </FieldLabel>
+      {label(
+        'Prompt de compactação',
+        ['compactPrompt'],
+        cfg.compactPrompt != null ? (
+          <TextButton
+            title="Restaurar padrão"
+            icon="arrow-undo-outline"
+            onPress={() => patch({ compactPrompt: null })}
+            testID="persona-compact-prompt-reset"
+          />
+        ) : !promptOpen ? (
+          <TextButton title="Editar" icon="create-outline" onPress={() => setPromptOpen(true)} />
+        ) : undefined
+      )}
       {promptOpen || cfg.compactPrompt != null ? (
         <Multiline
           testID="persona-compact-prompt"
@@ -105,41 +118,67 @@ export function ContextEditor({ cfg, patch }: Props) {
       ) : null}
       <Note>
         {cfg.compactPrompt != null
-          ? 'Personalizado nesta persona.'
+          ? `Personalizado ${where}.`
           : 'Padrão do app (o resumo que substitui o histórico ao compactar).'}
       </Note>
     </>
   )
 }
 
-/** Assinatura do app: headers de atribuição de cada request (o OpenRouter usa; outros ignoram). */
-export function SignatureEditor({ cfg, patch }: Props) {
+/**
+ * Assinatura do app: headers de atribuição de cada request (o OpenRouter usa; outros ignoram).
+ * `inherited` (chat que herda a persona): a ★ vai na assinatura herdada; com a própria, tocar na ★
+ * volta a herdar.
+ */
+export function SignatureEditor({
+  cfg,
+  patch,
+  label = plainLabel,
+  inherited
+}: Props & { inherited?: { id: string; own: boolean; revert: () => void } }) {
   const id = normalizeAppSignatureId(cfg.appSignature)
   const custom = cfg.appSignatureCustom ?? { referer: '', title: '' }
   const headers = resolveAppSignatureHeaders(id, cfg.appSignatureCustom)
   const lines = Object.entries(headers).map(([k, v]) => `${k}: ${v}`)
   return (
     <>
-      <FieldLabel>Assinatura do app</FieldLabel>
+      {label('Assinatura do app', ['appSignature'])}
       <Card padded={false}>
-        {APP_SIGNATURES.map((s, i) => (
-          <View key={s.id}>
-            {i ? <Divider /> : null}
-            <Row
-              title={s.label}
-              subtitle={s.referer ?? (s.id === 'none' ? 'Não envia os headers' : null)}
-              onPress={() =>
-                patch(
-                  s.id === 'custom'
-                    ? { appSignature: s.id, appSignatureCustom: custom }
-                    : { appSignature: s.id }
-                )
-              }
-              right={id === s.id ? <Text style={st.check}>✓</Text> : null}
-              testID={`persona-signature-${s.id}`}
-            />
-          </View>
-        ))}
+        {APP_SIGNATURES.map((s, i) => {
+          const star = !!inherited && normalizeAppSignatureId(inherited.id) === s.id
+          return (
+            <View key={s.id}>
+              {i ? <Divider /> : null}
+              <Row
+                title={s.label}
+                subtitle={s.referer ?? (s.id === 'none' ? 'Não envia os headers' : null)}
+                onPress={() =>
+                  star && inherited.own && s.id !== 'custom'
+                    ? inherited.revert()
+                    : patch(
+                        s.id === 'custom'
+                          ? { appSignature: s.id, appSignatureCustom: custom }
+                          : { appSignature: s.id }
+                      )
+                }
+                right={
+                  <View style={st.rowRight}>
+                    {star ? (
+                      <Ionicons
+                        name="star"
+                        size={12}
+                        color={id === s.id ? colors.accentStrong : colors.subtle}
+                        accessibilityLabel="herdada da persona"
+                      />
+                    ) : null}
+                    {id === s.id ? <Text style={st.check}>✓</Text> : null}
+                  </View>
+                }
+                testID={`persona-signature-${s.id}${star ? '-star' : ''}`}
+              />
+            </View>
+          )
+        })}
       </Card>
       {id === 'custom' ? (
         <>
@@ -170,10 +209,10 @@ export function SignatureEditor({ cfg, patch }: Props) {
 }
 
 /** Opções que só fazem diferença no computador (ferramentas locais). */
-export function ComputerOptions({ cfg, patch }: Props) {
+export function ComputerOptions({ cfg, patch, label = plainLabel }: Props) {
   return (
     <>
-      <FieldLabel>No computador</FieldLabel>
+      {label('No computador', ['confineToRoot', 'sandboxBash'])}
       <Card padded={false}>
         <View style={st.row}>
           <ToggleRow
@@ -205,10 +244,10 @@ export function ComputerOptions({ cfg, patch }: Props) {
 /** "Bloco de ambiente" (`envInPrompt`): vale no celular E no computador — cada um manda o seu.
  *  No celular é exatamente `environmentBlock()` (sistema Android + aviso de que não há shell nem
  *  arquivos), mostrado aqui por inteiro (nada de texto oculto no system prompt). */
-export function EnvironmentOption({ cfg, patch }: Props) {
+export function EnvironmentOption({ cfg, patch, label = plainLabel }: Props) {
   return (
     <>
-      <FieldLabel>Ambiente no system prompt</FieldLabel>
+      {label('Ambiente no system prompt', ['envInPrompt'])}
       <Card padded={false}>
         <View style={st.row}>
           <ToggleRow
@@ -234,6 +273,7 @@ export function EnvironmentOption({ cfg, patch }: Props) {
 const st = StyleSheet.create({
   row: { paddingHorizontal: spacing.lg, paddingVertical: 2 },
   check: { color: colors.accentStrong, fontSize: 16, fontWeight: '700' },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   block: {
     color: colors.muted,
     fontSize: 12.5,
