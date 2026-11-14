@@ -8,6 +8,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { EFFORT_ORDER, PARAM_KEYS, paramRules, type ParamKey } from '@shared/modelParams'
 import { providerKind } from '@shared/providerKinds'
 import type { ChatParams, ModelInfo, Provider, ReasoningEffort } from '@shared/types'
+import { Chip } from '@/ui/Help'
 import { colors, radius } from '@/ui/theme'
 
 const PARAM_UI: Record<
@@ -130,10 +131,13 @@ export function ParamsEditor({
           )
         : null}
       {PARAM_KEYS.some((k) => !rules.supported.includes(k)) ? (
-        <Text style={st.hint}>
-          O modelo não aceita: {PARAM_KEYS.filter((k) => !rules.supported.includes(k)).join(', ')} —
-          esses não vão na request.
-        </Text>
+        <View style={st.hidden}>
+          <Chip
+            label={`${PARAM_KEYS.filter((k) => !rules.supported.includes(k)).length} ocultos`}
+            detail={`O modelo não aceita: ${PARAM_KEYS.filter((k) => !rules.supported.includes(k)).join(', ')} — esses não vão na request.`}
+            testID="params-hidden"
+          />
+        </View>
       ) : null}
     </View>
   )
@@ -156,7 +160,7 @@ const st = StyleSheet.create({
     padding: 12,
     gap: 10
   },
-  hint: { color: colors.subtle, fontSize: 12.5, lineHeight: 18 },
+  hidden: { flexDirection: 'row' },
   paramRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   paramLabel: { flex: 1, color: colors.fg, fontSize: 14 },
   paramInput: {

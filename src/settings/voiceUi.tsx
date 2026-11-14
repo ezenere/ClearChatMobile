@@ -4,6 +4,7 @@
 // o provedor não lista) com id digitado, e um "Testar voz".
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'expo-router'
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import type { Provider } from '@shared/types'
 import type { TtsSettings, VoiceCallDefaults } from '@shared/voice'
@@ -23,6 +24,8 @@ import { playableAudio } from '@/voice/player'
 import { synthesizeBlock } from '@vendor/desktop/voice/tts'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { Multiline, NumberField, Segmented } from '@/settings/ui'
+import { Button } from '@/ui/Button'
+import { HelpButton } from '@/ui/Help'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { colors, radius, spacing } from '@/ui/theme'
 
@@ -175,6 +178,7 @@ export function VoiceProviderField({
   testID?: string
 }) {
   const [open, setOpen] = useState(false)
+  const router = useRouter()
   const list = voiceProviders(providers, capability)
   const cur = value ? providers.find((p) => p.id === value) : null
   return (
@@ -184,17 +188,28 @@ export function VoiceProviderField({
         title="Provedor"
         value={cur ? cur.name : value ? 'Provedor apagado' : 'Nenhum'}
         sub={
-          !list.length
-            ? capability === 'stt'
-              ? 'Cadastre um provedor OpenAI-compatível ou OpenRouter em Provedores.'
-              : 'Cadastre um provedor OpenAI-compatível, OpenRouter ou ElevenLabs em Provedores.'
-            : value && !cur
-              ? 'O provedor escolhido não existe neste aparelho.'
-              : null
+          value && !cur && list.length ? 'O provedor escolhido não existe neste aparelho.' : null
         }
         onPress={() => setOpen(true)}
         testID={testID}
       />
+      {!list.length ? (
+        // aviso com ação: o botão é o aviso (quais tipos servem → no detalhe do leitor de tela)
+        <View style={st.warnPad}>
+          <Button
+            title={`Nenhum provedor serve ${capability === 'stt' ? 'transcrição' : 'fala'} · Cadastrar`}
+            variant="warning"
+            size="sm"
+            onPress={() => router.push('/settings/providers')}
+            accessibilityHint={
+              capability === 'stt'
+                ? 'Serve um provedor OpenAI-compatível ou OpenRouter'
+                : 'Serve um provedor OpenAI-compatível, OpenRouter ou ElevenLabs'
+            }
+            testID={testID ? `${testID}-add` : undefined}
+          />
+        </View>
+      ) : null}
       <Sheet visible={open} onClose={() => setOpen(false)} title="Provedor">
         <SheetItem
           icon="remove-circle-outline"
@@ -266,7 +281,7 @@ export function CatalogField({
         value={
           value ? (cur?.name && cur.name !== value ? `${cur.name} · ${value}` : value) : emptyLabel
         }
-        sub={error ?? hint ?? null}
+        sub={error ?? null}
         onPress={() => {
           setQ('')
           setOpen(true)
@@ -274,6 +289,12 @@ export function CatalogField({
         testID={testID}
       />
       <Sheet visible={open} onClose={() => setOpen(false)} title={title} maxHeight="90%">
+        {/* dica de preenchimento (de onde vem a lista, colar o id…) dentro do seletor */}
+        {hint ? (
+          <Text style={st.hint} testID={testID ? `${testID}-hint` : undefined}>
+            {hint}
+          </Text>
+        ) : null}
         <View style={st.search}>
           <Ionicons name="search" size={16} color={colors.subtle} />
           <TextInput
@@ -347,6 +368,7 @@ const st = StyleSheet.create({
   rowTitle: { color: colors.muted, fontSize: 12.5 },
   rowValue: { color: colors.fg, fontSize: 15, marginTop: 1 },
   rowSub: { color: colors.subtle, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  warnPad: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   search: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -360,7 +382,14 @@ const st = StyleSheet.create({
     paddingHorizontal: 10
   },
   searchInput: { flex: 1, color: colors.fg, fontSize: 15, paddingVertical: 9 },
-  err: { color: colors.danger, fontSize: 12.5, marginHorizontal: spacing.lg, marginBottom: 6 }
+  err: { color: colors.danger, fontSize: 12.5, marginHorizontal: spacing.lg, marginBottom: 6 },
+  hint: {
+    color: colors.subtle,
+    fontSize: 12.5,
+    lineHeight: 17,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm
+  }
 })
 
 /** Parâmetros do modelo de voz (specs vendorados do desktop): só os escolhidos são gravados. */
@@ -392,9 +421,9 @@ export function VoiceParamsEditor({
                 max={s.max ?? 1}
                 int={(s.decimals ?? 2) === 0}
                 placeholder={s.unsetLabel ?? (s.neutral != null ? String(s.neutral) : 'padrão')}
+                help={s.help || undefined}
                 testID={tid}
               />
-              <Text style={pst.help}>{s.help}</Text>
             </View>
           )
         if (s.kind === 'boolean' || s.kind === 'select') {
@@ -411,7 +440,7 @@ export function VoiceParamsEditor({
                 ]
           return (
             <View key={s.key} style={{ gap: 4 }}>
-              <Text style={pst.label}>{s.label}</Text>
+              <ParamLabel label={s.label} help={s.help} testID={tid} />
               <Segmented
                 options={options}
                 value={cur === undefined ? '__unset' : String(cur)}
@@ -420,13 +449,12 @@ export function VoiceParamsEditor({
                 }
                 testID={tid}
               />
-              <Text style={pst.help}>{s.help}</Text>
             </View>
           )
         }
         return (
           <View key={s.key} style={{ gap: 4 }}>
-            <Text style={pst.label}>{s.label}</Text>
+            <ParamLabel label={s.label} help={s.help} testID={tid} />
             <Multiline
               value={typeof cur === 'string' ? cur : ''}
               onChangeText={(t) => onChange(s.key, t.trim() ? t : null)}
@@ -434,7 +462,6 @@ export function VoiceParamsEditor({
               minHeight={60}
               testID={tid}
             />
-            <Text style={pst.help}>{s.help}</Text>
           </View>
         )
       })}
@@ -442,7 +469,21 @@ export function VoiceParamsEditor({
   )
 }
 
+/** Rótulo de um parâmetro com a ajuda dele no (?). */
+function ParamLabel({ label, help, testID }: { label: string; help?: string; testID?: string }) {
+  return (
+    <View style={pst.labelRow}>
+      <Text style={pst.label}>{label}</Text>
+      {help ? (
+        <HelpButton title={label} testID={testID ? `${testID}-help` : undefined}>
+          {help}
+        </HelpButton>
+      ) : null}
+    </View>
+  )
+}
+
 const pst = StyleSheet.create({
-  label: { color: colors.muted, fontSize: 13 },
-  help: { color: colors.faint, fontSize: 11.5, lineHeight: 15 }
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  label: { color: colors.muted, fontSize: 13 }
 })

@@ -32,8 +32,9 @@ import { ToolSendLine, type CompactCfg, type ToolSearchModeView } from '@/settin
 import { compactToolsOn } from '@shared/compactTools'
 import { isNativeMode } from '@shared/toolSearch'
 import { ModelField } from '@/settings/ModelPicker'
-import { FieldLabel, Multiline, Note, NumberField } from '@/settings/ui'
+import { FieldLabel, Multiline, NumberField } from '@/settings/ui'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
+import { Chip } from '@/ui/Help'
 import { colors, spacing } from '@/ui/theme'
 import type { VoiceSettings, VoiceSignature } from '@/voice/endpoints'
 import { TextButton } from '@/ui/Button'
@@ -46,11 +47,9 @@ const PROMPT_MODE_LABEL: Record<VoiceCallPromptMode, string> = {
   replace: 'Substituto',
   none: 'Nenhum'
 }
-const PROMPT_MODE_HELP: Record<VoiceCallPromptMode, string> = {
-  append: 'System prompt normal + o prompt do modo voz no fim (padrão).',
-  replace: 'Na chamada, o prompt do modo voz SUBSTITUI o system prompt normal.',
-  none: 'Sem prompt de voz: só o system prompt normal.'
-}
+/** Os três modos (no (?) do "Prompt na chamada" — a escolha já mostra qual vale). */
+const PROMPT_MODE_HELP =
+  'Complementar (padrão): o system prompt normal + o prompt do modo voz no fim.\n\nSubstituto: na chamada, o prompt do modo voz SUBSTITUI o system prompt normal.\n\nNenhum: sem prompt de voz — só o system prompt normal.'
 
 /** Camada herdada: no chat, a persona de origem (ao vivo); na persona, só o padrão global. */
 export interface VoicePersonaLayer {
@@ -132,11 +131,12 @@ export function VoiceConfigEditor({
 
   return (
     <View style={{ gap: spacing.md }} testID={testID}>
-      <Note>
-        Conversa falada com o agente (botão de telefone nos chats executados neste aparelho). A
-        opção com ★ é a herdada ({scope === 'chat' ? 'da persona ou ' : ''}de Configurações → Voz):
-        escolhida, segue o padrão; outra fixa o valor {where}.
-      </Note>
+      <FieldLabel
+        testID={`${testID}-intro`}
+        help={`Conversa falada com o agente (botão de telefone nos chats executados neste aparelho).\n\nA opção com ★ é a herdada (${scope === 'chat' ? 'da persona ou ' : ''}de Configurações → Voz): escolhida, segue o padrão; outra fixa o valor ${where}.`}
+      >
+        Chamada de voz
+      </FieldLabel>
       {device ? (
         <VoiceChoiceSections
           value={v}
@@ -154,7 +154,24 @@ export function VoiceConfigEditor({
           testID={`${testID}-choice`}
         />
       ) : null}
-      <FieldLabel>{`Disponível ${where}`}</FieldLabel>
+      <FieldLabel
+        chips={
+          !resolved.enabled ? (
+            <Chip
+              label="telefone desabilitado"
+              tone="warning"
+              detail={
+                v.enabled === false
+                  ? `O telefone fica desabilitado ${scope === 'chat' ? 'neste chat' : 'nos chats desta persona (um chat pode religar)'}.`
+                  : pv?.enabled === false
+                    ? `A persona “${persona?.name ?? ''}” desliga a chamada: escolha “Ligada” para usar neste chat.`
+                    : 'Desligada em Configurações → Voz: o telefone some dos chats sem override.'
+              }
+              testID={`${testID}-disabled`}
+            />
+          ) : null
+        }
+      >{`Disponível ${where}`}</FieldLabel>
       <InheritChoice
         label={`Chamada de voz ${where}`}
         options={[
@@ -167,17 +184,10 @@ export function VoiceConfigEditor({
         onChange={(enabled) => set({ enabled })}
         testID={`${testID}-enabled`}
       />
-      {!resolved.enabled ? (
-        <Text style={{ color: colors.warning, fontSize: 12.5, lineHeight: 17 }}>
-          {v.enabled === false
-            ? `O telefone fica desabilitado ${scope === 'chat' ? 'neste chat' : 'nos chats desta persona (um chat pode religar)'}.`
-            : pv?.enabled === false
-              ? `A persona “${persona?.name ?? ''}” desliga a chamada: escolha “Ligada” para usar neste chat.`
-              : 'Desligada em Configurações → Voz: o telefone some dos chats sem override.'}
-        </Text>
-      ) : null}
 
-      <FieldLabel>Modelo da chamada</FieldLabel>
+      <FieldLabel help="Sem modelo próprio, a chamada usa o modelo do chat. Nos turnos da chamada o raciocínio fica desligado/mínimo.">
+        Modelo da chamada
+      </FieldLabel>
       <ModelField
         providers={providers}
         value={v.model ? { providerId: v.model.providerId, model: v.model.model } : null}
@@ -190,15 +200,12 @@ export function VoiceConfigEditor({
         }
         placeholder="Igual ao chat"
         noneLabel="Igual ao chat (padrão)"
-        note={
-          v.model
-            ? 'Modelo próprio nos turnos da chamada (o raciocínio fica desligado/mínimo).'
-            : 'Sem modelo próprio: a chamada usa o modelo do chat (com o raciocínio desligado).'
-        }
         testID={`${testID}-model`}
       />
 
-      <FieldLabel>Prompt na chamada</FieldLabel>
+      <FieldLabel help={PROMPT_MODE_HELP} testID={`${testID}-prompt-mode-label`}>
+        Prompt na chamada
+      </FieldLabel>
       <InheritChoice
         label="Prompt na chamada"
         options={VOICE_CALL_PROMPT_MODES.map((m) => ({ value: m, label: PROMPT_MODE_LABEL[m] }))}
@@ -208,7 +215,6 @@ export function VoiceConfigEditor({
         onChange={(promptMode) => set({ promptMode })}
         testID={`${testID}-prompt-mode`}
       />
-      <Note>{PROMPT_MODE_HELP[mode]}</Note>
       {mode !== 'none' ? (
         <>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -248,7 +254,9 @@ export function VoiceConfigEditor({
         testID={`${testID}-audio-tags`}
       />
 
-      <FieldLabel>O agente pode encerrar a chamada</FieldLabel>
+      <FieldLabel help="Tool end_call (só nos turnos da chamada, sem aprovação): quando você se despede, o agente diz tchau e a chamada cai depois de a despedida tocar.">
+        O agente pode encerrar a chamada
+      </FieldLabel>
       <InheritChoice
         label="O agente pode encerrar a chamada"
         options={[
@@ -261,12 +269,10 @@ export function VoiceConfigEditor({
         onChange={(endCall) => set({ endCall })}
         testID={`${testID}-end-call`}
       />
-      <Note>
-        Tool end_call (só nos turnos da chamada, sem aprovação): quando você se despede, o agente
-        diz tchau e a chamada cai depois de a despedida tocar.
-      </Note>
 
-      <FieldLabel>Preâmbulos (“Hum, deixa eu ver.”)</FieldLabel>
+      <FieldLabel help="“Hum, deixa eu ver.” quando a resposta demora (a espera fica em Configurações → Voz).">
+        Preâmbulos
+      </FieldLabel>
       <InheritChoice
         label="Preâmbulos"
         options={[
@@ -282,7 +288,9 @@ export function VoiceConfigEditor({
         testID={`${testID}-fillers`}
       />
 
-      <FieldLabel>Frases de ferramenta (“Vou pesquisar isso.”)</FieldLabel>
+      <FieldLabel help="“Vou pesquisar isso.” — uma frase curta sobre a 1ª ferramenta do turno (no máximo uma por turno), com a voz da chamada. As frases ficam em Configurações → Voz.">
+        Frases de ferramenta
+      </FieldLabel>
       <InheritChoice
         label="Frases de ferramenta"
         options={[
@@ -295,16 +303,33 @@ export function VoiceConfigEditor({
         onChange={(toolPhrases) => set({ toolPhrases })}
         testID={`${testID}-tool-phrases`}
       />
-      <Note>
-        Uma frase curta sobre a 1ª ferramenta do turno (no máximo uma por turno), com a voz da
-        chamada. As frases ficam em Configurações → Voz.
-      </Note>
 
       <FieldLabel>Tools na chamada</FieldLabel>
       <Card>
         <ToggleRow
           title="Tools próprias na chamada"
-          subtitle="Desligado: as mesmas tools do chat. Ligado: só as marcadas abaixo valem nos turnos de voz (nenhuma = sem tools)."
+          help="Desligado: as mesmas tools do chat. Ligado: só as marcadas abaixo valem nos turnos de voz (nenhuma = sem tools)."
+          chips={
+            tools && compactCfg ? (
+              <Chip
+                label={
+                  !compactToolsOn(compactCfg)
+                    ? 'completas'
+                    : isNativeMode(toolSearch?.mode)
+                      ? 'busca nativa'
+                      : 'compactas'
+                }
+                detail={
+                  !compactToolsOn(compactCfg)
+                    ? 'Vão completas como no chat (Tools → “Enviar tools compactadas” desligado).'
+                    : isNativeMode(toolSearch?.mode)
+                      ? `Vão como no chat (Tools → “Enviar tools compactadas”: ${toolSearch?.label}) — completas, adiadas ou carregadas; “Definição” mostra o item exato. Encerrar a chamada (end_call) vai sempre carregada.`
+                      : 'Vão compactas como no chat (Tools → “Enviar tools compactadas”); “Definição” mostra o que vai. Encerrar a chamada (end_call) vai sempre completa.'
+                }
+                testID={`${testID}-tools-send`}
+              />
+            ) : null
+          }
           value={!!tools}
           onChange={(on) =>
             set({
@@ -322,15 +347,6 @@ export function VoiceConfigEditor({
           testID={`${testID}-tools`}
         />
       </Card>
-      {tools && compactCfg ? (
-        <Note>
-          {!compactToolsOn(compactCfg)
-            ? 'Vão completas como no chat (Tools → “Enviar tools compactadas” desligado).'
-            : isNativeMode(toolSearch?.mode)
-              ? `Vão como no chat (Tools → “Enviar tools compactadas”: ${toolSearch?.label}) — completas, adiadas ou carregadas; “Definição” mostra o item exato. Encerrar a chamada (end_call) vai sempre carregada.`
-              : 'Vão compactas como no chat (Tools → “Enviar tools compactadas”); “Definição” mostra o que vai. Encerrar a chamada (end_call) vai sempre completa.'}
-        </Note>
-      ) : null}
       {tools ? (
         <Card padded={false}>
           {portable.map((t, i) => (

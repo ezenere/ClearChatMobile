@@ -99,7 +99,7 @@ export default function SettingsHome() {
     href: Href,
     icon: IconName,
     title: string,
-    subtitle: string,
+    subtitle: string | null,
     testID: string,
     last = false
   ) => (
@@ -107,7 +107,7 @@ export default function SettingsHome() {
       <ListItem
         icon={icon}
         title={title}
-        subtitle={subtitle}
+        subtitle={subtitle ?? undefined}
         onPress={go(href)}
         chevron
         testID={testID}
@@ -117,7 +117,15 @@ export default function SettingsHome() {
   )
 
   return (
-    <SettingsScreen title="Configurações" testID="screen-settings">
+    <SettingsScreen
+      title="Configurações"
+      testID="screen-settings"
+      help={
+        local
+          ? 'Sem conta, tudo fica só neste celular, no armazenamento privado do app: provedores (com as chaves), personas, chats, memórias e configurações. Só os provedores de IA e de voz que você cadastrar recebem o que for enviado a eles.'
+          : 'As configurações sincronizam com o computador e o site (cifradas). Ficam só aqui: este aparelho lembrado, a biometria, as notificações e a localização.'
+      }
+    >
       <View style={st.top}>
         <View style={{ flex: 1 }}>
           <Text style={st.name} numberOfLines={1}>
@@ -163,7 +171,7 @@ export default function SettingsHome() {
           '/settings/approvals',
           'shield-checkmark-outline',
           'Aprovações',
-          'Modo de cada ferramenta, listas e Smart-Approve',
+          null,
           'settings-approvals'
         )}
         {item('/settings/memory', 'library-outline', 'Memórias', sum.memory, 'settings-memory')}
@@ -194,7 +202,7 @@ export default function SettingsHome() {
               '/settings/devices',
               'phone-portrait-outline',
               'Dispositivos',
-              `${s.device?.name ?? 'Este aparelho'} e os outros da conta`,
+              s.device?.name ?? null,
               'settings-devices'
             )}
         {local
@@ -203,16 +211,11 @@ export default function SettingsHome() {
               '/settings/account',
               'person-circle-outline',
               'Conta',
-              'Senha, chave de recuperação, bloquear e sair',
+              null,
               'settings-account',
               true
             )}
       </Card>
-      <Text style={st.foot}>
-        {local
-          ? 'Sem conta, tudo fica só neste celular, no armazenamento privado do app: provedores (com as chaves), personas, chats, memórias e configurações. Só os provedores de IA e de voz que você cadastrar recebem o que for enviado a eles.'
-          : 'As configurações sincronizam com o computador e o site (cifradas). Ficam só aqui: este aparelho lembrado, a biometria, as notificações e a localização.'}
-      </Text>
     </SettingsScreen>
   )
 }
@@ -220,6 +223,5 @@ export default function SettingsHome() {
 const st = StyleSheet.create({
   top: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
   name: { color: colors.fg, fontSize: 22, fontWeight: '700' },
-  email: { color: colors.muted, fontSize: 14, marginTop: 2 },
-  foot: { color: colors.faint, fontSize: 12, lineHeight: 17, marginTop: spacing.sm }
+  email: { color: colors.muted, fontSize: 14, marginTop: 2 }
 })

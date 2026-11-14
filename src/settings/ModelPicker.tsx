@@ -16,6 +16,8 @@ import { isChatProvider } from '@shared/providerKinds'
 import type { ModelInfo, Provider } from '@shared/types'
 import { describeError } from '@/account/errors'
 import { listModels } from '@/agent/providers'
+import { useRouter } from 'expo-router'
+import { Chip, type ChipTone } from '@/ui/Help'
 import { Sheet } from '@/ui/Sheet'
 import { colors, radius } from '@/ui/theme'
 
@@ -178,7 +180,8 @@ export function ModelField({
   placeholder = 'Escolher modelo',
   noneLabel,
   testID,
-  note
+  note,
+  noteTone = 'neutral'
 }: {
   providers: Provider[]
   value: { providerId: string | null; model: string | null } | null
@@ -186,9 +189,11 @@ export function ModelField({
   placeholder?: string
   noneLabel?: string
   testID?: string
-  /** Linha abaixo do modelo (ex.: "Segue o modelo padrão"). */
+  /** Fato curto sobre o valor (chip: "segue “Novos chats”", "definido nesta persona"). */
   note?: string | null
+  noteTone?: ChipTone
 }) {
+  const router = useRouter()
   const chat = chatProvidersOf(providers)
   const [open, setOpen] = useState(false)
   const [pid, setPid] = useState<string>(value?.providerId ?? chat[0]?.id ?? '')
@@ -207,34 +212,32 @@ export function ModelField({
   return (
     <>
       <Pressable
-        onPress={() => setOpen(true)}
-        style={st.card}
+        // sem provedor de chat: o aviso é a ação (cadastrar)
+        onPress={() => (chat.length ? setOpen(true) : router.push('/settings/providers'))}
+        style={[st.card, !chat.length && st.cardWarn]}
         testID={testID}
-        disabled={!chat.length}
         accessibilityRole="button"
       >
         <Ionicons name="hardware-chip-outline" size={20} color={colors.accentStrong} />
         <View style={{ flex: 1 }}>
-          <Text style={st.cardTitle} numberOfLines={1}>
+          <Text style={[st.cardTitle, !chat.length && { color: colors.warning }]} numberOfLines={1}>
             {value?.model && !missing
               ? value.model
               : chat.length
                 ? placeholder
-                : 'Sem provedor de chat'}
+                : '⚠ Sem provedor de chat · Cadastrar'}
           </Text>
-          <Text style={st.sub} numberOfLines={2}>
-            {missing
-              ? 'O provedor deste modelo não existe mais.'
-              : current
-                ? `${current.name}${info?.contextLength ? ` · ${Math.round(info.contextLength / 1000)}k de contexto` : ''}`
-                : chat.length
-                  ? 'Toque para escolher'
-                  : 'Cadastre um provedor primeiro.'}
-          </Text>
-          {note ? (
+          {missing || current ? (
             <Text style={st.sub} numberOfLines={2}>
-              {note}
+              {missing
+                ? 'O provedor deste modelo não existe mais.'
+                : `${current!.name}${info?.contextLength ? ` · ${Math.round(info.contextLength / 1000)}k de contexto` : ''}`}
             </Text>
+          ) : null}
+          {note ? (
+            <View style={{ marginTop: 4 }}>
+              <Chip label={note} tone={noteTone} testID={testID ? `${testID}-note` : undefined} />
+            </View>
           ) : null}
         </View>
         <Ionicons name="chevron-forward" size={18} color={colors.subtle} />
@@ -288,6 +291,7 @@ const st = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surface
   },
+  cardWarn: { borderColor: 'rgba(245, 181, 68, 0.38)', backgroundColor: colors.warningSoft },
   cardTitle: { color: colors.fg, fontSize: 15, fontWeight: '500' },
   sub: { color: colors.subtle, fontSize: 12.5 },
   search: {

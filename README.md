@@ -438,6 +438,18 @@ respostas às chamadas laterais (resumo, título, extração).
 - Conta (`AccountService`): `devices()`, `renameDevice(name, id?)`, `revokeDevice(id)` (o atual =
   sair), `changePasswordWithCurrent` (confere a senha atual no aparelho antes do `PUT /keys/password`),
   `setRemember` (lembrar/biometria com o cofre aberto).
+- **Sem texto solto** (regra de todas as telas de configuração — Configurações e subpáginas, editor de
+  personas, configurações do chat, Novo chat, aba Voz; = desktop 18f4d8c): o que repete o que o campo
+  já mostra some; explicação estática (o que a opção faz, listas de modelos aceitos, limites,
+  introdução da página) fica atrás do (?) — `HelpButton` (`src/ui/Help.tsx`, folha pequena ao tocar:
+  o celular não tem hover; `help` em `SettingsScreen`, `FieldLabel`, `SubLabel`, `ToggleRow`,
+  `NumberField` e `TextField`); fato curto da seleção (disponibilidade, transporte, idioma, de onde vem
+  um valor herdado, contagem) vira `Chip` neutro, com o detalhe ao tocar; dica de preenchimento vai no
+  placeholder ou dentro do seletor; legenda óbvia ao lado de botão some; aviso que pede ação mora no
+  próprio botão (`Button variant="warning"` com ⚠ — "Sem clipes · Gerar", "Nenhum provedor serve
+  fala · Cadastrar", "Sem chave · Informar", "Notificações bloqueadas · Abrir configurações"); só aviso
+  sem ação fica como linha curta. O que vai ao modelo continua inspecionável ("O que vai junto", a
+  "Definição" das tools, o bloco de ambiente e os prompts por inteiro).
 - **FLAG_SECURE**: módulo local `modules/secure-screen` + `useSecureScreen()` (`src/ui/secure.ts`) nas
   telas de senha, desbloqueio, recuperação, setup, chave de recuperação, provedor e pesquisa na web
   (o screencap sai preto; para revisar o layout no E2E, `adb emu screenrecord screenshot <pasta>` pega

@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router'
 import { useState } from 'react'
 import { account } from '@/account/native'
 import { useAction, useSession } from '@/account/react'
-import { SettingsScreen, Note } from '@/settings/ui'
+import { SettingsScreen } from '@/settings/ui'
 import { BottomBarButton } from '@/ui/BottomBar'
 import { Banner } from '@/ui/Card'
 import { NewPasswordFields, useNewPassword } from '@/ui/NewPasswordFields'
@@ -58,6 +58,7 @@ function ChangePassword() {
     <SettingsScreen
       title="Trocar senha"
       testID="screen-password"
+      help="A senha de criptografia abre a chave dos seus dados em todos os dispositivos. Trocar aqui não desconecta os outros aparelhos; a chave de recuperação continua valendo."
       footer={
         <BottomBarButton
           testID="password-save"
@@ -69,10 +70,6 @@ function ChangePassword() {
         />
       }
     >
-      <Note>
-        A senha de criptografia abre a chave dos seus dados em todos os dispositivos. Trocar aqui
-        não desconecta os outros aparelhos; a chave de recuperação continua valendo.
-      </Note>
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <TextField
         testID="password-current"

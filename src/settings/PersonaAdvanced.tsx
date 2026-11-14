@@ -16,7 +16,8 @@ import {
 import { DEFAULT_COMPACT_PROMPT, DEFAULT_COMPACT_THRESHOLD } from '@shared/defaults'
 import type { ChatConfig } from '@shared/types'
 import { environmentBlock } from '@/agent/request'
-import { FieldLabel, Multiline, Note, NumberField, Row } from '@/settings/ui'
+import { FieldLabel, Multiline, NumberField, Row } from '@/settings/ui'
+import { Chip, Chips } from '@/ui/Help'
 import { TextButton } from '@/ui/Button'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { TextField } from '@/ui/TextField'
@@ -24,7 +25,13 @@ import { colors, font, radius, spacing } from '@/ui/theme'
 
 type Patch = (p: Partial<ChatConfig>) => void
 /** Rótulo de uma seção (`units` = as unidades da herança que ela cobre). */
-export type LabelFn = (title: string, units: readonly string[], right?: ReactNode) => ReactNode
+export type LabelFn = (
+  title: string,
+  units: readonly string[],
+  right?: ReactNode,
+  /** Explicação da seção no (?) ao lado do rótulo. */
+  help?: ReactNode
+) => ReactNode
 interface Props {
   cfg: Partial<ChatConfig>
   patch: Patch
@@ -34,8 +41,8 @@ interface Props {
   where?: string
 }
 
-const plainLabel: LabelFn = (title, _units, right) => (
-  <FieldLabel key={title} right={right}>
+const plainLabel: LabelFn = (title, _units, right, help) => (
+  <FieldLabel key={title} right={right} help={help}>
     {title}
   </FieldLabel>
 )
@@ -52,7 +59,7 @@ export function ContextEditor({ cfg, patch, label = plainLabel, where = 'nesta p
         <View style={st.row}>
           <ToggleRow
             title="Definir janela manualmente"
-            subtitle="Para endpoints que não informam o tamanho do contexto."
+            help="Para endpoints que não informam o tamanho do contexto."
             value={override}
             onChange={(v) => patch({ contextWindow: v ? 128_000 : null })}
             testID="persona-window-override"
@@ -87,7 +94,7 @@ export function ContextEditor({ cfg, patch, label = plainLabel, where = 'nesta p
         <View style={st.row}>
           <ToggleRow
             title="Compactar automaticamente"
-            subtitle="Sessão principal, ao atingir o limite. Subagentes: sempre."
+            help="Sessão principal, ao atingir o limite. Subagentes: sempre."
             value={!!cfg.autoCompact}
             onChange={(autoCompact) => patch({ autoCompact })}
             testID="persona-autocompact"
@@ -97,16 +104,23 @@ export function ContextEditor({ cfg, patch, label = plainLabel, where = 'nesta p
       {label(
         'Prompt de compactação',
         ['compactPrompt'],
-        cfg.compactPrompt != null ? (
-          <TextButton
-            title="Restaurar padrão"
-            icon="arrow-undo-outline"
-            onPress={() => patch({ compactPrompt: null })}
-            testID="persona-compact-prompt-reset"
+        <View style={st.rowRight}>
+          <Chip
+            label={cfg.compactPrompt != null ? `personalizado ${where}` : 'padrão do app'}
+            testID="persona-compact-prompt-source"
           />
-        ) : !promptOpen ? (
-          <TextButton title="Editar" icon="create-outline" onPress={() => setPromptOpen(true)} />
-        ) : undefined
+          {cfg.compactPrompt != null ? (
+            <TextButton
+              title="Restaurar padrão"
+              icon="arrow-undo-outline"
+              onPress={() => patch({ compactPrompt: null })}
+              testID="persona-compact-prompt-reset"
+            />
+          ) : !promptOpen ? (
+            <TextButton title="Editar" icon="create-outline" onPress={() => setPromptOpen(true)} />
+          ) : null}
+        </View>,
+        'O resumo que substitui o histórico ao compactar — vai ao modelo como está escrito aqui.'
       )}
       {promptOpen || cfg.compactPrompt != null ? (
         <Multiline
@@ -116,11 +130,6 @@ export function ContextEditor({ cfg, patch, label = plainLabel, where = 'nesta p
           minHeight={140}
         />
       ) : null}
-      <Note>
-        {cfg.compactPrompt != null
-          ? `Personalizado ${where}.`
-          : 'Padrão do app (o resumo que substitui o histórico ao compactar).'}
-      </Note>
     </>
   )
 }
@@ -199,11 +208,17 @@ export function SignatureEditor({
           />
         </>
       ) : null}
-      <Note>
-        {lines.length
-          ? `Enviados em cada request: ${lines.join(' · ')}`
-          : 'Nenhum header de atribuição será enviado.'}
-      </Note>
+      <Chips>
+        <Chip
+          label={lines.length ? `${lines.length} headers em cada request` : 'sem headers'}
+          detail={
+            lines.length
+              ? `Enviados em cada request:\n\n${lines.join('\n')}`
+              : 'Nenhum header de atribuição será enviado.'
+          }
+          testID="persona-signature-headers"
+        />
+      </Chips>
     </>
   )
 }
@@ -212,12 +227,17 @@ export function SignatureEditor({
 export function ComputerOptions({ cfg, patch, label = plainLabel }: Props) {
   return (
     <>
-      {label('No computador', ['confineToRoot', 'sandboxBash'])}
+      {label(
+        'No computador',
+        ['confineToRoot', 'sandboxBash'],
+        undefined,
+        'O diretório raiz da persona é escolhido em cada computador (não sincroniza); no celular os chats não têm pasta.'
+      )}
       <Card padded={false}>
         <View style={st.row}>
           <ToggleRow
             title="Confinar ferramentas à raiz"
-            subtitle="Tools de arquivo recusam caminhos fora dela."
+            help="Tools de arquivo recusam caminhos fora dela."
             value={cfg.confineToRoot !== false}
             onChange={(confineToRoot) => patch({ confineToRoot })}
             testID="persona-confine"
@@ -226,17 +246,13 @@ export function ComputerOptions({ cfg, patch, label = plainLabel }: Props) {
         <View style={st.row}>
           <ToggleRow
             title="Shell em sandbox"
-            subtitle="Linux com bubblewrap: só a raiz é gravável."
+            help="Linux com bubblewrap: só a raiz é gravável."
             value={!!cfg.sandboxBash}
             onChange={(sandboxBash) => patch({ sandboxBash })}
             testID="persona-sandbox"
           />
         </View>
       </Card>
-      <Note>
-        O diretório raiz da persona é escolhido em cada computador (não sincroniza); no celular os
-        chats não têm pasta.
-      </Note>
     </>
   )
 }
@@ -247,22 +263,23 @@ export function ComputerOptions({ cfg, patch, label = plainLabel }: Props) {
 export function EnvironmentOption({ cfg, patch, label = plainLabel }: Props) {
   return (
     <>
-      {label('Ambiente no system prompt', ['envInPrompt'])}
+      {label(
+        'Ambiente no system prompt',
+        ['envInPrompt'],
+        undefined,
+        'Ligado, o celular acrescenta ao system prompt exatamente o texto abaixo (num computador, o bloco de lá traz raiz, SO, shell e regras).'
+      )}
       <Card padded={false}>
         <View style={st.row}>
           <ToggleRow
             title="Bloco de ambiente"
-            subtitle="Sistema (Android) e o aviso de que o celular não tem shell nem arquivos."
+            help="Sistema (Android) e o aviso de que o celular não tem shell nem arquivos."
             value={!!cfg.envInPrompt}
             onChange={(envInPrompt) => patch({ envInPrompt })}
             testID="persona-env"
           />
         </View>
       </Card>
-      <Note>
-        Ligado, o celular acrescenta ao system prompt exatamente este texto (num computador, o bloco
-        de lá traz raiz, SO, shell e regras):
-      </Note>
       <Text style={st.block} testID="persona-env-text">
         {environmentBlock()}
       </Text>

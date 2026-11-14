@@ -20,6 +20,7 @@ import {
   toggleCollection
 } from '@vendor/renderer/memory'
 import { ToggleRow } from '@/ui/Card'
+import { HelpButton } from '@/ui/Help'
 import { colors, radius } from '@/ui/theme'
 
 export function MemoryConfigEditor({
@@ -57,7 +58,7 @@ export function MemoryConfigEditor({
     <View style={st.body}>
       <ToggleRow
         title="Memória ligada"
-        subtitle="Desligada, nada de memória vai ao modelo (sem índice, sem tools)."
+        help="Desligada, nada de memória vai ao modelo (sem índice, sem tools)."
         value={cfg.enabled}
         onChange={(v) => onChange({ ...cfg, enabled: v })}
         testID="memory-enabled"
@@ -72,10 +73,11 @@ export function MemoryConfigEditor({
         return (
           <View key={cat} style={st.group}>
             <View style={st.catRow}>
-              <Text style={[st.cat, { flex: 1 }]}>
-                {MEMORY_CATEGORY_LABELS[cat]}
-                <Text style={st.hint}> · {MEMORY_CATEGORY_HINTS[cat]}</Text>
-              </Text>
+              <Text style={st.cat}>{MEMORY_CATEGORY_LABELS[cat]}</Text>
+              <HelpButton title={MEMORY_CATEGORY_LABELS[cat]} testID={`memory-cat-${cat}-help`}>
+                {MEMORY_CATEGORY_HINTS[cat]}
+              </HelpButton>
+              <View style={{ flex: 1 }} />
               <Pressable
                 onPress={() => toggleCat(cat, !catOn)}
                 hitSlop={8}
@@ -128,14 +130,14 @@ export function MemoryConfigEditor({
       })}
       <ToggleRow
         title="Extrair memórias depois de compactar"
-        subtitle="O modelo de extração lê o resumo e grava o que for durável."
+        help="O modelo de extração lê o resumo e grava o que for durável."
         value={cfg.extraction.auto}
         onChange={(v) => onChange({ ...cfg, extraction: { ...cfg.extraction, auto: v } })}
         testID="memory-extract-auto"
       />
       <ToggleRow
         title="Subagentes consultam a memória"
-        subtitle="Só busca e leitura; subagentes nunca gravam."
+        help="Só busca e leitura; subagentes nunca gravam."
         value={cfg.subagents}
         onChange={(v) => onChange({ ...cfg, subagents: v })}
         testID="memory-subagents"
@@ -151,7 +153,6 @@ const st = StyleSheet.create({
   catRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cat: { color: colors.fg, fontSize: 13.5, fontWeight: '600' },
   catToggle: { color: colors.accentStrong, fontSize: 12 },
-  hint: { color: colors.subtle, fontWeight: '400' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   dim: { opacity: 0.45 },
   pill: {

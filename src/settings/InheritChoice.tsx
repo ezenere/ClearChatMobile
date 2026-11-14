@@ -5,6 +5,7 @@
 // opção "Padrão"/"herdar" separada duplicando o padrão. Regra pura em `inherit.ts`.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { Chip } from '@/ui/Help'
 import { colors, radius } from '@/ui/theme'
 import { inheritPick, inheritShown, inheritValueKey } from './inherit'
 
@@ -76,11 +77,19 @@ export function InheritChoice<T extends string | boolean>({
           )
         })}
       </View>
-      <Text style={st.hint} testID={testID ? `${testID}-source` : undefined}>
-        {value == null
-          ? `★ ${inheritedFrom}`
-          : `Fixado aqui — toque na ★ para seguir o ${inheritedFrom.replace(/^Padrão/, 'padrão')}`}
-      </Text>
+      {/* de onde vem o ★ (fato curto); fixado → o jeito de voltar a seguir, ao tocar */}
+      <View style={st.source}>
+        {value == null ? (
+          <Chip label={`★ ${inheritedFrom}`} testID={testID ? `${testID}-source` : undefined} />
+        ) : (
+          <Chip
+            label="fixado aqui"
+            tone="accent"
+            detail={`Toque na ★ para seguir o ${inheritedFrom.replace(/^Padrão/, 'padrão')}.`}
+            testID={testID ? `${testID}-source` : undefined}
+          />
+        )}
+      </View>
     </View>
   )
 }
@@ -107,5 +116,5 @@ const st = StyleSheet.create({
   on: { backgroundColor: colors.active },
   text: { color: colors.subtle, fontSize: 13, fontWeight: '500' },
   textOn: { color: colors.fg },
-  hint: { color: colors.faint, fontSize: 11.5, lineHeight: 15, marginTop: 4 }
+  source: { flexDirection: 'row', marginTop: 5 }
 })

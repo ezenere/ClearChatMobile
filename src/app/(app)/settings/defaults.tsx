@@ -15,7 +15,7 @@ import { clampSpillChars, LIMITS, TOOL_SPILL_SETTING } from '@shared/limits'
 import { ChatAvatar } from '@/chat/ChatBits'
 import { ModelField } from '@/settings/ModelPicker'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
-import { FieldLabel, Multiline, Note, NumberField, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, Multiline, NumberField, SettingsScreen } from '@/settings/ui'
 import { TextButton } from '@/ui/Button'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { colors, spacing } from '@/ui/theme'
@@ -57,7 +57,13 @@ export default function DefaultsSettings() {
   const defaultPresetValid = d.presets.some((p) => p.id === d.defaultPresetId)
 
   return (
-    <SettingsScreen title="Novos chats" testID="screen-defaults">
+    <SettingsScreen
+      title="Novos chats"
+      testID="screen-defaults"
+      help={
+        'Os padrões desta página valem para os campos que a persona não define (a persona “Padrão” não define nenhum) e quando não há persona.\n\nPersonas que não definem um campo usam estes padrões — e os chats delas também, ao vivo: mudar aqui muda esses chats (menos os campos que um chat mudou para si).'
+      }
+    >
       <FieldLabel>Persona padrão do Novo chat</FieldLabel>
       <Card padded={false}>
         {[
@@ -94,16 +100,6 @@ export default function DefaultsSettings() {
           )
         })}
       </Card>
-      <Note>
-        Os padrões abaixo valem para os campos que a persona não define (a persona “Padrão” não
-        define nenhum) e quando não há persona.
-      </Note>
-      <Note style={{ marginTop: -spacing.sm }}>
-        <Text testID="defaults-inherit-note">
-          Personas que não definem um campo usam estes padrões — e os chats delas também, ao vivo:
-          mudar aqui muda esses chats (menos os campos que um chat mudou para si).
-        </Text>
-      </Note>
 
       <FieldLabel>Modelo padrão</FieldLabel>
       <ModelField
@@ -139,7 +135,12 @@ export default function DefaultsSettings() {
         minHeight={120}
       />
 
-      <FieldLabel>Título automático</FieldLabel>
+      <FieldLabel
+        help="Uma chamada separada, quando um chat novo recebe a primeira mensagem digitada — fora do histórico e sem atrasar o turno. O prompt abaixo vai ao modelo exatamente como está escrito."
+        testID="auto-title-label"
+      >
+        Título automático
+      </FieldLabel>
       <ModelField
         providers={d.providers}
         value={
@@ -157,7 +158,7 @@ export default function DefaultsSettings() {
       <Card>
         <ToggleRow
           title="Usar as memórias"
-          subtitle="Manda um índice compacto das memórias ativas do chat junto com a 1ª mensagem."
+          help="Manda um índice compacto das memórias ativas do chat junto com a 1ª mensagem."
           value={d.autoTitle.useMemory}
           onChange={(useMemory) => setAutoTitle({ useMemory })}
           testID="auto-title-memory"
@@ -199,10 +200,6 @@ export default function DefaultsSettings() {
         }
         minHeight={110}
       />
-      <Note>
-        Uma chamada separada, quando um chat novo recebe a primeira mensagem digitada — fora do
-        histórico e sem atrasar o turno.
-      </Note>
 
       <FieldLabel>Ferramentas</FieldLabel>
       <Card>
@@ -213,12 +210,9 @@ export default function DefaultsSettings() {
           max={LIMITS.spillThresholdMax}
           suffix="car."
           onChange={(v) => settings.setSetting(TOOL_SPILL_SETTING, v ?? null)}
+          help="No computador, saídas de ferramentas maiores que isso são guardadas em arquivo e o modelo recebe um trecho. No celular as saídas são cortadas no limite do chat."
           testID="tool-spill"
         />
-        <Note>
-          No computador, saídas de ferramentas maiores que isso são guardadas em arquivo e o modelo
-          recebe um trecho. No celular as saídas são cortadas no limite do chat.
-        </Note>
       </Card>
       <View style={{ height: spacing.lg }} />
     </SettingsScreen>

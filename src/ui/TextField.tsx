@@ -12,11 +12,15 @@ import {
   type TextStyle
 } from 'react-native'
 import type { IconName } from './Button'
+import { HelpButton } from './Help'
 import { colors, font, radius, spacing } from './theme'
 
 export interface TextFieldProps extends Omit<TextInputProps, 'style'> {
   label?: string
+  /** Estado/erro curto embaixo do campo — explicação estática vai no `help` (?). */
   hint?: ReactNode
+  /** Explicação do campo: (?) ao lado do rótulo. */
+  help?: ReactNode
   error?: string | null
   icon?: IconName
   secure?: boolean
@@ -28,7 +32,7 @@ export interface TextFieldProps extends Omit<TextInputProps, 'style'> {
 
 export const TextField = forwardRef<ComponentRef<typeof TextInput>, TextFieldProps>(
   function TextField(
-    { label, hint, error, icon, secure, mono, inputStyle, below, editable = true, ...rest },
+    { label, hint, help, error, icon, secure, mono, inputStyle, below, editable = true, ...rest },
     ref
   ) {
     const [focused, setFocused] = useState(false)
@@ -36,7 +40,16 @@ export const TextField = forwardRef<ComponentRef<typeof TextInput>, TextFieldPro
     const border = error ? colors.danger : focused ? colors.accent : colors.borderStrong
     return (
       <View style={styles.wrap}>
-        {label ? <Text style={styles.label}>{label}</Text> : null}
+        {label && help ? (
+          <View style={styles.labelRow}>
+            <Text style={[styles.label, styles.labelInRow]}>{label}</Text>
+            <HelpButton title={label} testID={rest.testID ? `${rest.testID}-help` : undefined}>
+              {help}
+            </HelpButton>
+          </View>
+        ) : label ? (
+          <Text style={styles.label}>{label}</Text>
+        ) : null}
         <View
           style={[
             styles.box,
@@ -110,6 +123,8 @@ export const TextField = forwardRef<ComponentRef<typeof TextInput>, TextFieldPro
 const styles = StyleSheet.create({
   wrap: { gap: 6 },
   label: { color: colors.muted, fontSize: 13, fontWeight: '500', marginLeft: 2 },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  labelInRow: { flexShrink: 1 },
   box: {
     flexDirection: 'row',
     alignItems: 'center',

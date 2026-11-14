@@ -80,6 +80,7 @@ export default function Personas() {
     <SettingsScreen
       title="Personas"
       testID="screen-personas"
+      help="Presets de chat: modelo, system prompt, parâmetros, tools e memória. Escolha uma no Novo chat; a estrela marca a que vem selecionada. Toque e segure para mais opções. Sem persona, os chats novos usam os padrões de “Novos chats”."
       footer={
         <BottomBarButton
           title="Nova persona"
@@ -89,10 +90,6 @@ export default function Personas() {
         />
       }
     >
-      <Note>
-        Presets de chat: modelo, system prompt, parâmetros, tools e memória. Escolha uma no Novo
-        chat; a estrela marca a que vem selecionada. Toque e segure para mais opções.
-      </Note>
       {list.length ? (
         <Card padded={false}>
           {list.map(({ p, model }, i) => (
@@ -127,7 +124,7 @@ export default function Personas() {
           ))}
         </Card>
       ) : (
-        <Note>Nenhuma persona. Chats novos usam os padrões de “Novos chats”.</Note>
+        <Note>Nenhuma persona.</Note>
       )}
       <Sheet
         visible={!!menu}

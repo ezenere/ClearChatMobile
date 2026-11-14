@@ -13,6 +13,7 @@ import {
   type ViewStyle
 } from 'react-native'
 import { ChatAvatar, PRESET_ICONS } from '@/chat/ChatBits'
+import { HelpButton } from '@/ui/Help'
 import { Screen, ScreenHeader } from '@/ui/Screen'
 import { colors, radius, spacing } from '@/ui/theme'
 
@@ -21,6 +22,7 @@ export function SettingsScreen({
   children,
   footer,
   right,
+  help,
   testID,
   onBack
 }: {
@@ -28,15 +30,32 @@ export function SettingsScreen({
   children: ReactNode
   footer?: ReactNode
   right?: ReactNode
+  /** Introdução da página: (?) no cabeçalho (nunca um parágrafo solto no topo). */
+  help?: ReactNode
   testID?: string
   /** Padrão: voltar na pilha. */
   onBack?: () => void
 }) {
   const router = useRouter()
+  const head =
+    help && right ? (
+      <View style={st.headRight}>
+        <HelpButton title={title} size={20} testID={testID ? `${testID}-help` : undefined}>
+          {help}
+        </HelpButton>
+        {right}
+      </View>
+    ) : help ? (
+      <HelpButton title={title} size={20} testID={testID ? `${testID}-help` : undefined}>
+        {help}
+      </HelpButton>
+    ) : (
+      right
+    )
   return (
     <Screen
       testID={testID}
-      header={<ScreenHeader title={title} onBack={onBack ?? (() => router.back())} right={right} />}
+      header={<ScreenHeader title={title} onBack={onBack ?? (() => router.back())} right={head} />}
       footer={footer}
       contentStyle={{ gap: spacing.md }}
     >
@@ -45,20 +64,78 @@ export function SettingsScreen({
   )
 }
 
-/** Texto explicativo pequeno. */
-export function Note({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+/**
+ * Texto curto sem ação (só aviso que não tem botão a que se prender). Explicação estática vai no
+ * (?) — `HelpButton` —, fato da seleção vira `Chip` e aviso com ação mora no botão (variant warning).
+ */
+export function Note({
+  children,
+  style,
+  testID
+}: {
+  children: ReactNode
+  style?: StyleProp<ViewStyle>
+  testID?: string
+}) {
   return (
-    <View style={style}>
+    <View style={style} testID={testID}>
       <Text style={st.note}>{children}</Text>
     </View>
   )
 }
 
-export function FieldLabel({ children, right }: { children: string; right?: ReactNode }) {
+export function FieldLabel({
+  children,
+  right,
+  help,
+  chips,
+  testID
+}: {
+  children: string
+  right?: ReactNode
+  /** Explicação da seção: (?) ao lado do rótulo. */
+  help?: ReactNode
+  /** Fatos curtos da seleção ao lado do rótulo. */
+  chips?: ReactNode
+  testID?: string
+}) {
   return (
     <View style={st.labelRow}>
-      <Text style={st.label}>{children}</Text>
+      <View style={st.labelLeft}>
+        <Text style={st.label}>{children}</Text>
+        {help ? (
+          <HelpButton title={children} testID={testID ? `${testID}-help` : undefined}>
+            {help}
+          </HelpButton>
+        ) : null}
+        {chips}
+      </View>
       {right}
+    </View>
+  )
+}
+
+/** Rótulo de subseção (menor que o FieldLabel), com (?) e chips opcionais. */
+export function SubLabel({
+  children,
+  help,
+  chips,
+  testID
+}: {
+  children: string
+  help?: ReactNode
+  chips?: ReactNode
+  testID?: string
+}) {
+  return (
+    <View style={st.subRow} testID={testID}>
+      <Text style={st.sub}>{children}</Text>
+      {help ? (
+        <HelpButton title={children} testID={testID ? `${testID}-help` : undefined}>
+          {help}
+        </HelpButton>
+      ) : null}
+      {chips}
     </View>
   )
 }
@@ -157,7 +234,8 @@ export function NumberField({
   int = true,
   placeholder = 'padrão',
   testID,
-  suffix
+  suffix,
+  help
 }: {
   label: string
   value: number | null | undefined
@@ -168,6 +246,8 @@ export function NumberField({
   placeholder?: string
   testID?: string
   suffix?: string
+  /** O que o número faz / padrão: (?) ao lado do rótulo. */
+  help?: ReactNode
 }) {
   const [text, setText] = useState(value == null ? '' : String(value))
   const [seen, setSeen] = useState(value)
@@ -186,7 +266,14 @@ export function NumberField({
   }
   return (
     <View style={st.numRow}>
-      <Text style={st.numLabel}>{label}</Text>
+      <View style={st.numLabelBox}>
+        <Text style={st.numLabelText}>{label}</Text>
+        {help ? (
+          <HelpButton title={label} testID={testID ? `${testID}-help` : undefined}>
+            {help}
+          </HelpButton>
+        ) : null}
+      </View>
       <TextInput
         testID={testID}
         value={text}
@@ -310,6 +397,22 @@ export function Row({
 const st = StyleSheet.create({
   note: { color: colors.subtle, fontSize: 12.5, lineHeight: 18 },
   labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  labelLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    flexShrink: 1
+  },
+  headRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  subRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: -4
+  },
+  sub: { color: colors.muted, fontSize: 13 },
   label: {
     color: colors.subtle,
     fontSize: 12.5,
@@ -349,7 +452,8 @@ const st = StyleSheet.create({
     backgroundColor: colors.surface
   },
   numRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
-  numLabel: { flex: 1, color: colors.fg, fontSize: 14.5 },
+  numLabelBox: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  numLabelText: { flexShrink: 1, color: colors.fg, fontSize: 14.5 },
   numInput: {
     width: 110,
     color: colors.fg,

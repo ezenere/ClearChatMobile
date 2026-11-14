@@ -19,8 +19,9 @@ import {
 } from '@vendor/renderer/voice/toolPhrases'
 import { TextButton } from '@/ui/Button'
 import { Card, ToggleRow } from '@/ui/Card'
+import { Chip } from '@/ui/Help'
 import { colors, spacing } from '@/ui/theme'
-import { Multiline, Note } from './ui'
+import { Multiline } from './ui'
 
 /** Frases de uma categoria (na ordem do pool). */
 const linesOf = (pool: readonly ToolPhrase[], cat: ToolPhraseCategory): string[] =>
@@ -78,7 +79,9 @@ export function ToolPhrasesSettings({
       <Card>
         <ToggleRow
           title="Frases de ferramenta"
-          subtitle="“Vou pesquisar isso.”, “Deixa eu ver onde você está.” — uma frase curta na 1ª ferramenta do turno."
+          help={
+            '“Vou pesquisar isso.”, “Deixa eu ver onde você está.” — uma frase curta na 1ª ferramenta do turno.\n\nSó na 1ª tool do turno, nunca mais de uma por turno, no instante em que a tool começa: no lugar do preâmbulo quando ele ainda não tocou; com o preâmbulo (ou uma frase de espera) tocando, entra na fila e toca logo depois dele, sem cortá-lo. Pulada quando o assistente já falou algo antes da tool ou quando você está falando; na fila, cai se a resposta começar antes.\n\nUsa os clipes pré-gerados (“Gerar clipes”); sem eles, sintetiza na hora. Persona/chat podem ligar/desligar (★ segue este padrão).'
+          }
           value={tp.enabled}
           onChange={(enabled) => set({ enabled })}
           testID="voice-call-tool-phrases-toggle"
@@ -86,11 +89,6 @@ export function ToolPhrasesSettings({
       </Card>
       {tp.enabled ? (
         <>
-          <Note>
-            {
-              'Só na 1ª tool do turno, nunca mais de uma por turno, no instante em que a tool começa: no lugar do preâmbulo quando ele ainda não tocou; com o preâmbulo (ou uma frase de espera) tocando, entra na fila e toca logo depois dele, sem cortá-lo. Pulada quando o assistente já falou algo antes da tool ou quando você está falando; na fila, cai se a resposta começar antes. Usa os clipes pré-gerados (“Gerar clipes”); sem eles, sintetiza na hora. Persona/chat podem ligar/desligar (★ segue este padrão).'
-            }
-          </Note>
           <Pressable
             onPress={() => setOpen((o) => !o)}
             style={st.expand}
@@ -109,9 +107,12 @@ export function ToolPhrasesSettings({
               <View style={{ gap: spacing.md }} testID="voice-call-tool-phrases-pools">
                 {tp.pool ? (
                   <View style={st.custom}>
-                    <Text style={st.customText}>
-                      Frases personalizadas — gere os clipes de novo depois de editar.
-                    </Text>
+                    <Chip
+                      label="personalizadas"
+                      detail="Gere os clipes de novo depois de editar — sem eles, as frases são sintetizadas na hora."
+                      testID="voice-call-tool-phrases-custom"
+                    />
+                    <View style={{ flex: 1 }} />
                     <TextButton
                       title="Restaurar padrão"
                       onPress={() => set({ pool: null })}
@@ -140,6 +141,5 @@ const st = StyleSheet.create({
   cat: { color: colors.fg, fontSize: 13.5 },
   expand: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
   expandText: { color: colors.muted, fontSize: 13.5 },
-  custom: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  customText: { flex: 1, color: colors.subtle, fontSize: 12 }
+  custom: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }
 })

@@ -9,13 +9,14 @@ import { StyleSheet, Text, View } from 'react-native'
 import { AUDIO_TAGS_PROMPT_MAX, DEFAULT_AUDIO_TAGS_PROMPT } from '@shared/audioTags'
 import { TextButton } from '@/ui/Button'
 import { Card, ToggleRow } from '@/ui/Card'
+import { Chip, HelpButton } from '@/ui/Help'
 import { colors, spacing } from '@/ui/theme'
 import { InheritChoice } from './InheritChoice'
-import { FieldLabel, Multiline, Note } from './ui'
+import { FieldLabel, Multiline } from './ui'
 
 /** Texto curto do que as tags fazem. */
 export const AUDIO_TAGS_HELP =
-  'Com as tags de voz ligadas, a IA pode escrever marcas como [risos], [sussurra], [suspira] ou [animado] no meio da fala — elas mudam o jeito da voz falar (riso, sussurro, pausa, emoção). Só os modelos de voz ElevenLabs Eleven v3/v4 e Fish Audio Drama 3/S2 Pro/S2.1 Pro interpretam; nos demais as tags são tiradas antes da síntese (nunca lidas em voz alta). No chat elas aparecem esmaecidas no texto da resposta.'
+  'Com as tags de voz ligadas, a IA pode escrever marcas como [risos], [sussurra], [suspira] ou [animado] no meio da fala — elas mudam o jeito da voz falar (riso, sussurro, pausa, emoção).\n\nSó os modelos de voz ElevenLabs Eleven v3/v4 e Fish Audio Drama 3/S2 Pro/S2.1 Pro interpretam; nos demais as tags são tiradas antes da síntese (nunca lidas em voz alta). No chat elas aparecem esmaecidas no texto da resposta.'
 
 export function AudioTagsField({
   value,
@@ -61,8 +62,8 @@ export function AudioTagsField({
       {global ? (
         <Card>
           <ToggleRow
-            title="Tags de voz (ElevenLabs v3/v4 e Fish Audio Drama 3/S2)"
-            subtitle="A IA pode escrever [risos], [sussurra]… que mudam o jeito da voz falar."
+            title="Tags de voz"
+            help={AUDIO_TAGS_HELP}
             value={on}
             onChange={(v) => onChange(v)}
             testID={`${testID}-switch`}
@@ -70,7 +71,9 @@ export function AudioTagsField({
         </Card>
       ) : (
         <>
-          <FieldLabel>Tags de voz (ElevenLabs v3/v4 e Fish Audio Drama 3/S2)</FieldLabel>
+          <FieldLabel help={AUDIO_TAGS_HELP} testID={`${testID}-label`}>
+            Tags de voz
+          </FieldLabel>
           <InheritChoice
             label="Tags de voz"
             options={[
@@ -85,15 +88,29 @@ export function AudioTagsField({
           />
         </>
       )}
-      <Note>{AUDIO_TAGS_HELP}</Note>
       {on && !support.supported ? (
         <Text style={st.warn} testID={`${testID}-unsupported`}>
-          O modelo de voz atual{support.model ? ` (${support.model})` : ''} não interpreta tags —
-          elas serão removidas da fala.
+          A voz atual{support.model ? ` (${support.model})` : ''} não interpreta tags — elas saem da
+          fala.
         </Text>
       ) : null}
       <View style={st.promptHead}>
-        <Text style={st.promptLabel}>Instrução das tags (somada ao prompt da chamada)</Text>
+        <Text style={st.promptLabel}>Instrução das tags</Text>
+        <HelpButton title="Instrução das tags" testID={`${testID}-prompt-help`}>
+          Somada ao prompt da chamada, exatamente como está escrita aqui (só com a voz da chamada
+          interpretando tags). Vazia ou igual à herdada = volta a herdar.
+        </HelpButton>
+        {prompt == null ? (
+          <Chip
+            label={
+              inheritedPrompt === DEFAULT_AUDIO_TAGS_PROMPT
+                ? 'texto padrão do app'
+                : `herdado · ${inheritedFrom.replace(/^Padrão/, 'padrão')}`
+            }
+            testID={`${testID}-inherited`}
+          />
+        ) : null}
+        <View style={{ flex: 1 }} />
         {prompt != null ? (
           <TextButton
             title="Usar o padrão"
@@ -114,13 +131,6 @@ export function AudioTagsField({
         minHeight={96}
         testID={`${testID}-prompt`}
       />
-      {prompt == null ? (
-        <Text style={st.caption}>
-          {inheritedPrompt === DEFAULT_AUDIO_TAGS_PROMPT
-            ? 'Texto padrão do app.'
-            : `Herdado (${inheritedFrom.replace(/^Padrão/, 'padrão')}).`}
-        </Text>
-      ) : null}
     </View>
   )
 }
@@ -128,6 +138,5 @@ export function AudioTagsField({
 const st = StyleSheet.create({
   warn: { color: colors.warning, fontSize: 12.5, lineHeight: 17 },
   promptHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 28 },
-  promptLabel: { flex: 1, color: colors.muted, fontSize: 13 },
-  caption: { color: colors.faint, fontSize: 11.5, marginTop: -2 }
+  promptLabel: { color: colors.muted, fontSize: 13 }
 })

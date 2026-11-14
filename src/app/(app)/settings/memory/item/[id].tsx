@@ -312,7 +312,7 @@ export default function MemoryItem() {
       <Card>
         <ToggleRow
           title="Sempre carregar"
-          subtitle="Vai no índice com os detalhes (o modelo vê sem precisar buscar)."
+          help="Vai no índice com os detalhes (o modelo vê sem precisar buscar)."
           value={m.pinned}
           onChange={(pinned) => save({ pinned })}
           testID="memory-pinned"

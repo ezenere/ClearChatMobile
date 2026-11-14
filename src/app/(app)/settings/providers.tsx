@@ -24,6 +24,7 @@ export default function Providers() {
     <SettingsScreen
       title="Provedores"
       testID="screen-providers"
+      help={`Endpoints compatíveis com a API da OpenAI (chat/completions), OpenRouter ou a API nativa da Anthropic — e provedores só de voz (ElevenLabs).\n\n${local ? 'Sem conta, a chave fica só neste celular e vai apenas ao próprio provedor.' : 'A chave fica cifrada no sync e só é decifrada nos seus aparelhos.'}`}
       footer={
         <BottomBarButton
           title="Adicionar provedor"
@@ -35,13 +36,6 @@ export default function Providers() {
         />
       }
     >
-      <Note>
-        Endpoints compatíveis com a API da OpenAI (chat/completions), OpenRouter ou a API nativa da
-        Anthropic — e provedores só de voz (ElevenLabs).{' '}
-        {local
-          ? 'Sem conta, a chave fica só neste celular e vai apenas ao próprio provedor.'
-          : 'A chave fica cifrada no sync e só é decifrada nos seus aparelhos.'}
-      </Note>
       {list.length ? (
         <Card padded={false}>
           {list.map((p, i) => {
@@ -72,7 +66,7 @@ export default function Providers() {
           })}
         </Card>
       ) : (
-        <Note>Nenhum provedor ainda. Adicione um para conversar com os modelos.</Note>
+        <Note>Nenhum provedor ainda.</Note>
       )}
     </SettingsScreen>
   )

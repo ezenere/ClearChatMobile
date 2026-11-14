@@ -17,9 +17,10 @@ import {
 import { usePushPrefs, usePushStatus } from '@/push/react'
 import type { PermissionState, PushStatus } from '@/push/registration'
 import { present } from '@/push/task'
-import { Note, SettingsScreen } from '@/settings/ui'
+import { SettingsScreen } from '@/settings/ui'
 import { Button } from '@/ui/Button'
 import { Banner, Card, Divider, SectionLabel, StatusPill, ToggleRow } from '@/ui/Card'
+import { Chip } from '@/ui/Help'
 import { useToast } from '@/ui/Toast'
 import { spacing } from '@/ui/theme'
 import { AccountRequired } from '@/settings/AccountRequired'
@@ -124,84 +125,56 @@ function NotificationSettings() {
   const generic = !s.remember || s.biometric
 
   return (
-    <SettingsScreen title="Notificações" testID="screen-notifications">
+    <SettingsScreen
+      title="Notificações"
+      testID="screen-notifications"
+      help="Pendências avisam na hora quando o turno foi pedido daqui ou o computador está ausente, e depois de 1 minuto nos outros casos. Os canais (som, vibração, importância) podem ser ajustados nas configurações do sistema."
+    >
+      {/* avisos com ação: o botão é o aviso */}
       {perm === 'denied' ? (
-        <Banner
-          tone="danger"
-          title="Notificações bloqueadas no Android"
-          testID="push-perm-denied"
-          action={
-            <View style={st.bannerAction}>
-              <Button
-                title="Abrir configurações do sistema"
-                size="sm"
-                full={false}
-                icon="open-outline"
-                onPress={openSystemSettings}
-                testID="push-open-settings"
-              />
-            </View>
-          }
-        >
-          O ClearChat não pode mostrar avisos neste aparelho. Ative as notificações do app nas
-          configurações do sistema.
-        </Banner>
+        <View testID="push-perm-denied">
+          <Button
+            title="Notificações bloqueadas · Abrir configurações"
+            variant="warning"
+            onPress={openSystemSettings}
+            accessibilityHint="Ative as notificações do ClearChat nas configurações do sistema."
+            testID="push-open-settings"
+          />
+        </View>
       ) : perm === 'undetermined' && prefs.enabled ? (
-        <Banner
-          tone="info"
-          title="Falta a permissão"
-          action={
-            <View style={st.bannerAction}>
-              <Button
-                title="Permitir notificações"
-                size="sm"
-                full={false}
-                icon="notifications-outline"
-                onPress={() => void ask().then(() => registrar.sync('permissão'))}
-                testID="push-ask"
-              />
-            </View>
-          }
-        >
-          O Android pede a sua autorização antes de o app mostrar notificações.
-        </Banner>
+        <Button
+          title="Falta a permissão · Permitir"
+          variant="warning"
+          onPress={() => void ask().then(() => registrar.sync('permissão'))}
+          accessibilityHint="O Android pede a sua autorização antes de o app mostrar notificações."
+          testID="push-ask"
+        />
       ) : null}
       {status === 'unavailable' && prefs.enabled ? (
         <Banner tone="warning" testID="push-unavailable">
-          Este servidor não tem notificações push configuradas. Os avisos dos chats executados neste
-          celular continuam funcionando.
+          Servidor sem push — os avisos dos chats executados aqui continuam.
         </Banner>
       ) : null}
       {status === 'no-token' && prefs.enabled ? (
         <Banner tone="warning" testID="push-no-token">
-          Não foi possível obter o token de push deste aparelho (build sem o Firebase ou sem o
-          Google Play Services). Os avisos dos chats executados aqui continuam.
+          Sem token de push neste aparelho (Firebase/Play Services) — os avisos dos chats executados
+          aqui continuam.
         </Banner>
       ) : null}
       {status === 'error' && prefs.enabled ? (
-        <Banner
-          tone="warning"
-          action={
-            <View style={st.bannerAction}>
-              <Button
-                title="Tentar de novo"
-                size="sm"
-                full={false}
-                variant="secondary"
-                onPress={() => void registrar.sync('tentar de novo')}
-              />
-            </View>
-          }
-        >
-          Não foi possível registrar este aparelho no servidor agora. O app tenta de novo na próxima
-          abertura.
-        </Banner>
+        <Button
+          title="Registro no servidor falhou · Tentar de novo"
+          variant="warning"
+          onPress={() => void registrar.sync('tentar de novo')}
+          accessibilityHint="O app também tenta de novo na próxima abertura."
+          testID="push-retry"
+        />
       ) : null}
 
       <Card padded={false}>
         <ToggleRow
           title="Notificações neste aparelho"
-          subtitle="Avisos dos chats mesmo com o app fechado"
+          help="Avisos dos chats mesmo com o app fechado."
           value={prefs.enabled}
           onChange={setEnabled}
           disabled={busy}
@@ -217,7 +190,7 @@ function NotificationSettings() {
       <Card padded={false}>
         <ToggleRow
           title="Pendências"
-          subtitle="Aprovações, perguntas do agente e novas tentativas"
+          help="Aprovações, perguntas do agente e novas tentativas."
           value={prefs.pending}
           onChange={(v) => pushPrefs.set('pending', v)}
           disabled={!prefs.enabled}
@@ -226,7 +199,7 @@ function NotificationSettings() {
         <Divider />
         <ToggleRow
           title="Respostas prontas"
-          subtitle="Turnos que você começou daqui ou com o computador ausente"
+          help="Turnos que você começou daqui ou com o computador ausente."
           value={prefs.reply}
           onChange={(v) => pushPrefs.set('reply', v)}
           disabled={!prefs.enabled}
@@ -235,7 +208,7 @@ function NotificationSettings() {
         <Divider />
         <ToggleRow
           title="Erros"
-          subtitle="Turno que parou com erro (nas mesmas condições das respostas)"
+          help="Turno que parou com erro (nas mesmas condições das respostas)."
           value={prefs.error}
           onChange={(v) => pushPrefs.set('error', v)}
           disabled={!prefs.enabled}
@@ -244,7 +217,7 @@ function NotificationSettings() {
         <Divider />
         <ToggleRow
           title="Host offline"
-          subtitle="O computador que executava um chat caiu"
+          help="O computador que executava um chat caiu."
           value={prefs.hostOffline}
           onChange={(v) => pushPrefs.set('hostOffline', v)}
           disabled={!prefs.enabled}
@@ -256,20 +229,23 @@ function NotificationSettings() {
       <Card padded={false}>
         <ToggleRow
           title="Mostrar trecho"
-          subtitle="O começo da resposta, a pergunta ou o que a aprovação pede"
+          help="O começo da resposta, a pergunta ou o que a aprovação pede. O texto do aviso vem cifrado de ponta a ponta: o servidor e o Google só veem o tipo e o horário. Na tela bloqueada o Android esconde o conteúdo."
+          chips={
+            generic ? (
+              <Chip
+                label="texto genérico"
+                tone="warning"
+                detail='Como a chave deste aparelho está protegida por biometria (ou não fica lembrada), o app não consegue decifrar o aviso sozinho: aparece um texto genérico, como "Um chat precisa da sua aprovação".'
+                testID="push-generic"
+              />
+            ) : null
+          }
           value={prefs.excerpt}
           onChange={(v) => pushPrefs.set('excerpt', v)}
           disabled={!prefs.enabled}
           testID="push-excerpt"
         />
       </Card>
-      <Note>
-        O texto do aviso vem cifrado de ponta a ponta: o servidor e o Google só veem o tipo e o
-        horário. Na tela bloqueada o Android esconde o conteúdo.
-        {generic
-          ? ' Como a chave deste aparelho está protegida por biometria (ou não fica lembrada), o app não consegue decifrar o aviso sozinho: aparece um texto genérico, como "Um chat precisa da sua aprovação".'
-          : ''}
-      </Note>
 
       <Button
         title="Enviar notificação de teste"
@@ -279,17 +255,11 @@ function NotificationSettings() {
         disabled={!prefs.enabled}
         testID="push-test"
       />
-      <Note>
-        Pendências avisam na hora quando o turno foi pedido daqui ou o computador está ausente, e
-        depois de 1 minuto nos outros casos. Os canais (som, vibração, importância) podem ser
-        ajustados nas configurações do sistema.
-      </Note>
     </SettingsScreen>
   )
 }
 
 const st = StyleSheet.create({
-  bannerAction: { marginTop: spacing.sm, alignItems: 'flex-start' },
   statusRow: {
     flexDirection: 'row',
     paddingHorizontal: spacing.lg,

@@ -41,7 +41,8 @@ import { ModelField, chatProvidersOf, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { resolvePresetConfig } from '@/settings/records'
 import { readAt, settings } from '@/settings/react'
-import { FieldLabel, IconPicker, Multiline, Note, Segmented, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, IconPicker, Multiline, Segmented, SettingsScreen } from '@/settings/ui'
+import { Chip, Chips } from '@/ui/Help'
 import { BottomBarButton } from '@/ui/BottomBar'
 import { TextButton } from '@/ui/Button'
 import { Banner, Card, Divider, ToggleRow } from '@/ui/Card'
@@ -158,6 +159,7 @@ export default function PersonaEditor() {
     <SettingsScreen
       title={isNew ? 'Nova persona' : 'Persona'}
       testID="screen-persona"
+      help="Campos não alterados seguem “Novos chats”. Os chats que seguem esta persona ao vivo mudam junto no que eles não mudaram para si."
       footer={
         <BottomBarButton
           title={isNew ? 'Criar persona' : 'Salvar persona'}
@@ -220,12 +222,15 @@ export default function PersonaEditor() {
         onChange={setTab}
         testID="persona-tab"
       />
-      <Note>
-        Campos não alterados seguem “Novos chats”.
-        {following
-          ? ` ${following === 1 ? '1 chat segue' : `${following} chats seguem`} esta persona ao vivo: o que eles não mudaram para si muda junto.`
-          : ''}
-      </Note>
+      {following ? (
+        <Chips>
+          <Chip
+            label={following === 1 ? '1 chat segue' : `${following} chats seguem`}
+            detail={`${following === 1 ? '1 chat segue' : `${following} chats seguem`} esta persona ao vivo: o que eles não mudaram para si muda junto.`}
+            testID="persona-following"
+          />
+        </Chips>
+      ) : null}
 
       {tab === 'model' ? (
         <>
@@ -238,11 +243,12 @@ export default function PersonaEditor() {
             noneLabel="Usar o modelo padrão"
             note={
               missingProvider
-                ? 'O provedor desta persona não existe mais — usando o modelo padrão.'
+                ? 'provedor apagado · usa o padrão'
                 : ownModel
-                  ? 'Definido nesta persona.'
-                  : 'Segue o modelo padrão de “Novos chats”.'
+                  ? 'definido nesta persona'
+                  : 'segue “Novos chats”'
             }
+            noteTone={missingProvider ? 'warning' : ownModel ? 'accent' : 'neutral'}
             testID="persona-model"
           />
           {ownModel || missingProvider ? (
@@ -273,6 +279,17 @@ export default function PersonaEditor() {
       {tab === 'chat' ? (
         <>
           <FieldLabel
+            chips={
+              <Chip
+                label={
+                  draft.systemPrompt !== undefined
+                    ? 'definido nesta persona'
+                    : 'segue “Novos chats”'
+                }
+                tone={draft.systemPrompt !== undefined ? 'accent' : 'neutral'}
+                testID="persona-system-prompt-source"
+              />
+            }
             right={
               draft.systemPrompt !== undefined ? (
                 <TextButton
@@ -291,11 +308,7 @@ export default function PersonaEditor() {
             onChangeText={(systemPrompt) => patch({ systemPrompt })}
             minHeight={150}
           />
-          <Note>
-            {draft.systemPrompt !== undefined
-              ? 'Definido nesta persona.'
-              : 'Segue o system prompt padrão de “Novos chats”.'}
-          </Note>
+
           <ContextEditor cfg={cfg} patch={patch} />
           <SignatureEditor cfg={cfg} patch={patch} />
           <EnvironmentOption cfg={cfg} patch={patch} />
@@ -306,6 +319,18 @@ export default function PersonaEditor() {
       {tab === 'tools' ? (
         <>
           <FieldLabel
+            chips={
+              <Chip
+                label={ownSend ? 'definido nesta persona' : 'padrão do app'}
+                detail={
+                  ownSend
+                    ? 'Definido nesta persona (compactação e as que vão completas).'
+                    : 'Segue o padrão do app: compactadas, nenhuma completa.'
+                }
+                tone={ownSend ? 'accent' : 'neutral'}
+                testID="persona-tools-send-source"
+              />
+            }
             right={
               ownSend ? (
                 <TextButton
@@ -326,11 +351,7 @@ export default function PersonaEditor() {
             view={toolView}
             testID="persona-tools-compact"
           />
-          <Note>
-            {ownSend
-              ? 'Definido nesta persona (compactação e as que vão completas).'
-              : 'Segue o padrão do app: compactadas, nenhuma completa.'}
-          </Note>
+
           <FieldLabel>Também no celular</FieldLabel>
           <Card padded={false}>
             {portable.map((t, i) => (
@@ -338,7 +359,7 @@ export default function PersonaEditor() {
                 {i ? <Divider /> : null}
                 <ToggleRow
                   title={toolLabel(t)}
-                  subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
+                  help={TOOL_HELP[t] ?? locationToolHelp(t)}
                   value={tools.includes(t)}
                   onChange={(v) => toggleTool(t, v)}
                   testID={`persona-tool-${t}`}

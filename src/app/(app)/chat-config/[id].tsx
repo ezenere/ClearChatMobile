@@ -64,7 +64,8 @@ import {
   type LabelFn
 } from '@/settings/PersonaAdvanced'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
-import { FieldLabel, Multiline, Note, Row, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, Multiline, Row, SettingsScreen } from '@/settings/ui'
+import { Chip } from '@/ui/Help'
 import { Button, TextButton } from '@/ui/Button'
 import { Banner, Card, Divider, ToggleRow } from '@/ui/Card'
 import { Sheet, SheetItem } from '@/ui/Sheet'
@@ -274,8 +275,8 @@ export default function ChatConfigScreen() {
       </SettingsScreen>
     )
 
-  const label: LabelFn = (title, units, right) => (
-    <InheritLabel key={title} title={title} units={units} right={right} />
+  const label: LabelFn = (title, units, right, help) => (
+    <InheritLabel key={title} title={title} units={units} right={right} help={help} />
   )
   const own = view.own
   const tools = eff.enabledTools ?? []
@@ -312,12 +313,40 @@ export default function ChatConfigScreen() {
         </Text>
 
         {/* ---------------- persona ---------------- */}
-        <FieldLabel>Persona</FieldLabel>
+        <FieldLabel
+          help={`O que você não muda aqui acompanha a persona ao vivo (e, onde ela não define, “Novos chats”). Campos sem marca seguem a persona; ↺ neste chat = deste chat. Trocar de persona mantém os campos deste chat; “Nenhuma” congela os valores atuais.${whereNote}`}
+          testID="chat-persona-label"
+          chips={
+            <Chip
+              label={
+                view.active
+                  ? 'segue ao vivo'
+                  : view.legacy
+                    ? 'cópia da criação'
+                    : view.missing
+                      ? 'persona ausente aqui'
+                      : 'sem persona'
+              }
+              tone={view.active ? 'accent' : view.missing ? 'warning' : 'neutral'}
+              detail={
+                view.active
+                  ? `Segue “${view.personaName}” ao vivo: o que você não mudou aqui acompanha a persona.`
+                  : view.legacy
+                    ? `Cópia de “${origin?.name}” feita na criação — passa a herdar ao vivo na próxima sincronização.`
+                    : view.missing
+                      ? 'A persona deste chat não existe neste aparelho: valem os valores do próprio chat.'
+                      : 'Sem persona: todos os valores são deste chat. Escolha uma para herdar dela ao vivo (os campos que você mudou continuam deste chat).'
+              }
+              testID="persona-inherit-state"
+            />
+          }
+        >
+          Persona
+        </FieldLabel>
         <Card padded={false}>
           <Row
             left={<ChatAvatar icon={origin?.icon} size={36} />}
             title={origin ? origin.name || 'Persona' : presetId ? '(persona apagada)' : 'Nenhuma'}
-            subtitle="Persona de origem — toque para trocar"
             onPress={() => setPicker(true)}
             right={<Text style={st.chev}>›</Text>}
             testID="chat-persona"
@@ -354,21 +383,13 @@ export default function ChatConfigScreen() {
           </View>
         ) : (
           <View style={{ gap: 6 }} testID="persona-inherit-note">
-            <Note>
-              {view.active
-                ? `Segue “${view.personaName}” ao vivo: o que você não mudou aqui acompanha a persona (e, onde ela não define, “Novos chats”). Campos sem marca seguem a persona; ↺ neste chat = deste chat.`
-                : view.legacy
-                  ? `Cópia de “${origin?.name}” feita na criação — passa a herdar ao vivo na próxima sincronização.`
-                  : view.missing
-                    ? 'A persona deste chat não existe neste aparelho: valem os valores do próprio chat.'
-                    : 'Sem persona: todos os valores são deste chat. Escolha uma para herdar dela ao vivo (os campos que você mudou continuam deste chat).'}
-              {whereNote}
-            </Note>
             {view.active ? (
               <View style={st.ownLine}>
-                <Text style={st.ownText} testID="inherit-own-count">
-                  {own.length ? `${ownCountText(own.length)}.` : 'Nenhum campo próprio deste chat.'}
-                </Text>
+                <Chip
+                  label={own.length ? ownCountText(own.length) : 'nenhum campo próprio'}
+                  tone={own.length ? 'accent' : 'neutral'}
+                  testID="inherit-own-count"
+                />
                 {own.length ? (
                   <TextButton
                     title="Voltar a herdar tudo"
@@ -389,7 +410,7 @@ export default function ChatConfigScreen() {
           value={eff.model ? { providerId: eff.providerId, model: eff.model } : null}
           onChange={(v) => v && patch({ providerId: v.providerId, model: v.model })}
           note={
-            view.active && !view.isOwn('model') ? `Herdado: ${view.source('model')}.` : undefined
+            view.active && !view.isOwn('model') ? `herdado · ${view.source('model')}` : undefined
           }
           testID="chat-model"
         />
@@ -416,7 +437,20 @@ export default function ChatConfigScreen() {
         ) : null}
 
         {/* ---------------- system prompt ---------------- */}
-        {label('System prompt', ['systemPrompt'])}
+        {label(
+          'System prompt',
+          ['systemPrompt'],
+          view.isOwn('systemPrompt') ? (
+            <Chip label="deste chat" tone="accent" testID="chat-system-prompt-source" />
+          ) : view.active ? (
+            <Chip
+              label={`herdado · ${view.source('systemPrompt')}`}
+              detail="Editar aqui torna o campo deste chat."
+              testID="chat-system-prompt-source"
+            />
+          ) : undefined,
+          'Vai ao modelo exatamente como está escrito aqui.'
+        )}
         <Multiline
           testID="chat-system-prompt"
           value={prompt}
@@ -424,13 +458,6 @@ export default function ChatConfigScreen() {
           onBlur={commitPrompt}
           minHeight={150}
         />
-        <Note>
-          {view.isOwn('systemPrompt')
-            ? 'Deste chat — vai assim ao modelo.'
-            : view.active
-              ? `Herdado: ${view.source('systemPrompt')}. Editar aqui torna o campo deste chat.`
-              : 'Vai assim ao modelo.'}
-        </Note>
 
         {/* ---------------- ferramentas ---------------- */}
         <FieldLabel>Envio das tools</FieldLabel>
@@ -454,7 +481,7 @@ export default function ChatConfigScreen() {
               <InheritInline units={[`enabledTools.${t}`]} testID={`inherit-mark-tool-${t}`}>
                 <ToggleRow
                   title={toolLabel(t)}
-                  subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
+                  help={TOOL_HELP[t] ?? locationToolHelp(t)}
                   value={tools.includes(t)}
                   onChange={(v) => toggleTool(t, v)}
                   testID={`chat-tool-${t}`}
@@ -517,7 +544,9 @@ export default function ChatConfigScreen() {
         <ComputerOptions cfg={eff} patch={patch} label={label} />
 
         {/* ---------------- o resto (sem editor aqui) ---------------- */}
-        <FieldLabel>Outros campos</FieldLabel>
+        <FieldLabel help="Estes campos se editam no computador; aqui aparecem os valores que o chat usa.">
+          Outros campos
+        </FieldLabel>
         <Card padded={false}>
           {[...OTHER_UNITS, ...approvalUnits].map((u, i) => (
             <View key={u} style={st.toolRow}>
@@ -529,14 +558,13 @@ export default function ChatConfigScreen() {
                     {unitValueText(u, readUnit(eff, u), providerName)}
                   </Text>
                   {view.active && !view.isOwn(u) ? (
-                    <Text style={st.otherSource}>Herdado: {view.source(u)}</Text>
+                    <Chip label={`herdado · ${view.source(u)}`} />
                   ) : null}
                 </View>
               </InheritInline>
             </View>
           ))}
         </Card>
-        <Note>Estes campos se editam no computador; aqui aparecem os valores que o chat usa.</Note>
       </ChatInheritProvider>
 
       <Sheet
@@ -580,7 +608,6 @@ const st = StyleSheet.create({
   chatTitle: { color: colors.fg, fontSize: 16, fontWeight: '600', marginTop: -spacing.xs },
   chev: { color: colors.subtle, fontSize: 22 },
   ownLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm },
-  ownText: { color: colors.accentStrong, fontSize: 12.5, lineHeight: 17, flexShrink: 1 },
   warn: {
     borderRadius: radius.md,
     borderWidth: 1,
@@ -602,6 +629,5 @@ const st = StyleSheet.create({
   },
   other: { paddingVertical: 10, gap: 2 },
   otherTitle: { color: colors.fg, fontSize: 14.5 },
-  otherValue: { color: colors.muted, fontSize: 13, lineHeight: 18 },
-  otherSource: { color: colors.faint, fontSize: 11.5 }
+  otherValue: { color: colors.muted, fontSize: 13, lineHeight: 18 }
 })

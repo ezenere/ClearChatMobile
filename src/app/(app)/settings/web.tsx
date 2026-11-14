@@ -20,13 +20,14 @@ import {
 import { describeError } from '@/account/errors'
 import type { EngineState } from '@/settings/records'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
-import { Note, NumberField, Segmented, SettingsScreen } from '@/settings/ui'
+import { NumberField, Segmented, SettingsScreen } from '@/settings/ui'
+import { Chip, HelpButton } from '@/ui/Help'
 import { Button, TextButton } from '@/ui/Button'
 import { Banner, Card } from '@/ui/Card'
 import { useSecureScreen } from '@/ui/secure'
 import { TextField } from '@/ui/TextField'
 import { useToast } from '@/ui/Toast'
-import { colors, radius, spacing } from '@/ui/theme'
+import { colors, spacing } from '@/ui/theme'
 
 const toConfig = (e: EngineState): EngineConfig => ({
   id: e.id,
@@ -59,12 +60,11 @@ export default function WebSearchSettings() {
   const firstEnabled = engines.find((e) => e.enabled && !e.desktopOnly)?.id
 
   return (
-    <SettingsScreen title="Pesquisa na web" testID="screen-web">
-      <Note>
-        O web_search usa o primeiro buscador habilitado da lista. Se ele falhar (sem chave, cota,
-        captcha, rede ou resposta vazia), a mesma pesquisa passa para o próximo — os resultados
-        nunca se misturam. Vale para todos os seus dispositivos.
-      </Note>
+    <SettingsScreen
+      title="Pesquisa na web"
+      testID="screen-web"
+      help="O web_search usa o primeiro buscador habilitado da lista. Se ele falhar (sem chave, cota, captcha, rede ou resposta vazia), a mesma pesquisa passa para o próximo — os resultados nunca se misturam. Vale para todos os seus dispositivos."
+    >
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <Card padded={false}>
         {engines.map((e, i) => {
@@ -104,13 +104,20 @@ export default function WebSearchSettings() {
                 <View style={{ flex: 1, gap: 2 }}>
                   <View style={st.titleLine}>
                     <Text style={st.name}>{meta.label}</Text>
-                    {e.id === firstEnabled ? <Text style={st.primary}>principal</Text> : null}
+                    <HelpButton title={meta.label} testID={`engine-help-${e.id}`}>
+                      {meta.description}
+                    </HelpButton>
+                    {e.id === firstEnabled ? (
+                      <Chip label="principal" tone="accent" testID={`engine-primary-${e.id}`} />
+                    ) : null}
+                    {e.desktopOnly ? (
+                      <Chip
+                        label="só no computador"
+                        detail="O celular pula este buscador."
+                        testID={`engine-desktop-${e.id}`}
+                      />
+                    ) : null}
                   </View>
-                  <Text style={st.desc}>
-                    {e.desktopOnly
-                      ? `${meta.description} Só no computador (o celular pula este).`
-                      : meta.description}
-                  </Text>
                 </View>
                 <Switch
                   value={e.enabled}
@@ -131,25 +138,28 @@ export default function WebSearchSettings() {
                       onClose={() => setKeyFor(null)}
                       onSaved={(msg) => toast(msg)}
                     />
-                  ) : (
+                  ) : e.keyMask || e.hasKey ? (
                     <View style={st.keyLine}>
-                      <Ionicons
-                        name="key-outline"
-                        size={14}
-                        color={e.hasKey ? colors.success : colors.subtle}
-                      />
-                      <Text
-                        style={[st.keyText, !e.keyMask && st.keyNone]}
-                        testID={`engine-key-${e.id}`}
-                      >
-                        {e.keyMask ?? 'Sem chave — informe para habilitar'}
+                      <Ionicons name="key-outline" size={14} color={colors.success} />
+                      <Text style={st.keyText} testID={`engine-key-${e.id}`}>
+                        {e.keyMask ?? '••••'}
                       </Text>
                       <TextButton
-                        title={e.hasKey ? 'Trocar' : 'Informar chave'}
+                        title="Trocar"
                         onPress={() => setKeyFor(e.id)}
                         testID={`engine-setkey-${e.id}`}
                       />
                     </View>
+                  ) : (
+                    // sem chave: o aviso é o botão
+                    <Button
+                      title="Sem chave · Informar"
+                      variant="warning"
+                      size="sm"
+                      full={false}
+                      onPress={() => setKeyFor(e.id)}
+                      testID={`engine-setkey-${e.id}`}
+                    />
                   )}
                   <NumberField
                     label="Resultados por pesquisa"
@@ -179,9 +189,7 @@ export default function WebSearchSettings() {
         })}
       </Card>
       {!engines.some((e) => e.enabled && !e.desktopOnly) ? (
-        <Banner tone="warning">
-          Nenhum buscador habilitado neste celular: o web_search vai retornar erro.
-        </Banner>
+        <Banner tone="warning">Nenhum buscador habilitado aqui — o web_search vai falhar.</Banner>
       ) : null}
 
       <Card>
@@ -194,9 +202,9 @@ export default function WebSearchSettings() {
           suffix="s"
           placeholder={String(SEARCH_INTERVAL_DEFAULT_S)}
           onChange={(v) => settings.setSearchInterval(v ?? SEARCH_INTERVAL_DEFAULT_S)}
+          help="Espera entre uma pesquisa e a próxima (evita captcha e limite de uso)."
           testID="web-interval"
         />
-        <Note>Espera entre uma pesquisa e a próxima (evita captcha e limite de uso).</Note>
       </Card>
     </SettingsScreen>
   )
@@ -285,21 +293,9 @@ const st = StyleSheet.create({
   sep: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   engineTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   order: { gap: 2 },
-  titleLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  titleLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   name: { color: colors.fg, fontSize: 15, fontWeight: '500' },
-  primary: {
-    color: colors.accentStrong,
-    fontSize: 11,
-    fontWeight: '600',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accentSoft,
-    overflow: 'hidden'
-  },
-  desc: { color: colors.subtle, fontSize: 12.5, lineHeight: 17 },
   extra: { paddingLeft: 26, gap: 4 },
   keyLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  keyText: { flex: 1, color: colors.muted, fontSize: 13, fontFamily: 'monospace' },
-  keyNone: { fontFamily: undefined, color: colors.subtle }
+  keyText: { flex: 1, color: colors.muted, fontSize: 13, fontFamily: 'monospace' }
 })

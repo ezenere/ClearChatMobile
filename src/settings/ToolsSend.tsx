@@ -43,7 +43,8 @@ import {
   toolSearchLine,
   type ToolSearchModeView
 } from './toolSearchUi'
-import { FieldLabel, Note } from './ui'
+import { Chip } from '@/ui/Help'
+import { FieldLabel } from './ui'
 
 export type { CompactCfg, ToolSearchModeView }
 type Patch = (p: Partial<ChatConfig>) => void
@@ -82,7 +83,17 @@ export function CompactToolsCard({
   const row = (
     <ToggleRow
       title="Enviar tools compactadas"
-      subtitle="Economiza contexto."
+      help="Economiza contexto: as tools vão com o nome e a descrição curta, e o modelo busca a definição completa quando precisa. “O que vai junto” mostra exatamente o que vai."
+      chips={
+        local ? (
+          <Chip
+            label="versão local"
+            tone="warning"
+            detail="Este endpoint não tem busca nativa: vai a versão local do app (detalhes em “O que vai junto”)."
+            testID={`${testID}-local-mark`}
+          />
+        ) : null
+      }
       value={on}
       onChange={onChange}
       testID={testID}
@@ -91,15 +102,7 @@ export function CompactToolsCard({
   return (
     <>
       <Card padded={false} testID={`${testID}-card`}>
-        <View style={st.pad}>
-          {wrap ? wrap(row) : row}
-          {local ? (
-            <Text style={st.localMark} testID={`${testID}-local-mark`}>
-              Versão local do app — este endpoint não tem busca nativa (detalhes em “O que vai
-              junto”).
-            </Text>
-          ) : null}
-        </View>
+        <View style={st.pad}>{wrap ? wrap(row) : row}</View>
         <Pressable
           onPress={() => setInfo(true)}
           style={({ pressed }) => [st.infoRow, pressed && { backgroundColor: colors.hover }]}
@@ -114,11 +117,6 @@ export function CompactToolsCard({
           <Ionicons name="code-slash-outline" size={17} color={colors.accentStrong} />
           <View style={{ flex: 1 }}>
             <Text style={st.infoTitle}>O que vai junto</Text>
-            <Text style={st.infoSub}>
-              {native
-                ? 'Entrada de busca do provedor, exatamente como vai'
-                : 'Prompt fixo e tool_search, exatamente como vão'}
-            </Text>
           </View>
           <Ionicons name="chevron-forward" size={17} color={colors.subtle} />
         </Pressable>
@@ -418,7 +416,12 @@ export function OtherToolsGroup({
   const names = [...MEMORY_TOOL_NAMES, ...SKILL_TOOL_NAMES]
   return (
     <>
-      <FieldLabel>Memória e skills — como vão</FieldLabel>
+      <FieldLabel
+        help="Vão quando a memória (seção Memória) ou as skills estão ligadas; as skills só num computador."
+        testID={`${testID}-label`}
+      >
+        Memória e skills — como vão
+      </FieldLabel>
       <Card padded={false} testID={testID}>
         {names.map((t, i) => {
           const skill = SKILL_TOOL_NAMES.includes(t)
@@ -444,10 +447,6 @@ export function OtherToolsGroup({
           )
         })}
       </Card>
-      <Note>
-        Vão quando a memória (seção Memória) ou as skills estão ligadas; as skills só num
-        computador.
-      </Note>
     </>
   )
 }
@@ -595,7 +594,7 @@ function NativeToolDefinitionSheet({
 
 const st = StyleSheet.create({
   pad: { paddingHorizontal: spacing.lg, paddingTop: 2, paddingBottom: 10, gap: 4 },
-  localMark: { color: colors.warning, fontSize: 12.5, lineHeight: 17 },
+
   details: {
     gap: 10,
     paddingBottom: 12,
@@ -624,7 +623,7 @@ const st = StyleSheet.create({
     borderTopColor: colors.border
   },
   infoTitle: { color: colors.fg, fontSize: 14.5 },
-  infoSub: { color: colors.subtle, fontSize: 12, lineHeight: 16 },
+
   sheetBody: { paddingHorizontal: 8, gap: 10, paddingBottom: 8 },
   p: { color: colors.muted, fontSize: 13.5, lineHeight: 19 },
   strong: { color: colors.fg, fontWeight: '600' },

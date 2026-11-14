@@ -15,7 +15,7 @@ import {
 import { matchesMemory, sharedCollections } from '@vendor/renderer/memory'
 import { CollectionForm, CollectionIcon } from '@/settings/memoryUi'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
-import { Note, Row, SettingsScreen } from '@/settings/ui'
+import { Row, SettingsScreen } from '@/settings/ui'
 import { TextButton } from '@/ui/Button'
 import { Card, Divider } from '@/ui/Card'
 import { useToast } from '@/ui/Toast'
@@ -40,11 +40,11 @@ export default function MemorySettings() {
   const colName = (id: string) => cols.find((c) => c.id === id)?.name ?? 'coleção apagada'
 
   return (
-    <SettingsScreen title="Memórias" testID="screen-memory">
-      <Note>
-        Coleções globais, cada uma de uma categoria. Os chats e as personas escolhem quais o modelo
-        lê e em qual ele grava (menu do chat → Memória…, ou a aba Memória da persona).
-      </Note>
+    <SettingsScreen
+      title="Memórias"
+      testID="screen-memory"
+      help="Coleções globais, cada uma de uma categoria. Os chats e as personas escolhem quais o modelo lê e em qual ele grava (menu do chat → Memória…, ou a aba Memória da persona)."
+    >
       <View style={st.search}>
         <Ionicons name="search" size={16} color={colors.subtle} />
         <TextInput

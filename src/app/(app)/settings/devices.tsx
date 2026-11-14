@@ -4,7 +4,7 @@
 // este = sair da conta.
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { describeError } from '@/account/errors'
@@ -13,7 +13,8 @@ import { useAction, useSession } from '@/account/react'
 import type { DeviceRow } from '@/account/service'
 import { relativeTime } from '@/chat/format'
 import { RenameDialog } from '@/settings/RenameDialog'
-import { Note, Row } from '@/settings/ui'
+import { Row } from '@/settings/ui'
+import { HelpButton } from '@/ui/Help'
 import { TextButton } from '@/ui/Button'
 import { Banner, Card, Divider, Spinner } from '@/ui/Card'
 import { ConfirmDialog } from '@/ui/Dialog'
@@ -93,7 +94,17 @@ function Devices() {
 
   return (
     <View style={[st.root, { paddingTop: insets.top }]} testID="screen-devices">
-      <ScreenHeader title="Dispositivos" onBack={() => router.back()} />
+      <ScreenHeader
+        title="Dispositivos"
+        onBack={() => router.back()}
+        right={
+          <HelpButton title="Dispositivos" size={20} testID="screen-devices-help">
+            {
+              'Cada login é um dispositivo. Desconectar apaga a sessão dele na hora: para voltar, ele precisa entrar de novo com o código por e-mail (e a senha de criptografia).\n\nToque num dispositivo para renomear.'
+            }
+          </HelpButton>
+        }
+      />
       <ScrollView
         contentContainerStyle={[st.body, { paddingBottom: insets.bottom + spacing.xl }]}
         refreshControl={
@@ -109,10 +120,6 @@ function Devices() {
           />
         }
       >
-        <Note>
-          Cada login é um dispositivo. Desconectar apaga a sessão dele na hora: para voltar, ele
-          precisa entrar de novo com o código por e-mail (e a senha de criptografia).
-        </Note>
         {error ? <Banner tone="danger">{error}</Banner> : null}
         {revoke.error ? <Banner tone="danger">{revoke.error}</Banner> : null}
         {!list && !error ? <Spinner label="Carregando…" /> : null}
@@ -153,7 +160,6 @@ function Devices() {
             ))}
           </Card>
         ) : null}
-        <Text style={st.hint}>Toque num dispositivo para renomear.</Text>
       </ScrollView>
       {renaming ? (
         <RenameDialog
@@ -201,6 +207,5 @@ const st = StyleSheet.create({
     borderRadius: 5,
     borderWidth: 1.5,
     borderColor: colors.surface
-  },
-  hint: { color: colors.faint, fontSize: 12 }
+  }
 })

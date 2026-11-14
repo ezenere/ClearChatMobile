@@ -1,14 +1,13 @@
 // Voz da persona/chat (protocolo 1.9.0 — `config.voice.tts`/`.stt`): as seções "Fala" e
 // "Transcrição" da aba Voz (editor de personas e "Chamada de voz…" do chat) — = `VoiceChoiceSections`
-// do desktop. Sem opção "herdar/padrão" duplicada: cada seção diz o que vale ("Usando a voz padrão
-// deste aparelho: …" / "Usando a voz da persona “X”: …" / "Voz própria desta persona: …"), se
-// funciona AQUI ("Disponível aqui" / "Não disponível neste dispositivo — usa o padrão deste
-// dispositivo (…): <motivo>") e oferece "Escolher…" (os mesmos seletores de Configurações → Voz:
-// provedor, modelo, voz e parâmetros; na transcrição, provedor/modelo e o idioma com ★ no deste
-// aparelho), "Testar esta voz", "Gerar clipes desta voz" (só com o clique — uma API paga) e "Voltar
-// a usar …". No celular só a API funciona: uma escolha local/GPU feita no computador aparece com o
-// rótulo e cai na padrão daqui. A escolha sincroniza com a persona/chat.
-import Ionicons from '@expo/vector-icons/Ionicons'
+// do desktop. Sem opção "herdar/padrão" duplicada e sem texto solto: com os seletores na tela, eles
+// dizem o que vale; sem eles, uma linha curta com a voz herdada ("Padrão deste aparelho: …" /
+// "Persona “X”: …"); se funciona AQUI vira chip no cabeçalho ("disponível" / "usa o padrão daqui" /
+// "não funciona aqui", o motivo ao tocar). Oferece "Escolher…" (os mesmos seletores de
+// Configurações → Voz: provedor, modelo, voz e parâmetros; na transcrição, provedor/modelo e o idioma
+// com ★ no deste aparelho), "Testar esta voz", "Gerar clipes desta voz" (só com o clique — uma API
+// paga) e "Voltar a usar …". No celular só a API funciona: uma escolha local/GPU feita no computador
+// aparece com o rótulo e cai na padrão daqui. A escolha sincroniza com a persona/chat.
 import { useState } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import type { Provider } from '@shared/types'
@@ -40,7 +39,8 @@ import {
 } from '@/voice/endpoints'
 import { mobileVoiceText, resolveChatVoice } from '@/voice/resolve'
 import { voice as voiceStack } from '@/voice/native'
-import { FieldLabel, Note } from './ui'
+import { Chip } from '@/ui/Help'
+import { FieldLabel } from './ui'
 import {
   CatalogField,
   DICTATION_LANGUAGES,
@@ -52,29 +52,31 @@ import {
 
 type Res = VoiceResolution<unknown, unknown>
 
-/** Linha de disponibilidade NESTE aparelho da voz que está valendo neste nível. */
+/**
+ * Disponibilidade NESTE aparelho da voz que está valendo neste nível: chip no cabeçalho
+ * ("disponível" / "usa o padrão daqui" / "não funciona aqui"), o motivo ao tocar.
+ */
 function Availability({ r, deviceLabel, testID }: { r: Res; deviceLabel: string; testID: string }) {
-  const state = !r.available ? 'unavailable' : r.fallback ? 'fallback' : 'ok'
-  const color =
-    state === 'ok' ? colors.success : state === 'fallback' ? colors.warning : colors.danger
-  const text =
-    state === 'ok'
-      ? 'Disponível aqui'
-      : state === 'fallback'
-        ? `Não disponível neste dispositivo — usa o padrão deste dispositivo (${deviceLabel}): ${r.fallback?.reason ?? ''}`
-        : mobileVoiceText(
-            `${r.unconfigured ? 'Não configurada' : 'Não funciona'} neste dispositivo: ${r.reason ?? 'indisponível'} (Configurações → Áudio)`
-          )
-  return (
-    <View style={st.avail} testID={testID} accessibilityLabel={text}>
-      <Ionicons
-        name={state === 'ok' ? 'checkmark-circle' : 'warning'}
-        size={15}
-        color={color}
-        style={{ marginTop: 1 }}
+  if (r.available && !r.fallback)
+    return <Chip label="disponível" tone="success" icon="checkmark" testID={testID} />
+  if (r.available)
+    return (
+      <Chip
+        label="usa o padrão daqui"
+        tone="warning"
+        detail={`Não disponível neste aparelho — usa o padrão daqui (${deviceLabel}): ${r.fallback?.reason ?? ''}`}
+        testID={testID}
       />
-      <Text style={[st.availText, { color }]}>{text}</Text>
-    </View>
+    )
+  return (
+    <Chip
+      label={r.unconfigured ? 'não configurada aqui' : 'não funciona aqui'}
+      tone="danger"
+      detail={mobileVoiceText(
+        `${r.unconfigured ? 'Não configurada' : 'Não funciona'} neste dispositivo: ${r.reason ?? 'indisponível'} (Configurações → Áudio)`
+      )}
+      testID={testID}
+    />
   )
 }
 
@@ -171,11 +173,12 @@ function TtsChoice(p: ChoiceProps<VoiceTtsChoice>) {
   const [busy, setBusy] = useState<string | null>(null)
   const deviceLabel = ttsVoiceLabel(device.tts, providers)
   const label = (c: VoiceTtsChoice) => ttsVoiceLabel(applyTtsChoice(device.tts, c), providers)
+  // a voz que vale quando não há campos na tela (herdada, ou escolhida no computador)
   const current = own
-    ? `Voz própria ${p.where}: ${label(own)}`
+    ? label(own)
     : inherited
-      ? `Usando a voz da persona “${p.personaName}”: ${label(inherited)}`
-      : `Usando a voz padrão deste dispositivo: ${deviceLabel}`
+      ? `Persona “${p.personaName}”: ${label(inherited)}`
+      : `Padrão deste aparelho: ${deviceLabel}`
   const back = inherited
     ? 'Voltar a usar a voz da persona'
     : 'Voltar a usar a voz padrão deste dispositivo'
@@ -190,11 +193,18 @@ function TtsChoice(p: ChoiceProps<VoiceTtsChoice>) {
   const tid = `tts-choice-${p.scope}`
   return (
     <View style={{ gap: spacing.sm }} testID={tid}>
-      <FieldLabel>Fala</FieldLabel>
-      <Text style={st.current} testID="tts-choice-current">
-        {current}
-      </Text>
-      <Availability r={p.r} deviceLabel={deviceLabel} testID="tts-choice-availability" />
+      <FieldLabel
+        help={`A voz escolhida aqui (com os parâmetros dela) sincroniza com ${p.scope === 'chat' ? 'o chat' : 'a persona'}; sem escolha, vale ${inherited ? 'a da persona' : 'a padrão de cada aparelho'}.`}
+        testID={`${tid}-label`}
+        chips={<Availability r={p.r} deviceLabel={deviceLabel} testID="tts-choice-availability" />}
+      >
+        Fala
+      </FieldLabel>
+      {!(editing && editing.backend === 'api') ? (
+        <Text style={st.current} testID="tts-choice-current">
+          {current}
+        </Text>
+      ) : null}
       {editing && editing.backend === 'api' ? (
         <TtsApiPicker
           choice={editing}
@@ -203,11 +213,6 @@ function TtsChoice(p: ChoiceProps<VoiceTtsChoice>) {
           pending={!!draft}
           testID={tid}
         />
-      ) : own ? (
-        <Note>
-          Voz escolhida no computador (motor local/GPU) — neste celular vale a padrão deste
-          aparelho.
-        </Note>
       ) : null}
       <View style={st.actions}>
         {own || draft ? (
@@ -379,7 +384,6 @@ function TtsApiPicker({
             }
             testID={`${testID}-param`}
           />
-          <Note>Os parâmetros sincronizam junto com a voz da persona/chat.</Note>
         </Card>
       ) : null}
       {pending ? (
@@ -412,10 +416,10 @@ function SttChoice(p: ChoiceProps<VoiceSttChoice>) {
   const label = (c: VoiceSttChoice) =>
     sttVoiceLabel(applySttChoice(device.stt, c), providers, c.language || deviceLanguage)
   const current = own
-    ? `Transcrição própria ${p.where}: ${label(own)}`
+    ? label(own)
     : inherited
-      ? `Usando a transcrição da persona “${p.personaName}”: ${label(inherited)}`
-      : `Usando a transcrição padrão deste dispositivo: ${deviceLabel}`
+      ? `Persona “${p.personaName}”: ${label(inherited)}`
+      : `Padrão deste aparelho: ${deviceLabel}`
   const back = inherited
     ? 'Voltar a usar a transcrição da persona'
     : 'Voltar a usar a transcrição padrão deste dispositivo'
@@ -430,11 +434,28 @@ function SttChoice(p: ChoiceProps<VoiceSttChoice>) {
   const tid = `stt-choice-${p.scope}`
   return (
     <View style={{ gap: spacing.sm }} testID={tid}>
-      <FieldLabel>Transcrição</FieldLabel>
-      <Text style={st.current} testID="stt-choice-current">
-        {current}
-      </Text>
-      <Availability r={p.r} deviceLabel={deviceLabel} testID="stt-choice-availability" />
+      <FieldLabel
+        testID={`${tid}-label`}
+        chips={
+          <>
+            <Availability r={p.r} deviceLabel={deviceLabel} testID="stt-choice-availability" />
+            {editing || own ? (
+              <Chip
+                label="também no ditado"
+                detail={`O idioma e o modelo desta transcrição valem também no ditado do composer ${p.scope === 'chat' ? 'deste chat' : 'nos chats desta persona'}.`}
+                testID="stt-choice-dictation"
+              />
+            ) : null}
+          </>
+        }
+      >
+        Transcrição
+      </FieldLabel>
+      {!editing ? (
+        <Text style={st.current} testID="stt-choice-current">
+          {current}
+        </Text>
+      ) : null}
       {editing ? (
         <SttApiPicker
           choice={editing}
@@ -444,11 +465,6 @@ function SttChoice(p: ChoiceProps<VoiceSttChoice>) {
           pending={!!draft}
           testID={tid}
         />
-      ) : own ? (
-        <Note>
-          Transcrição escolhida no computador (motor local/GPU) — neste celular vale a padrão deste
-          aparelho.
-        </Note>
       ) : null}
       <View style={st.actions}>
         {own || draft ? (
@@ -589,8 +605,6 @@ function SttApiPicker({
 
 const st = StyleSheet.create({
   current: { color: colors.fg, fontSize: 14, lineHeight: 19 },
-  avail: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
-  availText: { flex: 1, fontSize: 12.5, lineHeight: 17 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.md },
   pending: { color: colors.warning, fontSize: 12.5 }
 })

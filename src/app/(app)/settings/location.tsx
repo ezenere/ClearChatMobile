@@ -18,9 +18,10 @@ import {
   type LocationApproval
 } from '@/location/settings'
 import type { Precision } from '@/location/geo'
-import { FieldLabel, Note, Segmented, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, Segmented, SettingsScreen } from '@/settings/ui'
 import { Button } from '@/ui/Button'
 import { Banner, Card, StatusPill } from '@/ui/Card'
+import { HelpButton } from '@/ui/Help'
 import { useToast } from '@/ui/Toast'
 import { colors, spacing } from '@/ui/theme'
 
@@ -91,46 +92,37 @@ export default function LocationSettings() {
     perm.accuracy === 'reduced'
 
   return (
-    <SettingsScreen title="Localização" testID="screen-location">
+    <SettingsScreen
+      title="Localização"
+      testID="screen-location"
+      help={`As ferramentas “Localização” e “Lugares próximos” funcionam nos chats executados neste celular (ligue-as em Novo chat ou na persona).\n\nA localização vai só para o provedor do modelo do chat e para o OpenStreetMap (Overpass e Nominatim); o nome do lugar pode vir do geocodificador do sistema (${ios ? 'Apple' : 'Google'}). O servidor do ClearChat não recebe a localização: o resultado da ferramenta fica no histórico do chat, que sincroniza cifrado de ponta a ponta como qualquer mensagem (sem conta, fica só aqui).\n\nEstas opções ficam só neste aparelho.`}
+    >
       {perm?.kind === 'denied' ? (
-        <Banner
-          tone="danger"
-          title="Localização negada no sistema"
-          testID="location-perm-denied"
-          action={
-            <View style={st.bannerAction}>
-              <Button
-                title="Abrir configurações do sistema"
-                size="sm"
-                full={false}
-                icon="open-outline"
-                onPress={openSystemSettings}
-                testID="location-open-settings"
-              />
-            </View>
-          }
-        >
-          {`O agente não consegue ver onde você está. Para usar “perto de mim”, permita a localização do ClearChat ${ios ? '(“Durante o uso do app”)' : '(“Permitir durante o uso do app”)'} nas configurações do sistema. A busca de lugares por endereço continua funcionando.`}
-        </Banner>
+        // aviso com ação: o botão é o aviso (o que fazer lá, no detalhe do leitor de tela)
+        <View testID="location-perm-denied">
+          <Button
+            title="Localização negada · Abrir configurações"
+            variant="warning"
+            onPress={openSystemSettings}
+            accessibilityHint={`Para usar “perto de mim”, permita a localização do ClearChat ${ios ? '(“Durante o uso do app”)' : '(“Permitir durante o uso do app”)'} nas configurações do sistema. A busca de lugares por endereço continua funcionando.`}
+            testID="location-open-settings"
+          />
+        </View>
       ) : perm?.kind === 'services-off' ? (
-        <Banner
-          tone="warning"
-          title="Localização do aparelho desligada"
-          testID="location-services-off"
-        >
-          Ligue a localização (GPS) nas configurações rápidas do sistema para o agente achar sua
-          posição.
+        <Banner tone="warning" testID="location-services-off">
+          Localização do aparelho desligada — ligue o GPS nas configurações rápidas.
         </Banner>
       ) : null}
 
       <Card>
         <View style={st.statusRow}>
           <Text style={st.statusTitle}>Permissão do sistema</Text>
+          <HelpButton title="Permissão do sistema" testID="location-perm-help">
+            Só “durante o uso do app”: o ClearChat nunca lê a localização em segundo plano.
+          </HelpButton>
+          <View style={{ flex: 1 }} />
           <StatusPill testID="location-status" tone={pill.tone} label={pill.label} />
         </View>
-        <Text style={st.hint}>
-          Só “durante o uso do app”: o ClearChat nunca lê a localização em segundo plano.
-        </Text>
         {perm?.kind === 'undetermined' || (perm?.kind === 'denied' && perm.canAskAgain) ? (
           <View style={{ marginTop: spacing.sm, alignItems: 'flex-start' }}>
             <Button
@@ -159,7 +151,12 @@ export default function LocationSettings() {
         ) : null}
       </Card>
 
-      <FieldLabel>Precisão</FieldLabel>
+      <FieldLabel
+        testID="location-precision-label"
+        help={`${PRECISION_LABEL.approximate}: a posição vai arredondada a ~1 km para o modelo, o OpenStreetMap e o geocodificador. ${ios ? 'No iPhone basta a “Localização Precisa” desligada.' : 'O Android só pede a localização aproximada.'}\n\n${PRECISION_LABEL.exact}: a posição exata (GPS) vai para o modelo e para o OpenStreetMap. ${ios ? 'Com a “Localização Precisa” desligada, o iPhone pergunta a cada sessão se libera a precisão total; recusado, o resultado fica aproximado.' : 'O Android pede a localização precisa na primeira vez.'}`}
+      >
+        Precisão
+      </FieldLabel>
       <Segmented
         options={(['approximate', 'exact'] as const).map((v) => ({
           value: v,
@@ -169,35 +166,28 @@ export default function LocationSettings() {
         onChange={setPrecision}
         testID="location-precision"
       />
-      <Text style={st.hint}>
-        {prefs.precision === 'approximate'
-          ? `A posição vai arredondada a ~1 km para o modelo, o OpenStreetMap e o geocodificador. ${ios ? 'No iPhone basta a “Localização Precisa” desligada.' : 'O Android só pede a localização aproximada.'}`
-          : `A posição exata (GPS) vai para o modelo e para o OpenStreetMap. ${ios ? 'Com a “Localização Precisa” desligada, o iPhone pergunta a cada sessão se libera a precisão total; recusado, o resultado fica aproximado.' : 'O Android pede a localização precisa na primeira vez.'}`}
-      </Text>
       {reducedButExact ? (
-        <Banner
-          tone="info"
-          testID="location-reduced"
-          action={
-            <View style={st.bannerAction}>
-              <Button
-                title="Pedir a localização precisa"
-                size="sm"
-                full={false}
-                variant="secondary"
-                icon="locate-outline"
-                loading={asking}
-                onPress={ask}
-                testID="location-ask-precise"
-              />
-            </View>
-          }
-        >
-          {`Hoje o sistema só libera a localização aproximada para o ClearChat. No próximo uso o app pede a precisa ${ios ? '(precisão total temporária)' : ''}; recusada, o resultado continua aproximado até você ativar ${ios ? '“Localização Precisa”' : '“Usar localização precisa”'} nas configurações do sistema.`}
-        </Banner>
+        <View testID="location-reduced">
+          <Button
+            title="Só a aproximada liberada · Pedir a precisa"
+            variant="warning"
+            size="sm"
+            loading={asking}
+            onPress={ask}
+            accessibilityHint={`Hoje o sistema só libera a localização aproximada para o ClearChat. No próximo uso o app pede a precisa ${ios ? '(precisão total temporária)' : ''}; recusada, o resultado continua aproximado até você ativar ${ios ? '“Localização Precisa”' : '“Usar localização precisa”'} nas configurações do sistema.`}
+            testID="location-ask-precise"
+          />
+        </View>
       ) : null}
 
-      <FieldLabel>Aprovação</FieldLabel>
+      <FieldLabel
+        testID="location-approval-label"
+        help={(['ask', 'always', 'never'] as const)
+          .map((v) => `${APPROVAL_LABEL[v]}: ${APPROVAL_HINT[v]}.`)
+          .join('\n\n')}
+      >
+        Aprovação
+      </FieldLabel>
       <Segmented
         options={(['ask', 'always', 'never'] as const).map((v) => ({
           value: v,
@@ -207,24 +197,11 @@ export default function LocationSettings() {
         onChange={setApproval}
         testID="location-approval"
       />
-      <Text style={st.hint}>{APPROVAL_HINT[prefs.approval]}</Text>
-
-      <Note>
-        As ferramentas “Localização” e “Lugares próximos” funcionam nos chats executados neste
-        celular (ligue-as em Novo chat ou na persona). A localização vai só para o provedor do
-        modelo do chat e para o OpenStreetMap (Overpass e Nominatim); o nome do lugar pode vir do
-        geocodificador do sistema ({ios ? 'Apple' : 'Google'}). O servidor do ClearChat não recebe a
-        localização: o resultado da ferramenta fica no histórico do chat, que sincroniza cifrado de
-        ponta a ponta como qualquer mensagem (sem conta, fica só aqui). Estas opções ficam só neste
-        aparelho.
-      </Note>
     </SettingsScreen>
   )
 }
 
 const st = StyleSheet.create({
-  bannerAction: { marginTop: spacing.sm, alignItems: 'flex-start' },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  statusTitle: { flex: 1, color: colors.fg, fontSize: 14.5, fontWeight: '500' },
-  hint: { color: colors.subtle, fontSize: 12, lineHeight: 16, marginTop: 4 }
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusTitle: { color: colors.fg, fontSize: 14.5, fontWeight: '500' }
 })

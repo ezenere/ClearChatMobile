@@ -21,10 +21,11 @@ import {
 } from '@/settings/records'
 import { settings } from '@/settings/react'
 import { useSession } from '@/account/react'
-import { FieldLabel, Multiline, Note, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, Multiline, SettingsScreen } from '@/settings/ui'
 import { BottomBarButton } from '@/ui/BottomBar'
 import { Button } from '@/ui/Button'
 import { Banner, Card } from '@/ui/Card'
+import { HelpButton } from '@/ui/Help'
 import { ConfirmDialog } from '@/ui/Dialog'
 import { useSecureScreen } from '@/ui/secure'
 import { Sheet } from '@/ui/Sheet'
@@ -122,7 +123,9 @@ export default function ProviderEditor() {
         />
       }
     >
-      <FieldLabel>Tipo / API</FieldLabel>
+      <FieldLabel help={KIND_DESCRIPTION[draft.kind]} testID="provider-kind-label">
+        Tipo / API
+      </FieldLabel>
       <View style={st.kinds}>
         {PROVIDER_KINDS.map((k) => {
           const on = draft.kind === k
@@ -140,7 +143,6 @@ export default function ProviderEditor() {
           )
         })}
       </View>
-      <Note>{KIND_DESCRIPTION[draft.kind]}</Note>
 
       <TextField
         testID="provider-name"
@@ -159,7 +161,7 @@ export default function ProviderEditor() {
         autoCorrect={false}
         keyboardType="url"
         mono
-        hint={
+        help={
           draft.kind === 'elevenlabs'
             ? 'Fala: POST {baseUrl}/v1/text-to-speech/… · teste: GET {baseUrl}/v1/models'
             : draft.kind === 'anthropic'
@@ -182,7 +184,7 @@ export default function ProviderEditor() {
         placeholder={
           draft.kind === 'anthropic' ? 'sk-ant-…' : draft.kind === 'elevenlabs' ? 'sk_…' : 'sk-…'
         }
-        hint={`${KEY_HINT[draft.kind]} ${local ? 'Fica só neste celular' : 'Fica cifrada no sync'}; nos previews de request aparece mascarada.`}
+        help={`${KEY_HINT[draft.kind]} ${local ? 'Fica só neste celular' : 'Fica cifrada no sync'}; nos previews de request aparece mascarada.`}
       />
 
       <Pressable
@@ -197,6 +199,9 @@ export default function ProviderEditor() {
           color={colors.subtle}
         />
         <Text style={st.advancedText}>Headers extras (opcional)</Text>
+        <HelpButton title="Headers extras" testID="provider-headers-help">
+          Objeto JSON de strings mesclado aos headers de todas as requests deste provedor.
+        </HelpButton>
       </Pressable>
       {advanced ? (
         <>
@@ -208,11 +213,11 @@ export default function ProviderEditor() {
             minHeight={80}
             mono
           />
-          <Note>
-            {headersErr
-              ? `JSON inválido: ${String(parseHeaders(draft.headersText))}`
-              : 'Objeto JSON de strings mesclado aos headers de todas as requests deste provedor.'}
-          </Note>
+          {headersErr ? (
+            <Text style={st.err} testID="provider-headers-error">
+              JSON inválido: {String(parseHeaders(draft.headersText))}
+            </Text>
+          ) : null}
         </>
       ) : null}
 
@@ -328,6 +333,7 @@ const st = StyleSheet.create({
   kindText: { color: colors.muted, fontSize: 13.5 },
   advanced: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
   advancedText: { color: colors.muted, fontSize: 14 },
+  err: { color: colors.danger, fontSize: 12.5, lineHeight: 17 },
   row: { flexDirection: 'row', gap: spacing.sm },
   model: {
     paddingVertical: 10,

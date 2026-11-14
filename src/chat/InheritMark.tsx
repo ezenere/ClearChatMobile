@@ -135,17 +135,21 @@ export function InheritLabel({
   title,
   units,
   right,
+  help,
   testID
 }: {
   title: string
   units: readonly string[]
   right?: ReactNode
+  /** Explicação da seção no (?). */
+  help?: ReactNode
   testID?: string
 }) {
   const [open, setOpen] = useState(false)
   return (
     <>
       <FieldLabel
+        help={help}
         right={
           <View style={st.labelRight}>
             {right}

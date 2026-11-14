@@ -12,6 +12,7 @@ import {
   type ViewStyle
 } from 'react-native'
 import type { IconName } from './Button'
+import { HelpButton } from './Help'
 import { colors, radius, spacing, toneColors, type Tone } from './theme'
 
 export function Card({
@@ -164,15 +165,22 @@ export function ToggleRow({
   onChange,
   disabled,
   dim,
+  help,
+  chips,
   testID
 }: {
   title: string
+  /** Só um fato curto que muda com o estado — explicação estática vai no `help` (?). */
   subtitle?: string
   value: boolean
   onChange: (v: boolean) => void
   disabled?: boolean
   /** Esmaecida mas alternável (ex.: tool que só roda no computador — não vale neste celular). */
   dim?: boolean
+  /** Explicação da opção: (?) ao lado do título, abre numa folha. */
+  help?: ReactNode
+  /** Fatos curtos da seleção (Chip) ao lado do título. */
+  chips?: ReactNode
   testID?: string
 }) {
   return (
@@ -185,7 +193,19 @@ export function ToggleRow({
       style={[styles.toggle, (disabled || dim) && { opacity: disabled ? 0.5 : 0.55 }]}
     >
       <View style={styles.itemText}>
-        <Text style={styles.toggleTitle}>{title}</Text>
+        {help || chips ? (
+          <View style={styles.titleLine}>
+            <Text style={styles.toggleTitle}>{title}</Text>
+            {help ? (
+              <HelpButton title={title} testID={testID ? `${testID}-help` : undefined}>
+                {help}
+              </HelpButton>
+            ) : null}
+            {chips}
+          </View>
+        ) : (
+          <Text style={styles.toggleTitle}>{title}</Text>
+        )}
         {subtitle ? <Text style={styles.itemSub}>{subtitle}</Text> : null}
       </View>
       <Switch
@@ -284,6 +304,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center'
   },
   itemText: { flex: 1, gap: 2 },
+  titleLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
   itemTitle: { color: colors.fg, fontSize: 15.5, fontWeight: '500' },
   itemSub: { color: colors.muted, fontSize: 13, lineHeight: 18 },
   banner: {

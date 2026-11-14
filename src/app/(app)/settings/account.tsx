@@ -86,7 +86,7 @@ function AccountSettings() {
           testID="home-device"
           icon="phone-portrait-outline"
           title={s.device?.name ?? 'Este aparelho'}
-          subtitle="Este aparelho · toque para renomear"
+          subtitle="Este aparelho"
           onPress={() => setRenaming(true)}
           chevron
         />
@@ -97,11 +97,7 @@ function AccountSettings() {
         <View style={st.pad}>
           <ToggleRow
             title="Lembrar neste aparelho"
-            subtitle={
-              s.remember
-                ? 'Abre direto; use Bloquear para pedir a senha.'
-                : 'A senha será pedida quando o app abrir de novo.'
-            }
+            help="Ligado, o app abre direto (a chave fica guardada no Keystore deste aparelho); use Bloquear para pedir a senha. Desligado, a senha é pedida quando o app abrir de novo."
             value={s.remember}
             disabled={remember.busy}
             onChange={(v) =>
@@ -119,7 +115,7 @@ function AccountSettings() {
             <View style={st.pad}>
               <ToggleRow
                 title="Exigir biometria"
-                subtitle="A chave guardada só abre com a sua digital/rosto."
+                help="A chave guardada só abre com a sua digital/rosto."
                 value={s.remember && s.biometric}
                 disabled={!s.remember || remember.busy}
                 onChange={(v) =>
@@ -151,7 +147,6 @@ function AccountSettings() {
           testID="account-password"
           icon="lock-closed-outline"
           title="Trocar senha de criptografia"
-          subtitle="Os outros dispositivos continuam funcionando."
           onPress={() => router.push('/settings/password')}
           chevron
         />

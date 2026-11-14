@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { ACTIVATION_DB_RANGE, DEFAULT_ACTIVATION_DB, rmsToDb } from '@shared/speechGate'
 import { captureErrorText } from '@vendor/renderer/voice/dictation'
+import { HelpButton } from '@/ui/Help'
 import { colors, radius, spacing } from '@/ui/theme'
 import type { MicSource } from '@/voice/mic'
 
@@ -112,6 +113,10 @@ export function MicActivationLevel({
     <View style={st.wrap} testID="mic-activation">
       <View style={st.head}>
         <Text style={st.title}>Nível de ativação</Text>
+        <HelpButton title="Nível de ativação" testID="mic-activation-help">
+          {`Abaixo deste nível o som não conta como fala: o trecho nem vai para a transcrição (ditado e chamada de voz) e não abaixa a voz do assistente. Evita que silêncio e ruído virem texto inventado — o “Tchau.” ou “Obrigado.” que aparecem do nada.\n\nToque em Testar, fale normalmente e deixe a linha entre o ruído parado e a sua voz (arraste no medidor ou use −/+). Vale só neste aparelho (depende do microfone e do ambiente; não sincroniza). Padrão ${DEFAULT_ACTIVATION_DB} dB.`}
+        </HelpButton>
+        <View style={{ flex: 1 }} />
         <Text style={st.value} testID="mic-activation-value">
           {shown} dB
         </Text>
@@ -204,22 +209,14 @@ export function MicActivationLevel({
         </Text>
       ) : null}
       {!testing && disabledReason ? <Text style={st.status}>{disabledReason}</Text> : null}
-      <Text style={st.help}>
-        Abaixo deste nível o som não conta como fala: o trecho nem vai para a transcrição (ditado e
-        chamada de voz) e não abaixa a voz do assistente. Evita que silêncio e ruído virem texto
-        inventado — o “Tchau.” ou “Obrigado.” que aparecem do nada. Toque em Testar, fale
-        normalmente e deixe a linha entre o ruído parado e a sua voz (arraste no medidor ou use
-        −/+). Vale só neste aparelho (depende do microfone e do ambiente; não sincroniza). Padrão{' '}
-        {DEFAULT_ACTIVATION_DB} dB.
-      </Text>
     </View>
   )
 }
 
 const st = StyleSheet.create({
   wrap: { gap: 6, paddingVertical: 4 },
-  head: { flexDirection: 'row', alignItems: 'center' },
-  title: { flex: 1, color: colors.fg, fontSize: 14.5 },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  title: { color: colors.fg, fontSize: 14.5 },
   value: { color: colors.muted, fontSize: 13, fontFamily: 'monospace' },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   stepBtn: {
@@ -268,6 +265,5 @@ const st = StyleSheet.create({
   testOn: { backgroundColor: colors.accent },
   testText: { color: colors.fg, fontSize: 13, fontWeight: '500' },
   status: { color: colors.subtle, fontSize: 12 },
-  err: { color: colors.danger, fontSize: 12.5 },
-  help: { color: colors.faint, fontSize: 11.5, lineHeight: 15 }
+  err: { color: colors.danger, fontSize: 12.5 }
 })

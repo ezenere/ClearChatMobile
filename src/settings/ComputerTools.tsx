@@ -13,7 +13,7 @@ import type { ChatConfig, ToolName } from '@shared/types'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { spacing } from '@/ui/theme'
 import { ToolSendLine, type CompactCfg, type ToolSearchModeView } from './ToolsSend'
-import { FieldLabel, Note } from './ui'
+import { FieldLabel } from './ui'
 
 export function ComputerToolsGroup({
   tools,
@@ -39,7 +39,9 @@ export function ComputerToolsGroup({
 }) {
   return (
     <>
-      <FieldLabel>{DEVICE_ONLY_TITLE.computer}</FieldLabel>
+      <FieldLabel help={DEVICE_ONLY_NOTE.computer} testID={`${testID}-label`}>
+        {DEVICE_ONLY_TITLE.computer}
+      </FieldLabel>
       <Card padded={false} testID={testID}>
         {COMPUTER_TOOL_NAMES.map((t, i) => {
           const row = (
@@ -72,7 +74,6 @@ export function ComputerToolsGroup({
           )
         })}
       </Card>
-      <Note>{DEVICE_ONLY_NOTE.computer}</Note>
     </>
   )
 }

@@ -5,8 +5,8 @@
 // nunca sincronizam; cada persona/chat pode ter a própria voz). O "Nível de ativação" do microfone é deste aparelho (kv local, nunca vai no
 // registro). Motores locais/GPU aparecem como "só no computador" (a escolha sincroniza, mas o
 // celular não transcreve/fala com eles). "Neste aparelho": opções locais (§4.4).
-import { useState } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { useEffect, useState } from 'react'
+import { StyleSheet, View } from 'react-native'
 import {
   BARGE_IN_RANGES,
   DEFAULT_BARGE_IN,
@@ -26,7 +26,7 @@ import { describeError } from '@/account/errors'
 import { store } from '@/data/native'
 import { ModelField } from '@/settings/ModelPicker'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
-import { FieldLabel, Note, NumberField, Segmented, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, NumberField, Segmented, SettingsScreen, SubLabel } from '@/settings/ui'
 import { AudioTagsField } from '@/settings/AudioTagsField'
 import { DelayPhrasesSettings } from '@/settings/DelayPhrasesSettings'
 import { MicActivationLevel } from '@/settings/MicActivationLevel'
@@ -40,8 +40,9 @@ import {
 } from '@/settings/voiceUi'
 import { Button } from '@/ui/Button'
 import { Banner, Card, Divider, ToggleRow } from '@/ui/Card'
+import { Chip, Chips } from '@/ui/Help'
 import { useToast } from '@/ui/Toast'
-import { colors, spacing } from '@/ui/theme'
+import { spacing } from '@/ui/theme'
 import {
   audioSettingOut,
   callTtsTagsSupport,
@@ -61,6 +62,7 @@ import {
   setFakeMicEnabled,
   voice
 } from '@/voice/native'
+import type { CallView } from '@/voice/call'
 import { useCallView } from '@/voice/react'
 import { synthesizeBlock } from '@vendor/desktop/voice/tts'
 
@@ -80,6 +82,27 @@ export default function VoiceSettings() {
   const [activation, setActivation] = useState(activationDb)
   const [fake, setFake] = useState(fakeMicEnabled)
   const [testing, setTesting] = useState(false)
+  // estado dos clipes da voz deste aparelho (contagem no chip; faltando → o botão vira o aviso)
+  const [clipsSeen, setClipsSeen] = useState<CallView['clips'] | null>(null)
+  const clips =
+    callView.call.active || callView.clips.state === 'generating'
+      ? callView.clips
+      : (clipsSeen ?? callView.clips)
+  // a voz e as frases decidem quais clipes existem (trocar qualquer uma reconfere)
+  const clipsKey = JSON.stringify([
+    v.tts,
+    v.voiceCallDefaults.fillers.pool,
+    v.voiceCallDefaults.toolPhrases.pool,
+    v.voiceCallDefaults.delayPhrases?.thanksPool,
+    callView.clips.state
+  ])
+  useEffect(() => {
+    let alive = true
+    void voice.call.clipsOf().then((c) => alive && setClipsSeen(c))
+    return () => {
+      alive = false
+    }
+  }, [clipsKey])
 
   const save = (id: string, value: unknown) =>
     settings.setSetting(id, audioSettingOut(id, value, store.deviceSetting(id)))
@@ -139,13 +162,20 @@ export default function VoiceSettings() {
   }
 
   return (
-    <SettingsScreen title="Voz" testID="screen-voice">
-      <Banner tone="info" testID="voice-device-note">
-        Padrões deste aparelho (não sincronizam) — cada persona pode ter a própria voz e transcrição
-        (Configurações → Personas → aba Voz). Uma voz de persona que não existe aqui (provedor
-        ausente, motor local ou GPU do computador) usa a padrão deste aparelho.
-      </Banner>
-      <Note>Ditado no composer e chamada de voz nos chats executados neste celular.</Note>
+    <SettingsScreen
+      title="Voz"
+      testID="screen-voice"
+      help={
+        'Ditado no composer e chamada de voz nos chats executados neste celular.\n\nSão os padrões deste aparelho (não sincronizam): cada persona pode ter a própria voz e transcrição (Configurações → Personas → aba Voz). Uma voz de persona que não existe aqui (provedor ausente, motor local ou GPU do computador) usa a padrão deste aparelho.'
+      }
+    >
+      <Chips>
+        <Chip
+          label="padrões deste aparelho"
+          detail="Não sincronizam — cada persona/chat pode ter a própria voz (aba Voz)."
+          testID="voice-device-note"
+        />
+      </Chips>
 
       {/* ---------------- ditado ---------------- */}
       <FieldLabel>Ditado</FieldLabel>
@@ -181,7 +211,7 @@ export default function VoiceSettings() {
           ) : null}
           <ToggleRow
             title="Segurar para falar"
-            subtitle="Segure o microfone enquanto fala; soltar conclui. Tocar uma vez também grava (toque de novo para concluir)."
+            help="Segure o microfone enquanto fala; soltar conclui. Tocar uma vez também grava (toque de novo para concluir)."
             value={v.audioInput.pttEnabled}
             onChange={(pttEnabled) => setInput({ pttEnabled })}
             testID="voice-ptt"
@@ -201,7 +231,19 @@ export default function VoiceSettings() {
       </Card>
 
       {/* ---------------- transcrição ---------------- */}
-      <FieldLabel>Transcrição (voz → texto)</FieldLabel>
+      <FieldLabel
+        chips={
+          v.stt.mode === 'hybrid' ? (
+            <Chip
+              label="neste celular: API"
+              detail="Híbrido: no computador, motor local com a API de reserva; neste celular, a API."
+              testID="voice-stt-hybrid"
+            />
+          ) : null
+        }
+      >
+        Transcrição (voz → texto)
+      </FieldLabel>
       <Segmented
         options={[
           { value: 'api', label: 'API' },
@@ -214,11 +256,8 @@ export default function VoiceSettings() {
       />
       {v.stt.mode === 'local' ? (
         <Banner tone="warning" testID="voice-stt-local">
-          Local (whisper.cpp/Vosk) só no computador — o áudio não sai da máquina. Neste celular o
-          ditado e a chamada ficam indisponíveis até você escolher API ou Híbrido.
+          Local só no computador — aqui o ditado e a chamada ficam indisponíveis.
         </Banner>
-      ) : v.stt.mode === 'hybrid' ? (
-        <Note>Híbrido: no computador, motor local com a API de reserva; neste celular, a API.</Note>
       ) : null}
       <Card padded={false}>
         <VoiceProviderField
@@ -250,7 +289,7 @@ export default function VoiceSettings() {
         <View style={st.pad}>
           <ToggleRow
             title="Texto ao vivo enquanto fala"
-            subtitle="Parciais pela API a cada ~1 s (custa requests a mais)."
+            help="Parciais pela API a cada ~1 s (custa requests a mais)."
             value={v.stt.livePartials}
             onChange={(livePartials) => setStt({ livePartials })}
             testID="voice-stt-partials"
@@ -281,7 +320,36 @@ export default function VoiceSettings() {
       ) : null}
 
       {/* ---------------- fala ---------------- */}
-      <FieldLabel>Fala (texto → voz)</FieldLabel>
+      <FieldLabel
+        help={
+          'Tags de voz como [risos] funcionam com ElevenLabs v3/v4 e Fish Audio Drama 3/S2 — com outros modelos elas são tiradas da fala.'
+        }
+        testID="voice-tts-label"
+        chips={
+          <>
+            {v.tts.backend === 'api' &&
+            ttsProvider &&
+            v.tts.api.model &&
+            supportsAudioTags(ttsFamily, v.tts.api.model) ? (
+              <Chip
+                label="tags"
+                tone="accent"
+                detail="Este modelo interpreta tags de voz ([risos], [sussurra]…) — ative em Chamada de voz → Tags de voz."
+                testID="voice-tts-tags"
+              />
+            ) : null}
+            {v.tts.backend === 'api' ? (
+              <Chip
+                label="HTTP"
+                detail="Na chamada, cada frase é sintetizada inteira (HTTP) e tocada assim que chega; o WebSocket da ElevenLabs (texto em streaming) é só do computador."
+                testID="voice-tts-transport"
+              />
+            ) : null}
+          </>
+        }
+      >
+        Fala (texto → voz)
+      </FieldLabel>
       <Segmented
         options={[
           { value: 'api', label: 'API' },
@@ -293,8 +361,8 @@ export default function VoiceSettings() {
       />
       {v.tts.backend !== 'api' ? (
         <Banner tone="warning" testID="voice-tts-local">
-          {v.tts.backend === 'gpu' ? 'GPU local' : 'Kokoro (local)'} só no computador — neste
-          celular a chamada de voz precisa da fala pela API.
+          {v.tts.backend === 'gpu' ? 'GPU local' : 'Kokoro'} só no computador — aqui a chamada
+          precisa da fala pela API.
         </Banner>
       ) : null}
       <Card padded={false}>
@@ -357,13 +425,6 @@ export default function VoiceSettings() {
           testID="voice-tts-voice"
         />
       </Card>
-      {v.tts.backend === 'api' && ttsProvider && v.tts.api.model ? (
-        <Note>
-          {supportsAudioTags(ttsFamily, v.tts.api.model)
-            ? 'Este modelo interpreta tags de voz ([risos], [sussurra]…) — ative em Chamada de voz → Tags de voz.'
-            : 'Tags de voz como [risos] funcionam com ElevenLabs v3/v4 e Fish Audio Drama 3/S2 — com este modelo elas são tiradas da fala.'}
-        </Note>
-      ) : null}
       {ttsFamily && ttsSpecs.length ? (
         <Card>
           <VoiceParamsEditor
@@ -381,10 +442,6 @@ export default function VoiceSettings() {
           />
         </Card>
       ) : null}
-      <Note>
-        Na chamada, cada frase é sintetizada inteira (HTTP) e tocada assim que chega; o WebSocket da
-        ElevenLabs (texto em streaming) é só do computador.
-      </Note>
       <Button
         title={testing ? 'Tocando…' : 'Testar voz'}
         icon="play-outline"
@@ -395,29 +452,31 @@ export default function VoiceSettings() {
       />
 
       {/* ---------------- chamada ---------------- */}
-      <FieldLabel>Chamada de voz — padrões</FieldLabel>
+      <FieldLabel
+        help={
+          'O app não acrescenta prompt próprio na chamada: o único texto a mais é o “Prompt do modo voz” de cada persona/chat (aba Voz — vazio por padrão, com “Usar sugestão”) e, com as tags de voz ligadas, a instrução delas.'
+        }
+        testID="voice-call-label"
+      >
+        Chamada de voz — padrões
+      </FieldLabel>
       <Card>
         <ToggleRow
           title="Chamada de voz disponível"
-          subtitle="Cada persona/chat pode mudar (aba Voz da persona)."
+          help="Cada persona/chat pode mudar (aba Voz da persona)."
           value={d.enabled}
           onChange={(enabled) => setCall({ enabled })}
           testID="voice-call-enabled"
         />
         <ToggleRow
           title="O agente pode encerrar a chamada"
-          subtitle="Tool end_call nos turnos da chamada (sem aprovação)."
+          help="Tool end_call nos turnos da chamada (sem aprovação)."
           value={d.endCall}
           onChange={(endCall) => setCall({ endCall })}
           testID="voice-call-endcall"
         />
       </Card>
-      <Note>
-        O app não acrescenta prompt próprio na chamada: o único texto a mais é o “Prompt do modo
-        voz” de cada persona/chat (aba Voz — vazio por padrão, com “Usar sugestão”) e, com as tags
-        de voz ligadas, a instrução delas.
-      </Note>
-      <Text style={st.sub}>Modelo da chamada</Text>
+      <SubLabel>Modelo da chamada</SubLabel>
       <ModelField
         providers={v.providers}
         value={d.model ? { providerId: d.model.providerId, model: d.model.model } : null}
@@ -435,7 +494,7 @@ export default function VoiceSettings() {
       <Card>
         <ToggleRow
           title="Preâmbulos"
-          subtitle="“Hum, deixa eu ver.” — só quando a resposta DEMORA (a espera abaixo); com uma ferramenta, a frase de ferramenta fica no lugar dele."
+          help="“Hum, deixa eu ver.” — só quando a resposta DEMORA (a espera abaixo); com uma ferramenta, a frase de ferramenta fica no lugar dele."
           value={d.fillers.enabled}
           onChange={(enabled) => setCall({ fillers: { ...d.fillers, enabled } })}
           testID="voice-call-fillers"
@@ -452,22 +511,25 @@ export default function VoiceSettings() {
               max={FILLER_DELAY_MS_RANGE.max}
               suffix="ms"
               placeholder={String(DEFAULT_FILLER_DELAY_MS)}
+              help={`Falar “deixa eu ver…” só se a resposta demorar mais que isto depois da sua fala: se a 1ª frase da resposta (ou a frase de ferramenta) sair antes, o preâmbulo nem toca. 0 = sempre, logo depois da sua fala. Padrão ${String(DEFAULT_FILLER_DELAY_MS / 1000).replace('.', ',')} s.`}
               testID="voice-call-filler-delay"
             />
-            <Text style={st.hint} testID="voice-call-filler-delay-help">
-              {`Falar “deixa eu ver…” só se a resposta demorar mais que isto depois da sua fala: se a 1ª frase da resposta (ou a frase de ferramenta) sair antes, o preâmbulo nem toca. 0 = sempre, logo depois da sua fala. Padrão ${String(DEFAULT_FILLER_DELAY_MS / 1000).replace('.', ',')} s.`}
-            </Text>
           </>
         ) : null}
       </Card>
-      <Text style={st.sub}>Frases de espera</Text>
+      <SubLabel>Frases de espera</SubLabel>
       <DelayPhrasesSettings value={delay} onChange={(delayPhrases) => setCall({ delayPhrases })} />
-      <Text style={st.sub}>Frases de ferramenta</Text>
+      <SubLabel>Frases de ferramenta</SubLabel>
       <ToolPhrasesSettings
         value={d.toolPhrases}
         onChange={(toolPhrases) => setCall({ toolPhrases })}
       />
-      <Text style={st.sub}>Falar por cima da resposta</Text>
+      <SubLabel
+        testID="voice-call-barge"
+        help={`Falar enquanto o assistente responde não para a resposta na hora: depois de “Abaixar a voz depois de” de voz SEGUIDA por cima (um clique, uma tosse curta ou um barulho isolado nunca abaixam nada), a voz dele ABAIXA para o volume abaixo e continua; o volume volta depois do silêncio configurado e o som curto é descartado.\n\nSe você insistir (o tempo com voz desde o começo da fala por cima, ${DEFAULT_BARGE_IN.words}+ palavras reais na transcrição ao vivo ou um pedido curto como “para”, “espera”, “chega” — sempre depois de a voz ter abaixado), ele para e a sua fala vira o próximo turno — no histórico fica só o que você ouviu.\n\nNeste celular vale com “Falar por cima da resposta” ligado em Neste aparelho (use fone); sem ele, use o botão Interromper.`}
+      >
+        Falar por cima da resposta
+      </SubLabel>
       <Card>
         <NumberField
           label="Abaixar a voz depois de"
@@ -529,9 +591,6 @@ export default function VoiceSettings() {
           testID="voice-call-duck-restore"
         />
       </Card>
-      <Note>
-        {`Falar enquanto o assistente responde não para a resposta na hora: depois de “Abaixar a voz depois de” de voz SEGUIDA por cima (um clique, uma tosse curta ou um barulho isolado nunca abaixam nada), a voz dele ABAIXA para o volume acima e continua; o volume volta depois do silêncio acima e o som curto é descartado. Se você insistir (o tempo com voz acima desde o começo da fala por cima, ${DEFAULT_BARGE_IN.words}+ palavras reais na transcrição ao vivo ou um pedido curto como “para”, “espera”, “chega” — sempre depois de a voz ter abaixado), ele para e a sua fala vira o próximo turno — no histórico fica só o que você ouviu. Neste celular vale com “Falar por cima da resposta” ligado em Neste aparelho (use fone); sem ele, use o botão Interromper.`}
-      </Note>
       <AudioTagsField
         global
         value={d.audioTags}
@@ -544,18 +603,18 @@ export default function VoiceSettings() {
         support={tagsSupport}
         testID="voice-call-audio-tags"
       />
-      <Text style={st.sub}>Fim do turno</Text>
+      <SubLabel>Fim do turno</SubLabel>
       <Card>
         <ToggleRow
           title="Fim de turno adaptativo"
-          subtitle="Na pausa, uma transcrição rápida decide se você terminou (pergunta fecha antes; frase inacabada espera mais)."
+          help="Na pausa, uma transcrição rápida decide se você terminou (pergunta fecha antes; frase inacabada espera mais)."
           value={turn.adaptive}
           onChange={(adaptive) => setCall({ turn: { ...turn, adaptive } })}
           testID="voice-call-adaptive"
         />
         <ToggleRow
           title="Transcrição especulativa pela API"
-          subtitle="Também vale com o texto ao vivo ligado (custa 1 request por pausa)."
+          help="Também vale com o texto ao vivo ligado (custa 1 request por pausa)."
           value={turn.speculativeApi}
           onChange={(speculativeApi) => setCall({ turn: { ...turn, speculativeApi } })}
         />
@@ -599,7 +658,7 @@ export default function VoiceSettings() {
       <Card>
         <ToggleRow
           title="Falar por cima da resposta (use fone de ouvido)"
-          subtitle="Ligado: falar enquanto o assistente responde abaixa a voz dele e, se você insistir, interrompe. Sem fone, deixe desligado — o microfone fica mudo enquanto o assistente fala (o celular não cancela o eco) — e use o botão Interromper."
+          help="Ligado: falar enquanto o assistente responde abaixa a voz dele e, se você insistir, interrompe. Sem fone, deixe desligado — o microfone fica mudo enquanto o assistente fala (o celular não cancela o eco) — e use o botão Interromper."
           value={barge}
           onChange={(on) => {
             setBargeInEnabled(on)
@@ -610,7 +669,7 @@ export default function VoiceSettings() {
         {__DEV__ ? (
           <ToggleRow
             title="Microfone de teste (desenvolvimento)"
-            subtitle="Não abre o microfone: toca os WAVs injetados por clearchat://dev/fakemic?play=…"
+            help="Não abre o microfone: toca os WAVs injetados por clearchat://dev/fakemic?play=…"
             value={fake}
             onChange={(on) => {
               setFakeMicEnabled(on)
@@ -620,15 +679,33 @@ export default function VoiceSettings() {
           />
         ) : null}
       </Card>
+      <SubLabel
+        testID="voice-clips"
+        help="Os clipes (os preâmbulos — “Hum, deixa eu ver aqui.” —, as frases de ferramenta e o “Obrigado por aguardar.”) são gerados com a voz padrão deste aparelho e ficam só aqui; a voz de uma persona tem os clipes dela (“Gerar clipes desta voz” na aba Voz da persona). Ao trocar a voz ou as frases, gere de novo — sem clipes, os preâmbulos não tocam e as frases de ferramenta e de agradecimento são sintetizadas na hora."
+        chips={
+          clips.state === 'ok' || clips.state === 'missing' ? (
+            <Chip
+              label={`${clips.done ?? 0}/${clips.total ?? 0} clipes`}
+              testID="voice-clips-count"
+            />
+          ) : null
+        }
+      >
+        Clipes
+      </SubLabel>
       <Button
         title={
-          callView.clips.state === 'generating'
-            ? `Gerando clipes… ${callView.clips.done ?? 0}/${callView.clips.total ?? 0}`
-            : 'Gerar clipes (preâmbulos, frases de ferramenta e agradecimentos)'
+          clips.state === 'generating'
+            ? `Gerando clipes… ${clips.done ?? 0}/${clips.total ?? 0}`
+            : clips.state === 'missing'
+              ? clips.done
+                ? 'Clipes faltando · Gerar de novo'
+                : 'Sem clipes · Gerar'
+              : 'Gerar clipes'
         }
-        icon="musical-notes-outline"
-        variant="secondary"
-        disabled={callView.clips.state === 'generating'}
+        icon={clips.state === 'missing' ? undefined : 'musical-notes-outline'}
+        variant={clips.state === 'missing' ? 'warning' : 'secondary'}
+        disabled={clips.state === 'generating'}
         onPress={() =>
           void voice.call
             .generateClips()
@@ -637,19 +714,10 @@ export default function VoiceSettings() {
         }
         testID="voice-gen-clips"
       />
-      <Note>
-        Os clipes (os preâmbulos — “Hum, deixa eu ver aqui.” —, as frases de ferramenta e o
-        “Obrigado por aguardar.”) são gerados com a voz padrão deste aparelho e ficam só aqui; a voz
-        de uma persona tem os clipes dela (“Gerar clipes desta voz” na aba Voz da persona). Ao
-        trocar a voz ou as frases, gere de novo — sem clipes, os preâmbulos não tocam e as frases de
-        ferramenta e de agradecimento são sintetizadas na hora.
-      </Note>
     </SettingsScreen>
   )
 }
 
 const st = StyleSheet.create({
-  pad: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
-  sub: { color: colors.muted, fontSize: 13, marginBottom: -4 },
-  hint: { color: colors.faint, fontSize: 11.5, lineHeight: 15, marginTop: -2, marginBottom: 4 }
+  pad: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }
 })

@@ -1,4 +1,5 @@
-// Botão com variantes (primário, secundário, fantasma, perigo), carregando e ícone.
+// Botão com variantes (primário, secundário, fantasma, perigo, aviso), carregando e ícone. `warning`
+// = o estado que pede ação mora no próprio botão ("⚠ Clipes desatualizados · Gerar de novo").
 import Ionicons from '@expo/vector-icons/Ionicons'
 import type { ComponentProps, ReactNode } from 'react'
 import {
@@ -12,7 +13,7 @@ import {
 } from 'react-native'
 import { colors, radius, spacing } from './theme'
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dangerGhost'
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dangerGhost' | 'warning'
 export type IconName = ComponentProps<typeof Ionicons>['name']
 
 const V: Record<
@@ -53,6 +54,13 @@ const V: Record<
     fg: colors.danger,
     border: 'transparent',
     spinner: colors.danger
+  },
+  warning: {
+    bg: colors.warningSoft,
+    pressed: 'rgba(245, 181, 68, 0.2)',
+    fg: colors.warning,
+    border: 'rgba(245, 181, 68, 0.38)',
+    spinner: colors.warning
   }
 }
 
@@ -87,6 +95,8 @@ export function Button({
   accessibilityHint
 }: ButtonProps) {
   const v = V[variant]
+  // aviso com ação: ⚠ quando não vem outro ícone
+  if (variant === 'warning' && !icon) icon = 'warning-outline'
   const inactive = disabled || loading
   const h = size === 'sm' ? 38 : 50
   const fs = size === 'sm' ? 14 : 16

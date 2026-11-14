@@ -32,9 +32,10 @@ import {
 } from '@/location/settings'
 import { ModelField } from '@/settings/ModelPicker'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
-import { FieldLabel, Multiline, Note, Segmented, SettingsScreen } from '@/settings/ui'
+import { FieldLabel, Multiline, Segmented, SettingsScreen, SubLabel } from '@/settings/ui'
 import { Button, TextButton } from '@/ui/Button'
 import { Card, ToggleRow } from '@/ui/Card'
+import { Chip, HelpButton } from '@/ui/Help'
 import { colors, radius, spacing } from '@/ui/theme'
 
 function read(): ApprovalSettings & { providers: ReturnType<typeof settings.providers> } {
@@ -64,12 +65,11 @@ export default function ApprovalsSettings() {
     settings.setSetting(SMART_DEFAULTS_SETTING, { ...a.smart, ...p })
 
   return (
-    <SettingsScreen title="Aprovações" testID="screen-approvals">
-      <Note>
-        Modo padrão de cada item em todos os chats. Cada chat e persona pode ajustar (no
-        computador). No celular rodam só pesquisa na web, abrir páginas e as ferramentas
-        conversacionais — o resto vale para os chats do computador.
-      </Note>
+    <SettingsScreen
+      title="Aprovações"
+      testID="screen-approvals"
+      help="Modo padrão de cada item em todos os chats. Cada chat e persona pode ajustar (no computador). No celular rodam só pesquisa na web, abrir páginas e as ferramentas conversacionais — o resto vale para os chats do computador."
+    >
       {APPROVAL_ITEM_GROUPS.map((g) => (
         <View key={g.title} style={{ gap: spacing.sm }}>
           <FieldLabel>{g.title}</FieldLabel>
@@ -79,9 +79,15 @@ export default function ApprovalsSettings() {
                 <View key={item} style={{ gap: 6 }}>
                   <View style={st.itemHead}>
                     <Text style={st.itemTitle}>{ITEM_LABEL[item]}</Text>
+                    <HelpButton title={ITEM_LABEL[item]} testID={`global-mode-${item}-help`}>
+                      {APPROVAL_MODES.map(
+                        (m) => `${modeLabel(item, m)}: ${modeHint(item, m)}`
+                      ).join('\n\n')}
+                    </HelpButton>
                     {MOBILE_TOOLS.includes(ITEM_TOOL[item]) ? (
-                      <Text style={st.here}>também no celular</Text>
+                      <Chip label="também no celular" tone="accent" />
                     ) : null}
+                    <View style={{ flex: 1 }} />
                   </View>
                   <Segmented
                     options={APPROVAL_MODES.map((m) => ({ value: m, label: modeLabel(item, m) }))}
@@ -91,7 +97,6 @@ export default function ApprovalsSettings() {
                     }
                     testID={`global-mode-${item}`}
                   />
-                  <Text style={st.hint}>{modeHint(item, a.modes[item])}</Text>
                 </View>
               ))}
             </View>
@@ -104,7 +109,19 @@ export default function ApprovalsSettings() {
         <View style={{ gap: 6 }}>
           <View style={st.itemHead}>
             <Text style={st.itemTitle}>Localização</Text>
-            <Text style={st.here}>só neste aparelho</Text>
+            <HelpButton title="Localização" testID="location-approval-help">
+              {(['ask', 'always', 'never'] as const)
+                .map((v) => `${LOCATION_APPROVAL_LABEL[v]}: ${LOCATION_APPROVAL_HINT[v]}.`)
+                .join('\n\n')}
+            </HelpButton>
+            <Chip label="só neste aparelho" />
+            <View style={{ flex: 1 }} />
+            <TextButton
+              title="Precisão"
+              icon="settings-outline"
+              onPress={() => router.push('/settings/location')}
+              testID="location-approval-settings"
+            />
           </View>
           <Segmented
             options={(['ask', 'always', 'never'] as const).map((v) => ({
@@ -115,16 +132,6 @@ export default function ApprovalsSettings() {
             onChange={(v) => locationPrefs.set('approval', v)}
             testID="location-approval-mode"
           />
-          <Text style={st.hint}>
-            {LOCATION_APPROVAL_HINT[loc.approval]}. Precisão e permissão do sistema em{' '}
-            <Text
-              style={{ color: colors.accentStrong }}
-              onPress={() => router.push('/settings/location')}
-            >
-              Configurações → Localização
-            </Text>
-            .
-          </Text>
         </View>
       </Card>
 
@@ -132,13 +139,15 @@ export default function ApprovalsSettings() {
       <Card>
         <ToggleRow
           title="Aceitar edições dentro da raiz do chat"
-          subtitle="write_file/edit_file dentro da raiz rodam sem perguntar e sem o juiz (caminhos protegidos continuam perguntando)."
+          help="write_file/edit_file dentro da raiz rodam sem perguntar e sem o juiz (caminhos protegidos continuam perguntando)."
           value={a.smart.acceptEditsInRoot}
           onChange={(acceptEditsInRoot) => setSmart({ acceptEditsInRoot })}
           testID="smart-accept-edits"
         />
       </Card>
-      <Text style={st.sub}>Descrição do ambiente (vai para o juiz de todos os chats)</Text>
+      <SubLabel help="Vai para o juiz do Smart-Approve de todos os chats, exatamente como está escrita.">
+        Descrição do ambiente
+      </SubLabel>
       <Multiline
         testID="smart-environment"
         value={env}
@@ -150,7 +159,7 @@ export default function ApprovalsSettings() {
       <Card>
         <ToggleRow
           title="Coleta automática de contexto"
-          subtitle="Um modelo resume o que você pediu e permitiu, para o juiz decidir melhor (só age com modelo escolhido e algum item em Smart-Approve)."
+          help="Um modelo resume o que você pediu e permitiu, para o juiz decidir melhor (só age com modelo escolhido e algum item em Smart-Approve)."
           value={a.smart.capture.enabled}
           onChange={(enabled) => setSmart({ capture: { ...a.smart.capture, enabled } })}
           testID="smart-capture"
@@ -175,11 +184,22 @@ export default function ApprovalsSettings() {
           }
           placeholder="Modelo do resumidor"
           noneLabel="Nenhum"
+          note={a.smart.capture.providerId ? undefined : 'sem modelo · a coleta não age'}
+          noteTone="warning"
           testID="smart-capture-model"
         />
       ) : null}
 
-      <FieldLabel>Listas</FieldLabel>
+      <FieldLabel
+        help={
+          listItem === 'pages'
+            ? 'Páginas: domínio (github.com, *.github.com) ou prefixo de URL.'
+            : 'Comandos: padrão com * (ex.: git status, npm run *). Cada comando é desmontado em sub-comandos (|, &&, ;, $(…)).'
+        }
+        testID="lists-label"
+      >
+        Listas
+      </FieldLabel>
       <Segmented
         options={APPROVAL_LIST_ITEMS.map((it) => ({ value: it, label: ITEM_LABEL[it] }))}
         value={listItem}
@@ -188,11 +208,6 @@ export default function ApprovalsSettings() {
       />
       <ListEditor key={`${listItem}-allow`} item={listItem} list="allow" a={a} />
       <ListEditor key={`${listItem}-deny`} item={listItem} list="deny" a={a} />
-      <Note>
-        {listItem === 'pages'
-          ? 'Páginas: domínio (github.com, *.github.com) ou prefixo de URL.'
-          : 'Comandos: padrão com * (ex.: git status, npm run *). Cada comando é desmontado em sub-comandos (|, &&, ;, $(…)).'}
-      </Note>
     </SettingsScreen>
   )
 }
@@ -291,7 +306,9 @@ function ListEditor({
             autoFocus
             autoCapitalize="none"
             autoCorrect={false}
-            placeholder={item === 'pages' ? 'github.com' : 'git status'}
+            placeholder={
+              item === 'pages' ? 'github.com, *.github.com ou https://…' : 'git status, npm run *'
+            }
             placeholderTextColor={colors.faint}
             onSubmitEditing={commit}
             style={st.input}
@@ -328,10 +345,8 @@ function ListEditor({
 
 const st = StyleSheet.create({
   itemHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  itemTitle: { color: colors.fg, fontSize: 14.5, fontWeight: '500', flex: 1 },
-  here: { color: colors.accentStrong, fontSize: 11.5 },
+  itemTitle: { color: colors.fg, fontSize: 14.5, fontWeight: '500' },
   hint: { color: colors.subtle, fontSize: 12, lineHeight: 16 },
-  sub: { color: colors.muted, fontSize: 13 },
   listHead: {
     flexDirection: 'row',
     alignItems: 'center',

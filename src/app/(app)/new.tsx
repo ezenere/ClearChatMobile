@@ -47,7 +47,8 @@ import { ModelPicker, useModels } from '@/settings/ModelPicker'
 import { ParamsEditor, withParam } from '@/settings/ParamsEditor'
 import { Button } from '@/ui/Button'
 import { BottomBarButton } from '@/ui/BottomBar'
-import { Banner, ToggleRow } from '@/ui/Card'
+import { ToggleRow } from '@/ui/Card'
+import { Chip, Chips, HelpButton } from '@/ui/Help'
 import { useToast } from '@/ui/Toast'
 import { colors, radius } from '@/ui/theme'
 
@@ -188,28 +189,22 @@ export default function NewChatScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {!providers.length ? (
-          <Banner
-            tone="warning"
-            title="Nenhum provedor"
-            testID="new-no-provider"
-            action={
-              <View style={{ marginTop: 8 }}>
-                <Button
-                  title="Adicionar provedor"
-                  icon="add"
-                  variant="secondary"
-                  onPress={() =>
-                    router.replace({ pathname: '/settings/provider/[id]', params: { id: 'new' } })
-                  }
-                  testID="new-add-provider"
-                />
-              </View>
-            }
-          >
-            {local
-              ? 'Cadastre um provedor (OpenRouter, Anthropic ou OpenAI-compatible) com a sua chave de API — ela fica só neste celular.'
-              : 'Cadastre um provedor (OpenRouter, Anthropic ou OpenAI-compatible) em Configurações → Provedores — aqui ou no computador; ele sincroniza com a chave cifrada.'}
-          </Banner>
+          // aviso com ação: o botão é o aviso
+          <View testID="new-no-provider">
+            <Button
+              title="Nenhum provedor · Adicionar"
+              variant="warning"
+              onPress={() =>
+                router.replace({ pathname: '/settings/provider/[id]', params: { id: 'new' } })
+              }
+              accessibilityHint={
+                local
+                  ? 'Cadastre um provedor (OpenRouter, Anthropic ou OpenAI-compatible) com a sua chave de API — ela fica só neste celular.'
+                  : 'Cadastre um provedor (OpenRouter, Anthropic ou OpenAI-compatible) — aqui ou no computador; ele sincroniza com a chave cifrada.'
+              }
+              testID="new-add-provider"
+            />
+          </View>
         ) : null}
 
         {presets.length ? (
@@ -267,7 +262,7 @@ export default function NewChatScreen() {
         {provider && noDefault ? (
           <ToggleRow
             title="Usar como modelo padrão"
-            subtitle="Os próximos chats já abrem com este modelo (Configurações → Novos chats)."
+            help="Os próximos chats já abrem com este modelo (Configurações → Novos chats)."
             value={saveDefault}
             onChange={setSaveDefault}
             testID="new-save-default"
@@ -289,7 +284,12 @@ export default function NewChatScreen() {
 
         {offer.show ? (
           <>
-            <Text style={st.label}>Onde guardar</Text>
+            <View style={st.labelRow}>
+              <Text style={[st.label, { marginTop: 0 }]}>Onde guardar</Text>
+              <HelpButton title="Onde guardar" testID="new-storage-help">
+                {`${STORAGE_TEXT.online.title}: ${STORAGE_TEXT.online.detail}\n\n${STORAGE_TEXT.live.title}: ${STORAGE_TEXT.live.detail}`}
+              </HelpButton>
+            </View>
             <View style={st.storageRow} testID="new-storage">
               {(['online', 'live'] as const).map((k) => {
                 const on = storage === k
@@ -312,7 +312,6 @@ export default function NewChatScreen() {
                         {STORAGE_TEXT[k].title}
                       </Text>
                     </View>
-                    <Text style={st.storageText}>{STORAGE_TEXT[k].detail}</Text>
                   </Pressable>
                 )
               })}
@@ -333,7 +332,7 @@ export default function NewChatScreen() {
             <View key={t}>
               <ToggleRow
                 title={toolLabel(t)}
-                subtitle={TOOL_HELP[t] ?? locationToolHelp(t)}
+                help={TOOL_HELP[t] ?? locationToolHelp(t)}
                 value={tools.includes(t)}
                 onChange={(v) => setTools((x) => withTool(x, t, v))}
                 testID={`tool-${t}`}
@@ -349,11 +348,18 @@ export default function NewChatScreen() {
             </View>
           ))}
           {tools.includes('web_search') ? (
-            <Text style={st.hint}>
-              {engines.length
-                ? `Buscadores: ${engines.join(' → ')} (Configurações → Pesquisa na web).`
-                : 'Nenhum buscador habilitado nas configurações sincronizadas.'}
-            </Text>
+            <Chips>
+              <Chip
+                label={engines.length ? `buscadores: ${engines.join(' → ')}` : 'nenhum buscador'}
+                tone={engines.length ? 'neutral' : 'warning'}
+                detail={
+                  engines.length
+                    ? 'A ordem e as chaves ficam em Configurações → Pesquisa na web.'
+                    : 'Nenhum buscador habilitado nas configurações sincronizadas (Configurações → Pesquisa na web).'
+                }
+                testID="new-engines"
+              />
+            </Chips>
           ) : null}
         </View>
         <ComputerToolsGroup
@@ -406,6 +412,7 @@ const st = StyleSheet.create({
   title: { color: colors.fg, fontSize: 17, fontWeight: '600' },
   sub: { color: colors.subtle, fontSize: 12 },
   body: { padding: 16, gap: 8 },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
   label: {
     color: colors.subtle,
     fontSize: 12.5,
@@ -428,7 +435,6 @@ const st = StyleSheet.create({
   storageOn: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
   storageHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   storageTitle: { color: colors.muted, fontSize: 14, fontWeight: '600' },
-  storageText: { color: colors.subtle, fontSize: 12, lineHeight: 16 },
   chips: { gap: 8, paddingVertical: 4 },
   persona: {
     flexDirection: 'row',
