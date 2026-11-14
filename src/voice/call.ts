@@ -48,7 +48,13 @@ import {
   type ClipClass,
   type ClipStore
 } from './clips'
-import { readVoiceSettings, resolveStt, resolveTts, type VoiceSettings } from './endpoints'
+import {
+  readVoiceSettings,
+  resolveStt,
+  resolveTts,
+  type VoiceSettings,
+  type VoiceSignature
+} from './endpoints'
 import {
   callRefusal,
   resolveChatVoice,
@@ -355,6 +361,17 @@ export class VoiceCallController {
 
   /** Voz decidida no início da chamada (vale a chamada inteira); null = sem chamada. */
   private callUse: VoiceUse | null = null
+  /** Chat da chamada em andamento (a assinatura de app dele vai nas requests de voz). */
+  private callChatId: string | null = null
+
+  /**
+   * Assinatura de app do chat da chamada (config atual — persona ao vivo): as requests de fala e
+   * transcrição da chamada levam os mesmos headers de atribuição das do chat. Sem chamada = a padrão.
+   */
+  private callSignature(): VoiceSignature {
+    const id = this.callChatId
+    return id ? (this.d.repo.chat(id)?.config ?? null) : null
+  }
 
   /** As settings de voz DESTE aparelho (Configurações → Voz). */
   private deviceSettings(): VoiceSettings {
@@ -388,7 +405,7 @@ export class VoiceCallController {
     text: string,
     signal: AbortSignal
   ): Promise<{ audio: Uint8Array; mime: string }> {
-    const tts = resolveTts(this.settings().tts, this.d.provider)
+    const tts = resolveTts(this.settings().tts, this.d.provider, this.callSignature())
     if ('block' in tts) throw new Error(tts.block.reason)
     return synthesizeBlock({ text, settings: tts.settings }, { signal })
   }
@@ -420,6 +437,7 @@ export class VoiceCallController {
     }
     this.set({ ...INITIAL, volume: this.view.volume })
     this.callUse = use
+    this.callChatId = chat.id
     // o rabo do eco é da chamada anterior: a nova começa ouvindo
     this.lastPlaybackAt = 0
     this.follow.set({ sessionId, heard: [], current: null })
@@ -527,6 +545,7 @@ export class VoiceCallController {
     this.follow.set({ sessionId: null, heard: [], current: null })
     await this.stopCapture()
     this.callUse = null
+    this.callChatId = null
     this.queue?.cancel(FADE_MS)
     this.queue?.dispose()
     this.queue = null
@@ -672,10 +691,13 @@ export class VoiceCallController {
    */
   async generateClips(
     tts?: VoiceTtsChoice | null,
-    onProgress?: (done: number, total: number) => void
+    onProgress?: (done: number, total: number) => void,
+    /** Assinatura de app da persona/chat do editor (headers de atribuição; ausente = a padrão). */
+    signature?: VoiceSignature
   ): Promise<void> {
     const v = this.clipSettings(tts)
-    const r = resolveTts(v.tts, this.d.provider)
+    // a assinatura do chat da chamada (dock) — "Gerar clipes desta voz" do editor: `signature`
+    const r = resolveTts(v.tts, this.d.provider, tts ? (signature ?? null) : this.callSignature())
     if ('block' in r) throw new Error(r.block.reason)
     const mine = !tts
     if (mine) this.set({ clips: { state: 'generating', done: 0, total: 0 } })
@@ -783,7 +805,7 @@ export class VoiceCallController {
   private ensureSession(): TranscribeSession | null {
     if (this.session) return this.session
     const v = this.settings()
-    const stt = resolveStt(v.stt, this.d.provider)
+    const stt = resolveStt(v.stt, this.d.provider, this.callSignature())
     if ('block' in stt) {
       this.set({ error: stt.block.reason })
       return null

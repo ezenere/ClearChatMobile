@@ -7,7 +7,7 @@ import { settings, useSettingsVersion } from '@/settings/react'
 import { voice } from './native'
 import type { CallView } from './call'
 import type { DictationView } from './dictation'
-import { readVoiceSettings } from './endpoints'
+import { readVoiceSettings, type VoiceSignature } from './endpoints'
 import {
   chatVoiceIcons,
   resolveChatVoice,
@@ -32,18 +32,38 @@ export function chatVoiceLayers(cfg: Record<string, unknown> | null | undefined)
   return voiceLayers(cfg?.voice, pv)
 }
 
+/** Assinatura de app de uma config de chat (os headers de atribuição das requests dele). */
+export function chatSignature(cfg: Record<string, unknown> | null | undefined): VoiceSignature {
+  const id = typeof cfg?.appSignature === 'string' ? cfg.appSignature : null
+  const c = cfg?.appSignatureCustom as { referer?: unknown; title?: unknown } | null | undefined
+  const custom =
+    c && typeof c === 'object' && typeof c.referer === 'string' && typeof c.title === 'string'
+      ? { referer: c.referer, title: c.title }
+      : undefined
+  return id || custom
+    ? { ...(id ? { appSignature: id } : {}), ...(custom ? { appSignatureCustom: custom } : {}) }
+    : null
+}
+
 /**
  * A voz de um chat aqui (camadas da config do chat — salvo, do controle remoto ou ao vivo): a
- * resolução, as camadas (para o ditado) e o estado dos ícones. Refaz quando as Configurações mudam.
+ * resolução, as camadas e a assinatura de app (para o ditado) e o estado dos ícones. Refaz quando as
+ * Configurações mudam.
  */
 export function useChatVoice(cfg: Record<string, unknown> | null | undefined): {
   layers: VoiceLayers
+  signature: VoiceSignature
   voice: ChatVoice
   mic: VoiceIcon
   call: VoiceIcon
 } {
   const version = useSettingsVersion()
-  const key = JSON.stringify([cfg?.voice ?? null, cfg?.presetId ?? null])
+  const key = JSON.stringify([
+    cfg?.voice ?? null,
+    cfg?.presetId ?? null,
+    cfg?.appSignature ?? null,
+    cfg?.appSignatureCustom ?? null
+  ])
   return useMemo(() => {
     void version
     const layers = chatVoiceLayers(cfg)
@@ -53,7 +73,7 @@ export function useChatVoice(cfg: Record<string, unknown> | null | undefined): {
       readVoiceSettings((id) => store.deviceSetting(id)),
       (id) => providers.find((p) => p.id === id) ?? null
     )
-    return { layers, voice: r, ...chatVoiceIcons(r) }
+    return { layers, signature: chatSignature(cfg), voice: r, ...chatVoiceIcons(r) }
     // a config entra pela chave (objeto novo a cada leitura do cache)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, key])

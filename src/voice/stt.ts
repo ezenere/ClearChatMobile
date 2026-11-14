@@ -19,6 +19,7 @@ import {
   type TranscribeResult
 } from '@vendor/desktop/voice/stt'
 import { abortError } from '@/agent/tools/util'
+import { appHeadersOf } from './endpoints'
 
 export { SttError, type TranscribeAudioInput, type TranscribeResult }
 
@@ -186,6 +187,8 @@ export async function transcribeAudio(
     const res = await (opts.fetch ?? fetch)(url, {
       method: 'POST',
       headers: {
+        // assinatura de app do contexto (HTTP-Referer/X-Title — as mesmas do chat; = desktop)
+        ...appHeadersOf(api),
         Accept: 'application/json',
         'Content-Type': contentType,
         ...(key ? { Authorization: `Bearer ${key}` } : {})

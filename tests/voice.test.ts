@@ -266,6 +266,27 @@ describe('transcrição pela API (multipart em bytes)', () => {
     expect(a.audioMs).toBe(b.audioMs)
   })
 
+  it('assinatura de app do endpoint (`api.appHeaders`) vai no /audio/transcriptions (= desktop); sem ela nada', async () => {
+    const audio = wav16(speech([[600, true]]))
+    await transcribeAudio(
+      { audio, mimeType: 'audio/wav' },
+      {
+        settings: sttSettings(`${h.llm.url}/v1`, {
+          appHeaders: { 'HTTP-Referer': 'https://cline.bot', 'X-Title': 'Cline' }
+        } as Partial<SttSettings['api']>)
+      }
+    )
+    expect(h.llm.voice.log.at(-1)?.appHeaders).toEqual({
+      'HTTP-Referer': 'https://cline.bot',
+      'X-Title': 'Cline'
+    })
+    await transcribeAudio(
+      { audio, mimeType: 'audio/wav' },
+      { settings: sttSettings(`${h.llm.url}/v1`) }
+    )
+    expect(h.llm.voice.log.at(-1)?.appHeaders).toEqual({})
+  })
+
   it('erros legíveis com categoria: 401 → auth, 500 → http, sem provedor → config', async () => {
     const audio = wav16(speech([[500, true]]))
     await expect(
@@ -540,6 +561,42 @@ describe('settings de áudio no celular (§4.3.2/§4.4)', () => {
     expect('settings' in ok && ok.settings.api.providerKind).toBe('elevenlabs')
     // registro ausente → padrões normalizados
     expect(readVoiceSettings(() => undefined).audioInput.language).toBe('pt-BR')
+  })
+
+  it('assinatura de app nas requests de voz: resolveTts/resolveStt levam a do contexto (padrão sem ele; "none" nada) e nunca é gravada', () => {
+    // bug (uso real, 2026-11-14): a fala/transcrição pelo OpenRouter aparecia como app "Unknown" na
+    // atividade — as requests de voz não levavam o HTTP-Referer/X-Title das requests do chat
+    const stt = { ...DEFAULT_STT_SETTINGS, api: { providerId: 'or', model: 'whisper' } }
+    const tts = {
+      ...DEFAULT_TTS_SETTINGS,
+      backend: 'api' as const,
+      api: { providerId: 'or', model: 'fishaudio/drama-3', voice: 'narradora' }
+    }
+    const appHeaders = (r: ReturnType<typeof resolveStt> | ReturnType<typeof resolveTts>) =>
+      'settings' in r
+        ? (r.settings.api as { appHeaders?: Record<string, string> }).appHeaders
+        : null
+    const def = { 'HTTP-Referer': 'https://github.com/ezenere/clearchat', 'X-Title': 'ClearChat' }
+    const cline = { 'HTTP-Referer': 'https://cline.bot', 'X-Title': 'Cline' }
+    expect(appHeaders(resolveStt(stt, provider))).toEqual(def)
+    expect(appHeaders(resolveTts(tts, provider))).toEqual(def)
+    expect(appHeaders(resolveStt(stt, provider, { appSignature: 'cline' }))).toEqual(cline)
+    expect(appHeaders(resolveTts(tts, provider, { appSignature: 'cline' }))).toEqual(cline)
+    expect(appHeaders(resolveTts(tts, provider, { appSignature: 'none' }))).toBeUndefined()
+    expect(
+      appHeaders(
+        resolveStt(stt, provider, {
+          appSignature: 'custom',
+          appSignatureCustom: { referer: 'https://x.dev', title: 'X' }
+        })
+      )
+    ).toEqual({ 'HTTP-Referer': 'https://x.dev', 'X-Title': 'X' })
+    const resolved = resolveTts(tts, provider, { appSignature: 'cline' })
+    expect(
+      JSON.stringify(
+        audioSettingOut('ttsSettings', 'settings' in resolved ? resolved.settings : null)
+      )
+    ).not.toContain('appHeaders')
   })
 
   it('nível de ativação é parte do aparelho: nunca vai no registro e o recebido não o troca', () => {
@@ -858,7 +915,9 @@ describe('ditado e chamada de voz no host do celular', () => {
       bargeIn: () => false
     })
     const call = voice.call
-    const { chatId, sid } = newChat()
+    // chat com a assinatura "Cline": as requests de voz da chamada levam os headers dela
+    const { chatId, sid } = newChat({ appSignature: 'cline' })
+    const logFrom = h.llm.voice.log.length
     await call.start(sid)
     expect(call.getView().call.active).toBe(true)
     expect(h.stack.host.windowOpen(chatId)).toBe(true)
@@ -924,6 +983,15 @@ describe('ditado e chamada de voz no host do celular', () => {
     expect(end.usage?.llm.calls).toBeGreaterThan(0)
     const tool = h.stack.repo.path(sid).find((m) => m.message.role === 'tool')!
     expect(tool.message.content).toBe('Chamada encerrada pelo agente.')
+    // assinatura de app (uso real, 2026-11-14 — "Unknown" na atividade do OpenRouter): a
+    // transcrição da chamada leva o HTTP-Referer/X-Title do chat (a fala também, pelo
+    // `api.appHeaders` que o `/audio/speech` vendorado do desktop manda)
+    const stt = h.llm.voice.log
+      .slice(logFrom)
+      .filter((l) => l.path.endsWith('/audio/transcriptions'))
+    expect(stt.length).toBeGreaterThan(0)
+    for (const l of stt)
+      expect(l.appHeaders).toEqual({ 'HTTP-Referer': 'https://cline.bot', 'X-Title': 'Cline' })
     // registro: o marcador vai como memory-extraction + voiceCall (§4.3.8)
     await h.stack.writer.flush(chatId)
     await until(() => !h.stack.writer.pending(chatId), 8000, 'outbox')

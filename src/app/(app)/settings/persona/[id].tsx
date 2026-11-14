@@ -382,6 +382,10 @@ export default function PersonaEditor() {
           defaults={voiceInherit.defaults}
           tagsSupport={voiceInherit.tagsSupport}
           device={voiceInherit.device}
+          signature={{
+            appSignature: cfg.appSignature ?? null,
+            appSignatureCustom: cfg.appSignatureCustom ?? null
+          }}
           chatTools={cfg.enabledTools ?? null}
           compactCfg={cfg}
           toolSearch={toolView}

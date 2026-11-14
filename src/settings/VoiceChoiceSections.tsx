@@ -32,7 +32,12 @@ import { TextButton } from '@/ui/Button'
 import { Card, Divider } from '@/ui/Card'
 import { useToast } from '@/ui/Toast'
 import { colors, spacing } from '@/ui/theme'
-import { voiceFamily, voiceProviders, type VoiceSettings } from '@/voice/endpoints'
+import {
+  voiceFamily,
+  voiceProviders,
+  type VoiceSettings,
+  type VoiceSignature
+} from '@/voice/endpoints'
 import { mobileVoiceText, resolveChatVoice } from '@/voice/resolve'
 import { voice as voiceStack } from '@/voice/native'
 import { FieldLabel, Note } from './ui'
@@ -80,6 +85,7 @@ export function VoiceChoiceSections({
   persona,
   device,
   providers,
+  signature = null,
   testID = 'voice-choice'
 }: {
   /** A `voice` deste nível (normalizada). */
@@ -90,6 +96,8 @@ export function VoiceChoiceSections({
   persona: { name: string; voice: VoiceCallConfig | null } | null
   device: VoiceSettings
   providers: Provider[]
+  /** Assinatura de app desta persona/chat (headers de atribuição do teste/clipes da fala). */
+  signature?: VoiceSignature
   testID?: string
 }) {
   const provider = (id: string) => providers.find((p) => p.id === id) ?? null
@@ -108,6 +116,7 @@ export function VoiceChoiceSections({
         r={r.tts}
         where={where}
         scope={scope}
+        signature={signature}
         onChange={(tts) => onChange({ tts, stt: value.stt ?? null })}
       />
       <SttChoice
@@ -134,6 +143,8 @@ interface ChoiceProps<C> {
   r: Res
   where: string
   scope: 'chat' | 'persona'
+  /** Assinatura de app desta persona/chat (só a fala: teste/clipes). */
+  signature?: VoiceSignature
   onChange: (c: C | null) => void
 }
 
@@ -208,7 +219,12 @@ function TtsChoice(p: ChoiceProps<VoiceTtsChoice>) {
                 disabled={!!busy}
                 onPress={() => {
                   setBusy('test')
-                  void testTtsVoice(applyTtsChoice(device.tts, own), providers)
+                  void testTtsVoice(
+                    applyTtsChoice(device.tts, own),
+                    providers,
+                    undefined,
+                    p.signature
+                  )
                     .catch((e: unknown) =>
                       toast(`Não foi possível testar a voz: ${describeError(e)}`, 'danger')
                     )
@@ -225,8 +241,10 @@ function TtsChoice(p: ChoiceProps<VoiceTtsChoice>) {
                 onPress={() => {
                   setBusy('clips Gerando…')
                   void voiceStack.call
-                    .generateClips(own, (done, total) =>
-                      setBusy(`clips Gerando clipes… ${done}/${total}`)
+                    .generateClips(
+                      own,
+                      (done, total) => setBusy(`clips Gerando clipes… ${done}/${total}`),
+                      p.signature ?? null
                     )
                     .then(() => toast('Clipes desta voz prontos'))
                     .catch((e: unknown) => toast(describeError(e), 'danger'))

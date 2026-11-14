@@ -22,6 +22,7 @@ import {
   voiceProviderSupport
 } from '@shared/voiceCatalog'
 import { providerKind } from '@shared/providerKinds'
+import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
 import type { Provider } from '@shared/types'
 
 export interface VoiceSettings {
@@ -58,7 +59,46 @@ type Plain = Record<string, unknown>
 const isObj = (v: unknown): v is Plain => !!v && typeof v === 'object' && !Array.isArray(v)
 
 /** Campos do endpoint que só existem em memória (resolvidos do provedor) — nunca gravados. */
-const ENDPOINT_RUNTIME = ['baseUrl', 'apiKey', 'providerKind', 'extraBody']
+const ENDPOINT_RUNTIME = ['baseUrl', 'apiKey', 'providerKind', 'extraBody', 'appHeaders']
+
+/**
+ * Assinatura de app de um contexto (a config do chat/persona — `appSignature` + a personalizada;
+ * = `AppSignatureConfig` do desktop) — null = sem contexto (a padrão).
+ */
+export type VoiceSignature = {
+  appSignature?: string | null
+  appSignatureCustom?: { referer: string; title: string } | null
+} | null
+
+/**
+ * Headers de atribuição (`HTTP-Referer`/`X-Title`) das requests de voz feitas num contexto — as
+ * MESMAS regras das requests do chat (= `appSignatureHeadersOf` do desktop): a assinatura da config;
+ * sem contexto/sem assinatura = a padrão (ClearChat); 'none' = nenhum.
+ */
+export function voiceAppHeaders(sig?: VoiceSignature): Record<string, string> {
+  return resolveAppSignatureHeaders(
+    sig?.appSignature || DEFAULT_APP_SIGNATURE,
+    sig?.appSignatureCustom ?? undefined
+  )
+}
+
+/**
+ * O endpoint resolvido com os headers de atribuição em `appHeaders` (só em memória — os clientes de
+ * voz os mandam: `/audio/speech` vendorado do desktop e o `transcribeAudio` daqui). Vazio = sem o
+ * campo.
+ */
+function withAppHeaders<T extends object>(api: T, headers: Record<string, string>): T {
+  return Object.keys(headers).length ? Object.assign({}, api, { appHeaders: headers }) : api
+}
+
+/** Os headers de atribuição de um endpoint resolvido (`api.appHeaders`; ausente/lixo = nenhum). */
+export function appHeadersOf(api: object): Record<string, string> {
+  const h = (api as { appHeaders?: unknown }).appHeaders
+  if (!isObj(h)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(h)) if (typeof v === 'string') out[k] = v
+  return out
+}
 
 /**
  * Valor a gravar no registro `setting` (§4.3.2): sem `audioInput.deviceId`/`activationDb` (partes
@@ -104,7 +144,9 @@ export interface VoiceBlock {
  */
 export function resolveStt(
   stt: SttSettings,
-  provider: (id: string) => Provider | null
+  provider: (id: string) => Provider | null,
+  /** Assinatura de app do contexto (chat da chamada/do ditado); ausente = a padrão. */
+  signature?: VoiceSignature
 ): { settings: SttSettings; provider: Provider } | { block: VoiceBlock } {
   if (stt.mode === 'local' || stt.mode === 'gpu')
     return {
@@ -136,12 +178,15 @@ export function resolveStt(
     settings: {
       ...stt,
       mode: 'api',
-      api: {
-        ...stt.api,
-        baseUrl: p.baseUrl,
-        apiKey: p.apiKey,
-        providerKind: providerKind({ baseUrl: p.baseUrl, kind: p.kind })
-      }
+      api: withAppHeaders(
+        {
+          ...stt.api,
+          baseUrl: p.baseUrl,
+          apiKey: p.apiKey,
+          providerKind: providerKind({ baseUrl: p.baseUrl, kind: p.kind })
+        },
+        voiceAppHeaders(signature)
+      )
     }
   }
 }
@@ -149,7 +194,9 @@ export function resolveStt(
 /** TTS do celular: só a API (OpenAI-compatível/OpenRouter `/audio/speech` ou ElevenLabs REST). */
 export function resolveTts(
   tts: TtsSettings,
-  provider: (id: string) => Provider | null
+  provider: (id: string) => Provider | null,
+  /** Assinatura de app do contexto (chat da chamada, persona do editor); ausente = a padrão. */
+  signature?: VoiceSignature
 ): { settings: TtsSettings; provider: Provider } | { block: VoiceBlock } {
   if (tts.backend !== 'api')
     return {
@@ -183,7 +230,11 @@ export function resolveTts(
     provider: p,
     settings: {
       ...tts,
-      api: { ...tts.api, baseUrl: p.baseUrl, apiKey: p.apiKey, providerKind: kind }
+      // a ElevenLabs direta ignora os headers de atribuição (REST próprio)
+      api: withAppHeaders(
+        { ...tts.api, baseUrl: p.baseUrl, apiKey: p.apiKey, providerKind: kind },
+        voiceAppHeaders(signature)
+      )
     }
   }
 }

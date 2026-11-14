@@ -35,7 +35,7 @@ import { ModelField } from '@/settings/ModelPicker'
 import { FieldLabel, Multiline, Note, NumberField } from '@/settings/ui'
 import { Card, Divider, ToggleRow } from '@/ui/Card'
 import { colors, spacing } from '@/ui/theme'
-import type { VoiceSettings } from '@/voice/endpoints'
+import type { VoiceSettings, VoiceSignature } from '@/voice/endpoints'
 import { TextButton } from '@/ui/Button'
 import { AudioTagsField } from './AudioTagsField'
 import { InheritChoice } from './InheritChoice'
@@ -70,6 +70,7 @@ export function VoiceConfigEditor({
   toolSearch = null,
   tagsSupport = { supported: false, model: null },
   device = null,
+  signature = null,
   testID = 'voice-config'
 }: {
   value: VoiceCallConfig | null | undefined
@@ -94,6 +95,8 @@ export function VoiceConfigEditor({
   tagsSupport?: { supported: boolean; model: string | null }
   /** Settings de voz deste aparelho: com elas, as seções "Fala"/"Transcrição" (voz da persona/chat). */
   device?: VoiceSettings | null
+  /** Assinatura de app da persona/chat (headers de atribuição do teste/clipes da voz dela). */
+  signature?: VoiceSignature
   testID?: string
 }) {
   // normalizado: campos legados de registros antigos (`interjections`) nunca são regravados
@@ -147,6 +150,7 @@ export function VoiceConfigEditor({
           persona={scope === 'chat' ? persona : null}
           device={device}
           providers={providers}
+          signature={signature}
           testID={`${testID}-choice`}
         />
       ) : null}

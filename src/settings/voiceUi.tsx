@@ -15,7 +15,8 @@ import {
   readVoiceSettings,
   resolveTts,
   voiceProviders,
-  type VoiceSettings
+  type VoiceSettings,
+  type VoiceSignature
 } from '@/voice/endpoints'
 import { expoPlayback } from '@/voice/nativeAudio'
 import { playableAudio } from '@/voice/player'
@@ -67,9 +68,11 @@ export const DICTATION_LANGUAGES = [
 export async function testTtsVoice(
   tts: TtsSettings,
   providers: Provider[],
-  text = 'Olá, isto é um teste.'
+  text = 'Olá, isto é um teste.',
+  /** Assinatura de app da persona/chat (headers de atribuição da request; ausente = a padrão). */
+  signature?: VoiceSignature
 ): Promise<void> {
-  const r = resolveTts(tts, (id) => providers.find((p) => p.id === id) ?? null)
+  const r = resolveTts(tts, (id) => providers.find((p) => p.id === id) ?? null, signature)
   if ('block' in r) throw new Error(r.block.reason)
   const clip = await synthesizeBlock({ text, settings: r.settings }, {})
   const a = playableAudio(clip)

@@ -14,7 +14,7 @@ import type { VoiceLayers } from '@shared/voice'
 import { dictationUnavailableText } from '@vendor/renderer/voice/voiceChoice'
 import { SilenceDetector, DEFAULT_SILENCE_THRESHOLD } from '@vendor/renderer/audio/silence'
 import { captureErrorText } from '@vendor/renderer/voice/dictation'
-import { readVoiceSettings, resolveStt, type VoiceSettings } from './endpoints'
+import { readVoiceSettings, resolveStt, type VoiceSettings, type VoiceSignature } from './endpoints'
 import { mobileVoiceText, resolveChatVoice, settingsWith } from './resolve'
 import { pcmBytes, type MicSource } from './mic'
 import { TranscribeSession } from './session'
@@ -115,15 +115,18 @@ export class DictationController {
     return 'block' in r ? r.block.reason : null
   }
 
-  /** Começa a gravar (com a transcrição do chat — `layers`). Erro legível no estado e devolvido. */
-  async start(layers?: VoiceLayers | null): Promise<string | null> {
+  /**
+   * Começa a gravar (com a transcrição do chat — `layers` — e a assinatura de app dele — `signature`:
+   * os headers de atribuição das requests do chat). Erro legível no estado e devolvido.
+   */
+  async start(layers?: VoiceLayers | null, signature?: VoiceSignature): Promise<string | null> {
     if (this.view.phase !== 'idle') return null
     const { v, unavailable } = this.sttFor(layers)
     if (unavailable) {
       this.set({ ...IDLE, error: unavailable })
       return unavailable
     }
-    const r = resolveStt(v.stt, this.d.provider)
+    const r = resolveStt(v.stt, this.d.provider, signature)
     if ('block' in r) {
       this.set({ ...IDLE, error: r.block.reason })
       return r.block.reason

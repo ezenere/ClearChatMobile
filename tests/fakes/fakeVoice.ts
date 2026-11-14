@@ -18,8 +18,17 @@ export interface VoiceFixture {
 
 export interface FakeVoiceState {
   fixtures: VoiceFixture[]
-  /** Requests de voz recebidas (testes conferem modelo, idioma, voz, parâmetros). */
-  log: { path: string; fields: Record<string, string>; audioMs?: number; voicedMs?: number }[]
+  /**
+   * Requests de voz recebidas (testes conferem modelo, idioma, voz, parâmetros e a assinatura de app
+   * — `appHeaders` = `HTTP-Referer`/`X-Title` recebidos, só os presentes).
+   */
+  log: {
+    path: string
+    fields: Record<string, string>
+    audioMs?: number
+    voicedMs?: number
+    appHeaders?: Record<string, string>
+  }[]
   /** Falha a próxima transcrição com este status (testes de erro). */
   failNext?: number
   /** Pasta servida em `GET /mic/<arquivo>.wav` (fixtures para o microfone de teste do app). */
@@ -159,6 +168,16 @@ export function wavOf(pcm: Buffer, rate: number): Buffer {
   return Buffer.concat([h, pcm])
 }
 
+/** `HTTP-Referer`/`X-Title` recebidos (a assinatura de app da request). */
+function appHeadersOf(req: IncomingMessage): Record<string, string> {
+  const out: Record<string, string> = {}
+  const referer = req.headers['http-referer']
+  const title = req.headers['x-title']
+  if (typeof referer === 'string') out['HTTP-Referer'] = referer
+  if (typeof title === 'string') out['X-Title'] = title
+  return out
+}
+
 /** Trata as rotas de voz; true = respondeu. */
 export function handleVoice(
   req: IncomingMessage,
@@ -186,7 +205,7 @@ export function handleVoice(
     }
     const { fields, file } = parseMultipart(buf, String(req.headers['content-type'] ?? ''))
     const m = file ? voicedMsOf(file) : { voicedMs: 0, audioMs: 0 }
-    state.log.push({ path, fields, ...m })
+    state.log.push({ path, fields, ...m, appHeaders: appHeadersOf(req) })
     json(200, { text: transcriptFor(state, m.voicedMs), usage: { cost: 0.0001 } })
     return true
   }
@@ -198,7 +217,7 @@ export function handleVoice(
       /* corpo inválido */
     }
     const fields = Object.fromEntries(Object.entries(body).map(([k, v]) => [k, String(v)]))
-    state.log.push({ path, fields })
+    state.log.push({ path, fields, appHeaders: appHeadersOf(req) })
     const pcm = tonePcm(String(body.input ?? ''))
     if (body.response_format === 'pcm') {
       res.writeHead(200, { 'Content-Type': 'audio/pcm;rate=24000' })

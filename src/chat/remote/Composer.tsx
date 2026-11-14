@@ -537,7 +537,7 @@ export function RemoteComposer({
     setAnchor(a)
     voice.dictation.onAutoStop = () => void finishDictation(false)
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
-    const err = await voice.dictation.start(chatVoice.layers)
+    const err = await voice.dictation.start(chatVoice.layers, chatVoice.signature)
     if (err) {
       setAnchor(null)
       toast(err, 'danger')

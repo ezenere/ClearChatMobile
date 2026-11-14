@@ -213,6 +213,7 @@ function ChatVoiceBody({ chatId }: { chatId: string }) {
         tagsSupport={inherit.tagsSupport}
         device={inherit.device}
         persona={persona}
+        signature={effCfg}
         chatTools={effTools}
         compactCfg={effCfg}
         toolSearch={toolView}
