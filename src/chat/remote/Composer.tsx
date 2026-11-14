@@ -4,12 +4,16 @@
 // Fase 6: ditado (microfone → STT pela API das Configurações → Voz; o texto entra no ponto do
 // cursor, com as funções puras do desktop; `meta.voice = { source: 'dictation' }` no envio quando
 // o chat roda aqui) e o ponto de status que mostra a conexão (verde/amarelo/vermelho).
+// Protocolo 1.13.0 (chat de outro dispositivo com os arquivos do host ao alcance): o chip
+// `[arquivo ×]` do arquivo aberto por último no visualizador do host (vai em `meta.openFile`; toque
+// → o texto exato que o modelo recebe; × para de mencionar) e o popup de `@` que lista os arquivos
+// do host pasta por pasta (`fs.list`; pasta continua listando, arquivo fecha com espaço).
 import Ionicons from '@expo/vector-icons/Ionicons'
 import * as DocumentPicker from 'expo-document-picker'
 import { File } from 'expo-file-system'
 import * as Haptics from 'expo-haptics'
 import * as ImagePicker from 'expo-image-picker'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react'
 import {
   ActivityIndicator,
   Pressable,
@@ -20,10 +24,17 @@ import {
   View
 } from 'react-native'
 import { formatSize } from '@shared/attachments'
+import {
+  activeMentionQuery,
+  applyMention,
+  filterMentionIndex,
+  type MentionCandidate
+} from '@shared/pathMentions'
 import { splitInterChatText } from '@shared/interChat'
 import { splitSiblingText } from '@shared/siblings'
 import type { AttachmentInfo, QueuedMessage } from '@shared/types'
 import type { VoiceMessageMeta } from '@shared/voiceCallMarks'
+import type { OpenFileMeta } from '@shared/openFile'
 import {
   dictationPreview,
   insertDictationText,
@@ -45,8 +56,16 @@ import {
 import type { IconName } from '@/ui/Button'
 import { Sheet, SheetItem } from '@/ui/Sheet'
 import { useToast } from '@/ui/Toast'
-import { colors } from '@/ui/theme'
+import { colors, font } from '@/ui/theme'
 import { Image } from 'expo-image'
+import {
+  mentionDirPart,
+  mentionEntries,
+  openFileChipOf,
+  type HostLister,
+  type OpenFileSelection
+} from '../chatPaths'
+import { MonoBlock } from '../ui'
 
 interface Pending {
   key: string
@@ -93,6 +112,8 @@ export interface SendInput {
   force: boolean
   /** Texto ditado (o campo recebeu uma transcrição): `meta.voice` do envio. */
   voice?: VoiceMessageMeta
+  /** Arquivo selecionado (1.13.0): o chip do composer no envio → `meta.openFile`. */
+  openFile?: OpenFileMeta
 }
 
 const clock = (ms: number): string => {
@@ -170,6 +191,11 @@ function QueueChip({
         {item.attachments?.length ? (
           <Text style={c.chipMeta} numberOfLines={1}>
             📎 {item.attachments.map((a) => a.name).join(', ')}
+          </Text>
+        ) : null}
+        {item.meta?.openFile?.path ? (
+          <Text style={c.chipMeta} numberOfLines={1} ellipsizeMode="middle">
+            📄 {item.meta.openFile.path}
           </Text>
         ) : null}
       </View>
@@ -275,7 +301,10 @@ export function RemoteComposer({
   onQueueRemove,
   attach,
   hostUnavailable,
-  voiceConfig
+  voiceConfig,
+  openFile = null,
+  onClearOpenFile,
+  files = null
 }: {
   busy: boolean
   statusText: string | null
@@ -296,6 +325,15 @@ export function RemoteComposer({
    * transcrição/idioma da persona/chat (protocolo 1.9.0) e o microfone esmaece com o motivo.
    */
   voiceConfig?: Record<string, unknown> | null
+  /**
+   * Arquivo selecionado (1.13.0): o aberto por último no visualizador do host deste chat — chip
+   * `[arquivo ×]` e `meta.openFile` no envio. null = sem chip (chat executado aqui, host fora).
+   */
+  openFile?: OpenFileSelection | null
+  /** × do chip: para de mencionar o arquivo (até abrir um arquivo de novo). */
+  onClearOpenFile?: () => void
+  /** `fs.list` do host (chat de outro dispositivo com os arquivos ao alcance): popup de `@`. */
+  files?: HostLister | null
 }) {
   const toast = useToast()
   const [text, setText] = useState('')
@@ -306,6 +344,9 @@ export function RemoteComposer({
   const [stopping, setStopping] = useState(false)
   const [sending, setSending] = useState(false)
   const seq = useRef(0)
+  const inputRef = useRef<ComponentRef<typeof TextInput>>(null)
+  const [fileInfo, setFileInfo] = useState(false)
+  const chip = openFileChipOf(openFile)
   const connTone = useConnectionTone()
   const tone =
     hostUnavailable && connTone.color === colors.success
@@ -316,6 +357,59 @@ export function RemoteComposer({
   const chatVoice = useChatVoice(voiceConfig)
   const recording = dict.phase !== 'idle'
   const [sel, setSel] = useState({ start: 0, end: 0 })
+  // ---- popup de @ (arquivos do host, pasta por pasta) ----
+  const query =
+    files && !disabled && sel.start === sel.end && sel.start <= text.length
+      ? activeMentionQuery(text, sel.start)
+      : null
+  const [mentionOff, setMentionOff] = useState<number | null>(null)
+  const mentionOpen = !!query && mentionOff !== query.start
+  const dirPart = query ? mentionDirPart(query.query) : ''
+  // fechado com × vale até o token mudar de lugar/sumir; cada abertura relista a pasta (o host
+  // pode ter mudado) — ajuste de estado no render, sem efeito em cascata
+  const queryStart = query?.start ?? null
+  const [lastStart, setLastStart] = useState<number | null>(null)
+  const [listEpoch, setListEpoch] = useState(0)
+  const [wasOpen, setWasOpen] = useState(false)
+  if (queryStart !== lastStart) {
+    setLastStart(queryStart)
+    if (mentionOff !== null && mentionOff !== queryStart) setMentionOff(null)
+  }
+  if (mentionOpen !== wasOpen) {
+    setWasOpen(mentionOpen)
+    if (mentionOpen) setListEpoch((n) => n + 1)
+  }
+  const listKey = `${listEpoch}\n${dirPart}`
+  const [listing, setListing] = useState<{
+    key: string
+    entries: string[]
+    error: string | null
+  } | null>(null)
+  useEffect(() => {
+    if (!mentionOpen || !files) return
+    let alive = true
+    void files(dirPart.replace(/\/$/, '')).then((r) => {
+      if (alive)
+        setListing({
+          key: listKey,
+          entries: mentionEntries(dirPart, r),
+          error: r.ok ? null : r.message
+        })
+    })
+    return () => {
+      alive = false
+    }
+  }, [mentionOpen, files, dirPart, listKey])
+  const listed = listing?.key === listKey ? listing : null
+  const mentionItems =
+    mentionOpen && query && listed ? filterMentionIndex(listed.entries, query.query, 30) : []
+  const pickMention = (it: MentionCandidate) => {
+    if (!query) return
+    const r = applyMention(text, query, { path: it.path, dir: it.dir })
+    setText(r.text)
+    setSel({ start: r.caret, end: r.caret })
+    requestAnimationFrame(() => inputRef.current?.setSelection(r.caret, r.caret))
+  }
   const [anchor, setAnchor] = useState<DictationAnchor | null>(null)
   const [dictError, setDictError] = useState<{ text: string; partial: string } | null>(null)
   const [now, setNow] = useState(0)
@@ -478,7 +572,9 @@ export function RemoteComposer({
         attachments: ready,
         skills: snapshot.picked,
         force,
-        ...(dictated ? { voice: { source: 'dictation' as const } } : {})
+        ...(dictated ? { voice: { source: 'dictation' as const } } : {}),
+        // arquivo selecionado (1.13.0): o caminho do host como veio; o host normaliza pela raiz dele
+        ...(chip && openFile ? { openFile: { path: openFile.path } } : {})
       })
       if (!ok) {
         dictatedRef.current = dictated
@@ -575,12 +671,36 @@ export function RemoteComposer({
         </View>
       ) : null}
       <View style={c.box}>
-        {atts.length || picked.length ? (
+        {atts.length || picked.length || chip ? (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={c.atts}
+            keyboardShouldPersistTaps="always"
           >
+            {chip ? (
+              <Pressable
+                style={c.fileChip}
+                onPress={() => setFileInfo(true)}
+                accessibilityRole="button"
+                accessibilityLabel={`Arquivo selecionado: ${chip.display}`}
+                accessibilityHint="Mostra o texto que vai ao modelo com a mensagem"
+                testID="composer-file-chip"
+              >
+                <Ionicons name="document-text-outline" size={14} color={colors.accentStrong} />
+                <Text style={c.fileChipText} numberOfLines={1}>
+                  {chip.name}
+                </Text>
+                <Pressable
+                  onPress={onClearOpenFile}
+                  hitSlop={10}
+                  accessibilityLabel="Não mencionar este arquivo"
+                  testID="composer-file-dismiss"
+                >
+                  <Ionicons name="close" size={14} color={colors.subtle} />
+                </Pressable>
+              </Pressable>
+            ) : null}
             {picked.map((n) => (
               <Pressable
                 key={`s:${n}`}
@@ -627,6 +747,59 @@ export function RemoteComposer({
             </View>
           </View>
         ) : null}
+        {mentionOpen && query ? (
+          <View style={c.mentions} testID="mention-popup">
+            <View style={c.mentionHead}>
+              <Ionicons name="folder-open-outline" size={12} color={colors.subtle} />
+              <Text style={c.mentionNote} numberOfLines={1}>
+                Arquivos do host: pasta por pasta{dirPart ? ` · ${dirPart}` : ''}
+              </Text>
+              <Pressable
+                onPress={() => setMentionOff(query.start)}
+                hitSlop={10}
+                accessibilityLabel="Fechar a lista de arquivos"
+                testID="mention-close"
+              >
+                <Ionicons name="close" size={15} color={colors.subtle} />
+              </Pressable>
+            </View>
+            {!listed ? (
+              <ActivityIndicator
+                size={12}
+                color={colors.accentStrong}
+                style={{ paddingVertical: 8 }}
+              />
+            ) : mentionItems.length ? (
+              <ScrollView style={c.mentionList} keyboardShouldPersistTaps="always">
+                {mentionItems.map((it) => (
+                  <Pressable
+                    key={it.path}
+                    onPress={() => pickMention(it)}
+                    style={({ pressed }) => [
+                      c.mentionItem,
+                      pressed && { backgroundColor: colors.hover }
+                    ]}
+                    accessibilityLabel={it.dir ? `Pasta ${it.path}` : it.path}
+                    testID="mention-item"
+                  >
+                    <Ionicons
+                      name={it.dir ? 'folder' : 'document-outline'}
+                      size={15}
+                      color={it.dir ? colors.accentStrong : colors.muted}
+                    />
+                    <Text style={c.mentionText} numberOfLines={1} ellipsizeMode="head">
+                      <Text style={c.mentionParent}>{it.parent}</Text>
+                      {it.name}
+                      {it.dir ? '/' : ''}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={c.mentionEmpty}>{listed.error ?? 'Nada encontrado nesta pasta.'}</Text>
+            )}
+          </View>
+        ) : null}
         {preview ? (
           <Text style={[c.input, c.mirror]} testID="voice-draft">
             {preview.before}
@@ -639,6 +812,7 @@ export function RemoteComposer({
           </Text>
         ) : null}
         <TextInput
+          ref={inputRef}
           testID="composer-input"
           value={text}
           onChangeText={setText}
@@ -823,6 +997,27 @@ export function RemoteComposer({
           </View>
         )}
       </View>
+      {chip ? (
+        <Sheet
+          visible={fileInfo}
+          onClose={() => setFileInfo(false)}
+          title="Arquivo selecionado"
+          subtitle={chip.display}
+          testID="composer-file-sheet"
+        >
+          <MonoBlock label="Vai ao modelo depois da sua mensagem" text={chip.modelText} />
+          <SheetItem
+            icon="close-circle-outline"
+            label="Não mencionar este arquivo"
+            detail="Volta quando você abrir um arquivo do host de novo"
+            onPress={() => {
+              setFileInfo(false)
+              onClearOpenFile?.()
+            }}
+            testID="composer-file-sheet-dismiss"
+          />
+        </Sheet>
+      ) : null}
       <Sheet visible={attachMenu} onClose={() => setAttachMenu(false)} title="Anexar">
         <SheetItem
           icon="images-outline"
@@ -927,6 +1122,48 @@ const c = StyleSheet.create({
     height: 32
   },
   skillChipText: { color: colors.fg, fontSize: 12.5 },
+  fileChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: 220,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 10,
+    height: 32
+  },
+  fileChipText: { flexShrink: 1, color: colors.fg, fontSize: 12.5, fontFamily: font.mono },
+  mentions: {
+    marginHorizontal: 8,
+    marginTop: 4,
+    marginBottom: 2,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.elevated,
+    paddingVertical: 4
+  },
+  mentionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4
+  },
+  mentionNote: { flex: 1, color: colors.subtle, fontSize: 11.5 },
+  mentionList: { maxHeight: 200 },
+  mentionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 8
+  },
+  mentionText: { flex: 1, color: colors.fg, fontSize: 13.5, fontFamily: font.mono },
+  mentionParent: { color: colors.subtle },
+  mentionEmpty: { color: colors.subtle, fontSize: 12.5, paddingHorizontal: 10, paddingVertical: 8 },
   input: {
     color: colors.fg,
     fontSize: 15.5,

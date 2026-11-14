@@ -153,7 +153,12 @@ export default function HostFiles() {
                     })
                   : router.push({
                       pathname: '/file/[chat]',
-                      params: { chat, path: joinHost(res.dir, item.name), name: item.name }
+                      params: {
+                        chat,
+                        path: joinHost(res.dir, item.name),
+                        name: item.name,
+                        root: res.root
+                      }
                     })
               }
               style={({ pressed }) => [st.item, pressed && { backgroundColor: colors.hover }]}

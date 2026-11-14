@@ -396,6 +396,34 @@ describe('RemoteController', () => {
     expect(ws.of('remote.send')[0].fields.kind).toBe('send')
   })
 
+  it('send/force com o arquivo selecionado (1.13.0): meta.openFile sem kind; inválido não vai', async () => {
+    const p = rc.send(CHAT, 's1', 'e isso?', [], [], false, {
+      openFile: { path: '/home/u/proj/src/a.ts' }
+    })
+    const cmd = await hostReply({ status: 'accepted' })
+    await p
+    expect(cmd).toMatchObject({
+      sv: 1,
+      kind: 'send',
+      text: 'e isso?',
+      meta: { openFile: { path: '/home/u/proj/src/a.ts' } }
+    })
+    expect((cmd.meta as Record<string, unknown>).kind).toBeUndefined()
+    ws.sent = []
+    const pf = rc.send(CHAT, 's1', 'já', [], [], true, { openFile: { path: 'C:\\p\\b.ts' } })
+    const f = await hostReply({ status: 'accepted' })
+    await pf
+    expect(f).toMatchObject({ kind: 'force', meta: { openFile: { path: 'C:\\p\\b.ts' } } })
+    // inválido (controle, vazio) ou ausente → o comando vai sem `meta`
+    for (const openFile of [{ path: 'a\nb' }, { path: '' }, null]) {
+      ws.sent = []
+      const pi = rc.send(CHAT, 's1', 'x', [], [], false, { openFile })
+      const c = await hostReply({ status: 'accepted' })
+      await pi
+      expect(c.meta).toBeUndefined()
+    }
+  })
+
   it.each([
     ['force', () => rc.send(CHAT, 's1', 'já', [], [], true), { kind: 'force' }],
     ['queue.force', () => rc.queueForce(CHAT, 's1', 'q1'), { queuedId: 'q1' }],

@@ -12,6 +12,7 @@ import { bindAccount } from '../../src/data/binding'
 import { SyncEngine } from '../../src/data/engine'
 import { LocalStore } from '../../src/data/store'
 import { buildSessionView, mainSession } from '../../src/chat/viewModel'
+import { openFileLineOf, openHostPath, type HostPathRoute } from '../../src/chat/chatPaths'
 import { bindRemote } from '../../src/remote/binding'
 import { RemoteController } from '../../src/remote/controller'
 import { fetchRange } from '../../src/remote/files'
@@ -289,6 +290,41 @@ describe.skipIf(!enabled)('controle remoto contra o servidor real (host falso)',
       ok: true,
       entries: [{ name: 'main.ts' }]
     })
+
+    // ---- arquivo selecionado (1.13.0): send com meta.openFile → o host normaliza pela raiz dele;
+    // a mensagem sincronizada traz a linha; tocar confere pelo fs.list antes de abrir ----
+    await remote.send(CHAT, main, 'o que faz?', [], [], false, {
+      openFile: { path: '/home/host/projeto/src/main.ts' }
+    })
+    await waitFor(() => lastText() === 'ok: o que faz?', 'resposta com arquivo selecionado')
+    expect(host.received.filter((c) => c.kind === 'send').at(-1)?.payload.meta).toEqual({
+      openFile: { path: '/home/host/projeto/src/main.ts' }
+    })
+    const withFile = (() => {
+      const l = store.loadChat(CHAT)!
+      return buildSessionView(l, mainSession(l)!, null, true).path.find(
+        (m) => m.message.role === 'user' && m.message.content === 'o que faz?'
+      )!
+    })()
+    expect(withFile.meta.openFile).toEqual({ path: 'src/main.ts' })
+    expect(openFileLineOf(withFile.meta, 'user')?.modelText).toBe(
+      'O usuário está com o arquivo src/main.ts selecionado; ele pode ou não estar relacionado a esta mensagem.'
+    )
+    const opened: HostPathRoute[] = []
+    const notices2: string[] = []
+    const pathDeps = {
+      list: (dir: string) => remote.fsList(CHAT, dir),
+      open: (r: HostPathRoute) => opened.push(r),
+      notice: (t: string) => notices2.push(t)
+    }
+    expect(await openHostPath(CHAT, 'src/main.ts', pathDeps)).toBe(true)
+    expect(opened[0]).toMatchObject({
+      pathname: '/file/[chat]',
+      params: { path: '/home/host/projeto/src/main.ts', root: '/home/host/projeto' }
+    })
+    expect(await openHostPath(CHAT, 'src/sumiu.ts', pathDeps)).toBe(false)
+    expect(notices2).toEqual(['Não encontrei src/sumiu.ts na raiz do chat.'])
+    await host.idle()
 
     // ---- anexos: sobe antes de enviar; sem blob → attachment_missing ----
     const deps: UploadDeps = {

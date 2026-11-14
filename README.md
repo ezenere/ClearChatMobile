@@ -1051,6 +1051,43 @@ queda + caps, renome, celular sem as tools do computador, custo, e o runner com 
 `EXPO_PUBLIC_CLEARCHAT_E2E_NATIVE_HOSTS=127.0.0.1` + o provedor falso (`tests/fakes/fakeLlm.ts`) com um
 provedor "Anthropic" local e um modelo Claude 4.5+.
 
+## Arquivo selecionado e menções `@caminho` (protocolo 1.13.0)
+
+Contrato: §4.3.8 ("Arquivo selecionado", `MessageMeta.openFile`) e §8.6 (`send`/`force` com
+`meta: { openFile }`). As partes puras são as do desktop, vendoradas (`@shared/openFile`,
+`@shared/pathMentions`); aqui só a fiação:
+
+- **Celular como host** (`src/agent/request.ts` → `sentMessages` = `withOpenFiles`): toda mensagem do
+  usuário com `meta.openFile` vai ao modelo com o texto fixo depois do conteúdo (parte separada ou
+  depois de uma linha em branco), só na cópia — turno, subagentes, chamada de voz, compactação (os três
+  modos), busca nativa; a extração de memórias (vendorada) mostra a conversa como o modelo a viu. O
+  `meta.openFile` do `send`/`force` (`HostService.local`, `hostOpenFile`) é validado por
+  `sendMetaOpenFile` e normalizado por `parseOpenFile(v, PHONE_CHAT_ROOT)`: o celular **não tem raiz**,
+  então o caminho fica como veio (absoluto continua absoluto; relativo continua o relativo do
+  computador) — inválido → a mensagem segue sem ele. A fila e o repasse da troca de host levam o
+  `openFile`; "nova versão" mantém o da original. O celular continua recusando `remote.command` (os
+  chats dele não têm controle remoto), então o `meta.openFile` só chega pela tela daqui ou pelo
+  histórico sincronizado.
+- **Na conversa** (local, controle remoto e ao vivo — `src/chat/MessageRow.tsx`, `src/chat/chatPaths.ts`):
+  linha discreta "Arquivo selecionado: <caminho>" acima do balão; toque longo (ou toque, num chat daqui)
+  → folha com o texto EXATO enviado ao modelo. Num chat de outro dispositivo com os arquivos do host ao
+  alcance, tocar no caminho confere pela listagem da pasta-mãe no host (`fs.list`; relativo resolve
+  contra a raiz dele) e abre o visualizador (pasta → a aba Arquivos nela); ausente/fora da raiz → aviso
+  "Não encontrei … na raiz do chat." e nada é aberto. Os `@caminho` do texto (fora de cercas/crases, só
+  os que parecem caminho) ficam destacados e abrem do mesmo jeito.
+- **Composer** (chat de outro dispositivo, host online): o arquivo aberto por último no visualizador do
+  host vira o chip `[arquivo ×]` (`src/chat/openFileStore.ts` — só em memória; sair da conversa
+  esquece); cada mensagem leva `meta: { openFile: { path } }` com o caminho absoluto do host (o host
+  normaliza); toque no chip → o caminho como vai ficar e o texto exato; × para de mencionar até abrir
+  um arquivo de novo. `@` abre a lista dos arquivos do host **pasta por pasta** (`fs.list` da pasta do
+  token, filtro `filterMentionIndex`): pasta → `@pasta/` e continua listando; arquivo → o token + espaço.
+  Não há destaque do `@caminho` dentro do campo (só nas mensagens enviadas).
+
+Testes: `tests/openFile.test.ts` (linha, `@caminho`, chip, popup, a request do host em todos os caminhos,
+o `send` com meta válido/inválido no host real com o provedor falso, fila/repasse/nova versão, tocar para
+abrir com a conferência), `tests/remote.test.ts` (`send`/`force` com `meta.openFile`) e
+`tests/live.test.ts` (chat ao vivo: o host falso normaliza pela raiz dele e a linha volta no `rec`).
+
 ## Build iOS no Mac
 
 O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem

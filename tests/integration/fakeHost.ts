@@ -8,6 +8,7 @@
 // "/slow" → resposta longa até parar; o resto → "ok: <texto>".
 import { RealtimeClient } from '../../src/vendor/desktop/sync/ws'
 import { isBranchEditable } from '../../src/vendor/shared/branches'
+import { parseOpenFile, sendMetaOpenFile } from '../../src/vendor/shared/openFile'
 import type {
   ApiMessage,
   AttachmentInfo,
@@ -743,12 +744,16 @@ export class FakeHost {
           )
           if (hex(await sha256(plain)) !== a.sha256) throw new Error('attachment_missing')
         }
+        // arquivo selecionado (1.13.0, §8.6): validado e normalizado pela raiz DESTE host
+        const raw = sendMetaOpenFile(p.meta)
+        const openFile = raw ? parseOpenFile(raw, ROOT) : null
         const item: QueuedMessage = {
           id: `q-${crypto.randomUUID().slice(0, 8)}`,
           sessionId: sid,
           text: String(p.text ?? ''),
           createdAt: Number(p.createdAt ?? Date.now()),
-          ...(atts.length ? { attachments: atts } : {})
+          ...(atts.length ? { attachments: atts } : {}),
+          ...(openFile ? { meta: { openFile } } : {})
         }
         if (this.busy()) {
           if (kind === 'force') {
@@ -896,7 +901,9 @@ export class FakeHost {
       case 'fs.list': {
         if (p.chatId !== this.chatId)
           throw Object.assign(new Error('Pedido inválido (chat).'), { code: 'invalid' })
-        const dir = p.path ? String(p.path) : ROOT
+        // relativo resolve contra a raiz; vazio = a raiz (§8.6)
+        const asked = p.path ? String(p.path).replace(/\/+$/, '') : ''
+        const dir = !asked ? ROOT : asked.startsWith('/') ? asked : `${ROOT}/${asked}`
         if (!dir.startsWith(ROOT))
           throw Object.assign(new Error('Fora da raiz do chat.'), { code: 'denied' })
         const entries = Object.entries(HOST_FILES)

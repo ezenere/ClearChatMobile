@@ -2080,7 +2080,12 @@ export class Runner {
     const abandoned = activePath(tree, now.branchSel ?? {}).filter((m) => !keep.has(m.id))
     await this.stopAbandonedSubagents(session, abandoned)
     if (this.runs.has(session.id)) throw new Error('A sessão voltou a rodar; tente novamente.')
-    const m = this.repo.addSibling(cur.id, { role: 'user', content })
+    // a versão nova mantém os anexos (withUserText) e o arquivo selecionado da original (1.13.0)
+    const m = this.repo.addSibling(
+      cur.id,
+      { role: 'user', content },
+      cur.meta.openFile ? { openFile: cur.meta.openFile } : {}
+    )
     this.emit({ type: 'message-added', message: m })
     const s = this.repo.session(session.id) ?? session
     this.emit({ type: 'session-updated', session: s })

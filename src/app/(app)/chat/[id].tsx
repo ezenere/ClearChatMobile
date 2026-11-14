@@ -23,6 +23,8 @@ import { CompactSheet } from '@/chat/local/CompactSheet'
 import { DivergencePanel } from '@/chat/local/DivergencePanel'
 import { MemorySheet } from '@/chat/local/MemorySheet'
 import { MessageRow, RowCtx, type RowContext, type RowLive } from '@/chat/MessageRow'
+import { openHostPath } from '@/chat/chatPaths'
+import { openFileStore, useOpenFileSelection } from '@/chat/openFileStore'
 import { RemoteComposer, type SendInput } from '@/chat/remote/Composer'
 import { HostStateBanner } from '@/chat/remote/HostBanner'
 import { MessageActionsSheet, type MessageActionHandlers } from '@/chat/remote/MessageActions'
@@ -233,6 +235,25 @@ export default function ChatScreen() {
     return p ? chatTitle(typeof p.title === 'string' ? p.title : '') : null
   }, [])
 
+  // ---------------- arquivos do host citados (protocolo 1.13.0) ----------------
+
+  /** `fs.list` do host deste chat (controle remoto): popup de `@` e conferência dos caminhos. */
+  const hostFiles = useCallback((dir: string) => remote.fsList(id, dir), [id])
+  /** Caminho citado tocado (arquivo selecionado, `@caminho`): confere no host e abre. */
+  const openPath = useCallback(
+    (path: string) =>
+      void openHostPath(id, path, {
+        list: hostFiles,
+        open: (route) => router.push(route),
+        notice: (text) => toast(text, 'info')
+      }),
+    [id, hostFiles, router, toast]
+  )
+  /** O arquivo aberto por último no visualizador do host (chip do composer). */
+  const openFileSel = useOpenFileSelection(id)
+  // sair da conversa fecha o "painel": a seleção não vale mais
+  useEffect(() => () => openFileStore.clear(id), [id])
+
   const rowLive = useMemo<RowLive | undefined>(() => {
     if (!active && !live) return undefined
     const awaiting: Record<string, 'approval' | 'question'> = {}
@@ -265,10 +286,12 @@ export default function ChatScreen() {
             chatTitle: chatTitleOf,
             live: rowLive,
             // chamada de voz neste aparelho: o chat esmaece o que ainda não foi falado
-            voiceFollow: voice.call.follow
+            voiceFollow: voice.call.follow,
+            // caminhos citados: só com os arquivos do host ao alcance (controle remoto)
+            ...(remoteOn ? { onOpenPath: openPath } : {})
           }
         : null,
-    [view, now, onSelectBranch, onOpenSession, chatTitleOf, rowLive]
+    [view, now, onSelectBranch, onOpenSession, chatTitleOf, rowLive, remoteOn, openPath]
   )
 
   const draft = live?.drafts[sid] ?? null
@@ -303,7 +326,10 @@ export default function ChatScreen() {
           input.attachments.map((a) => a.info),
           input.skills,
           input.force && busy,
-          input.voice
+          {
+            ...(input.voice ? { voice: input.voice } : {}),
+            ...(input.openFile ? { openFile: input.openFile } : {})
+          }
         )
         if (r.queued && !input.force) toast('Na fila — vai no próximo passo do agente.', 'info')
         if (local) stick.current = true
@@ -780,6 +806,9 @@ export default function ChatScreen() {
                 }
                 onSend={send}
                 voiceConfig={loaded?.chat.config as Record<string, unknown> | undefined}
+                openFile={remoteOn ? openFileSel : null}
+                onClearOpenFile={() => openFileStore.clear(id)}
+                files={remoteOn ? hostFiles : null}
                 onStop={() => run(() => driver.stop(id, sid))}
                 onQueueForce={(qid) => run(() => driver.queueForce(id, sid, qid))}
                 onQueueRemove={(qid) => run(() => driver.queueRemove(id, sid, qid))}

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { ApprovalItemDecision } from '@shared/approvalPolicy'
 import type { ApiMessage, AttachmentInfo, QuestionAnswer } from '@shared/types'
 import type { VoiceMessageMeta } from '@shared/voiceCallMarks'
+import type { OpenFileMeta } from '@shared/openFile'
 import type { ChatState } from '@/data/types'
 import { runConfigOf } from '@/data/inherit'
 import { engine, store } from '@/data/native'
@@ -13,6 +14,14 @@ import { remote } from '@/remote/native'
 import type { CommandResult, HostMode } from '@/remote/types'
 import { usesLocalTools } from './policy'
 import { host, hostStack, onHostNotice } from './native'
+
+/** Meta extra da mensagem do usuário no envio. */
+export interface SendExtra {
+  /** `meta.voice` do ditado — só nos chats executados aqui (o `send` remoto do §8.6 não leva). */
+  voice?: VoiceMessageMeta
+  /** Arquivo selecionado (1.13.0): `meta: { openFile }` do `send`/`force` (§8.6). */
+  openFile?: OpenFileMeta | null
+}
 
 /** Ações do chat aberto (os métodos do RemoteController, por kind do §8.6). */
 export interface ChatDriver {
@@ -23,8 +32,7 @@ export interface ChatDriver {
     attachments: AttachmentInfo[],
     skills: string[],
     force?: boolean,
-    /** `meta.voice` do ditado — só nos chats executados aqui (o `send` remoto do §8.6 não leva). */
-    voice?: VoiceMessageMeta
+    extra?: SendExtra
   ): Promise<CommandResult>
   queueForce(chatId: string, sessionId: string, queuedId: string): Promise<CommandResult>
   queueRemove(chatId: string, sessionId: string, queuedId: string): Promise<CommandResult>
@@ -51,12 +59,13 @@ export interface ChatDriver {
 
 /** Ações num chat executado neste celular (mesmo caminho das ações remotas, sem servidor). */
 export const localDriver: ChatDriver = {
-  send: (c, sessionId, text, attachments, _skills, force, voice) =>
+  send: (c, sessionId, text, attachments, _skills, force, extra) =>
     host.local(c, force ? 'force' : 'send', {
       sessionId,
       text,
       attachments,
-      ...(voice ? { voice } : {})
+      ...(extra?.voice ? { voice: extra.voice } : {}),
+      ...(extra?.openFile ? { meta: { openFile: extra.openFile } } : {})
     }),
   queueForce: (c, sessionId, queuedId) => host.local(c, 'queue.force', { sessionId, queuedId }),
   queueRemove: (c, sessionId, queuedId) => host.local(c, 'queue.remove', { sessionId, queuedId }),

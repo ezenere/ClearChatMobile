@@ -5,6 +5,7 @@
 import { WsRequestError } from '@vendor/desktop/sync/ws'
 import type { ApprovalItemDecision } from '@shared/approvalPolicy'
 import type { InterChatSendMeta } from '@shared/interChat'
+import { parseOpenFile, type OpenFileMeta } from '@shared/openFile'
 import {
   REMOTE_FS_LIMITS,
   type RemoteDirResult,
@@ -618,14 +619,23 @@ export class RemoteController {
     text: string,
     attachments: AttachmentInfo[],
     skills: string[],
-    force = false
+    force = false,
+    /**
+     * `openFile` = arquivo selecionado (1.13.0, §4.3.8/§8.6): o caminho do arquivo aberto no
+     * visualizador do host, como o host o deu (absoluto) — vai em `meta: { openFile }` sem `kind`;
+     * o host valida e normaliza pela raiz DELE. Hosts < 1.13.0 descartam o `meta` (o modelo não vê o
+     * arquivo). Inválido → o comando vai sem ele.
+     */
+    extra?: { openFile?: OpenFileMeta | null }
   ): Promise<CommandResult> {
+    const of = extra?.openFile ? parseOpenFile(extra.openFile) : null
     return this.command(chatId, force ? 'force' : 'send', {
       sessionId,
       text,
       attachments,
       skills,
-      createdAt: this.now()
+      createdAt: this.now(),
+      ...(of ? { meta: { openFile: of } } : {})
     })
   }
   /**

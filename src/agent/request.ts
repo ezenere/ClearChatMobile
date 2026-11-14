@@ -18,11 +18,14 @@
 //   nomeia a busca e lista as adiadas da request), os blocos do provedor das respostas anteriores são
 //   reenviados (mesmo canal e ainda batendo com o texto) com as referências filtradas às tools que
 //   ESTE aparelho manda (um chat do computador hospedado aqui, sem as tools dele, continua válido) e
-//   uma adiada já usada sem a descoberta junto vai carregada.
+//   uma adiada já usada sem a descoberta junto vai carregada;
+// - arquivo selecionado (protocolo 1.13.0, @shared/openFile — = desktop): toda mensagem do usuário
+//   com `meta.openFile` vai com o texto fixo depois do conteúdo, só na cópia (`sentMessages`).
 // É o módulo que o shim `src/vendor/desktop/agent/request.ts` reexporta (BuiltRequest, maskRequest,
 // modelInfoFor para llm.ts / smartApprove.ts vendorados).
 import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
 import { activeHistory, isDisplayOnly } from '@shared/context'
+import { withOpenFiles } from '@shared/openFile'
 import { planTools, withCompactPrompt, type ToolsPlan } from '@shared/compactTools'
 import {
   TOOL_SEARCH_MODE_LABEL,
@@ -437,9 +440,14 @@ export function toolsPlan(
   return planTools(full, chat.config, mode)
 }
 
-/** Mensagens que vão na request (fronteira em diante, sem as só de exibição). */
+/**
+ * Mensagens que vão na request (fronteira em diante, sem as só de exibição), com o texto do arquivo
+ * selecionado (1.13.0, `meta.openFile` → @shared/openFile) aplicado na CÓPIA de cada mensagem do
+ * usuário — vale para todo builder que passa por aqui (turno, subagente, chamada de voz,
+ * compactação, busca nativa, telas da request) = desktop `sentMessages`. O histórico salvo não muda.
+ */
 const sentMessages = (history: StoredMessage[]): StoredMessage[] =>
-  activeHistory(history).filter((m) => !isDisplayOnly(m.meta))
+  withOpenFiles(activeHistory(history).filter((m) => !isDisplayOnly(m.meta)))
 
 /**
  * Modo de envio das tools para esta sessão/provedor/modelo (@shared/toolSearch →

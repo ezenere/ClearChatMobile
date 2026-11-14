@@ -21,6 +21,8 @@ import { describeError } from '@/account/errors'
 import { toolLabel } from '@/agent/toolLabels'
 import { ChatAvatar, RenameDialog } from '@/chat/ChatBits'
 import { MessageRow, RowCtx, type RowContext, type RowLive } from '@/chat/MessageRow'
+import { openHostPath } from '@/chat/chatPaths'
+import { openFileStore, useOpenFileSelection } from '@/chat/openFileStore'
 import { RemoteComposer, type ComposerAttach, type SendInput } from '@/chat/remote/Composer'
 import { MessageActionsSheet, type MessageActionHandlers } from '@/chat/remote/MessageActions'
 import { ApprovalPanel, QuestionPanel, RetryPanel, Strip } from '@/chat/remote/Panels'
@@ -210,6 +212,25 @@ export default function LiveChatScreen() {
   const followEnd = useCallback(() => {
     if (stick.current) list.current?.scrollToEnd({ animated: false })
   }, [])
+  // ---------------- arquivos do host citados (protocolo 1.13.0) ----------------
+
+  /** Os arquivos do host estão ao alcance (o mesmo critério do botão "Arquivos do host"). */
+  const hostFilesOn = active && !!entry?.info.hostCwd
+  const hostFiles = useCallback((dir: string) => remote.fsList(id, dir), [id])
+  /** Caminho citado tocado (arquivo selecionado, `@caminho`): confere no host e abre. */
+  const openPath = useCallback(
+    (path: string) =>
+      void openHostPath(id, path, {
+        list: hostFiles,
+        open: (route) => router.push(route),
+        notice: (text) => toast(text, 'info')
+      }),
+    [id, hostFiles, router, toast]
+  )
+  const openFileSel = useOpenFileSelection(id)
+  // sair da conversa fecha o "painel": a seleção não vale mais
+  useEffect(() => () => openFileStore.clear(id), [id])
+
   const chatTitleOf = useCallback((cid: string) => {
     const e = live.entry(cid)
     if (e) return chatTitle(e.info.title)
@@ -246,10 +267,11 @@ export default function LiveChatScreen() {
             onSelectBranch,
             onOpenSession,
             chatTitle: chatTitleOf,
-            live: rowLive
+            live: rowLive,
+            ...(hostFilesOn ? { onOpenPath: openPath } : {})
           }
         : null,
-    [view, now, onSelectBranch, onOpenSession, chatTitleOf, rowLive]
+    [view, now, onSelectBranch, onOpenSession, chatTitleOf, rowLive, hostFilesOn, openPath]
   )
 
   const draft = liveView?.drafts[sid] ?? null
@@ -302,7 +324,8 @@ export default function LiveChatScreen() {
           input.text,
           input.attachments.map((a) => a.info),
           input.skills,
-          input.force && busy
+          input.force && busy,
+          input.openFile ? { openFile: input.openFile } : undefined
         )
         if (r.queued && !input.force) toast('Na fila — vai no próximo passo do agente.', 'info')
         return true
@@ -724,6 +747,9 @@ export default function LiveChatScreen() {
                 attach={attach}
                 hostUnavailable={!active}
                 voiceConfig={loaded?.chat.config as Record<string, unknown> | undefined}
+                openFile={hostFilesOn ? openFileSel : null}
+                onClearOpenFile={() => openFileStore.clear(id)}
+                files={hostFilesOn ? hostFiles : null}
               />
             </View>
             {loaded.broken ? (

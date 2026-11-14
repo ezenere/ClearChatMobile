@@ -29,6 +29,7 @@ import { parseLiveInfo, parseLiveItem, liveStatusText } from '../src/live/types'
 import { LocalStore } from '../src/data/store'
 import { FakeLiveRelay } from './fakeServer'
 import { until } from './hostHarness'
+import { openFileLineOf, openHostPath, type HostPathRoute } from '../src/chat/chatPaths'
 import { openNodeSql } from './nodeSql'
 
 const USER = live.user_id
@@ -971,6 +972,76 @@ describe('visualizador ao vivo pelo relé (fluxo completo)', () => {
       .loaded!.messages.get(`${chatId}-main`)!
       .find((m) => m.message.role === 'user')!
     expect(user.message.content).toBe(text)
+  })
+
+  it('arquivo selecionado (1.13.0): send com meta.openFile → o host normaliza pela raiz dele; a linha volta no rec; @caminho confere pelo fs.list', async () => {
+    const host = relay.addHost(HOST, 'PC de casa', sk, { replyMs: 5 })
+    const chatId = host.createChat({ title: 'A', hostCwd: '/home/host/projeto' })
+    await host.announce(true)
+    await connect()
+    await until(() => svc.list.has(chatId), 1000, 'lista')
+    svc.open(chatId)
+    await until(() => svc.history(chatId)?.phase === 'ready', 3000, 'histórico')
+    const sid = `${chatId}-main`
+    // o composer manda o caminho absoluto do host (o do visualizador)
+    await rc.send(chatId, sid, 'o que faz?', [], [], false, {
+      openFile: { path: '/home/host/projeto/src/app.ts' }
+    })
+    expect(host.received.find((r) => r.kind === 'send')!.payload.meta).toEqual({
+      openFile: { path: '/home/host/projeto/src/app.ts' }
+    })
+    await until(
+      () =>
+        (svc.history(chatId)?.loaded?.messages.get(sid) ?? []).some(
+          (m) => m.message.content === 'ok: o que faz?'
+        ),
+      2000,
+      'resposta'
+    )
+    const user = svc
+      .history(chatId)!
+      .loaded!.messages.get(sid)!
+      .find((m) => m.message.role === 'user')!
+    // dentro da raiz → relativo; o content segue só o texto do usuário
+    expect(user.message.content).toBe('o que faz?')
+    expect(user.meta.openFile).toEqual({ path: 'src/app.ts' })
+    expect(openFileLineOf(user.meta, 'user')?.label).toBe('Arquivo selecionado: src/app.ts')
+    // tocar na linha: confere pelo fs.list do host (relativo → a raiz dele) e abre o visualizador
+    const opened: HostPathRoute[] = []
+    const notices: string[] = []
+    const deps = {
+      list: (dir: string) => rc.fsList(chatId, dir),
+      open: (r: HostPathRoute) => opened.push(r),
+      notice: (t: string) => notices.push(t)
+    }
+    expect(await openHostPath(chatId, 'src/app.ts', deps)).toBe(true)
+    expect(opened[0]).toEqual({
+      pathname: '/file/[chat]',
+      params: {
+        chat: chatId,
+        path: '/home/host/projeto/src/app.ts',
+        name: 'app.ts',
+        root: '/home/host/projeto'
+      }
+    })
+    expect(host.received.filter((r) => r.kind === 'fs.list').map((r) => r.payload.path)).toEqual([
+      'src'
+    ])
+    // @caminho ausente → aviso, nada aberto
+    expect(await openHostPath(chatId, 'src/sumiu.ts', deps)).toBe(false)
+    expect(notices).toEqual(['Não encontrei src/sumiu.ts na raiz do chat.'])
+    expect(opened.length).toBe(1)
+    // meta inválido → a mensagem segue sem o arquivo
+    await rc.send(chatId, sid, 'sem', [], [], false, { openFile: { path: 'a\u0000b' } })
+    await until(
+      () =>
+        (svc.history(chatId)?.loaded?.messages.get(sid) ?? []).some(
+          (m) => m.message.content === 'ok: sem'
+        ),
+      2000,
+      'resposta 2'
+    )
+    expect(host.received.filter((r) => r.kind === 'send')[1].payload.meta).toBeUndefined()
   })
 
   it('welcome com o cofre fechado: os anúncios não decifram; ao abrir o cofre, live.list de novo', async () => {

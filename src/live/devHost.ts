@@ -5,14 +5,36 @@
 // cifrado com a AAD live-announce), responde `history.*` (páginas, `large` + pedaços, `omitted`,
 // `changes` com `reset`), `attach.put`/`attach.get` (pedaços, offset, sha256), `chat.update`, `send`
 // (mensagem do usuário + resposta "ok: <texto>" com draft e `rec`), "/tool" → aprovação, "/ask" →
-// pergunta, e publica `snapshot` com `live.lseq`. NUNCA usar fora de testes/dev.
-import type { AttachmentInfo } from '@shared/types'
+// pergunta, e publica `snapshot` com `live.lseq`. Como um host 1.13.0: `meta.openFile` do `send`
+// normalizado pela raiz dele (`/home/host/projeto`) e gravado na mensagem; `fs.list` com
+// `src/app.ts` e `README.md`. NUNCA usar fora de testes/dev.
+import { parseOpenFile, sendMetaOpenFile, type OpenFileMeta } from '@shared/openFile'
+import type { AttachmentInfo, MessageMeta } from '@shared/types'
 import { fromUtf8, hex, sha256, utf8, type Subkeys } from '@/crypto'
 import { openCommand, sealResult, sealStream, type Envelope } from '@/remote/crypto'
 import { toStdB64 } from './attach'
 import { sealAnnounce } from './crypto'
 import { fromStdB64 } from './history'
 import type { LiveItem, LiveItemType } from './types'
+
+/** Raiz do chat no host falso e a árvore que o `fs.list` mostra. */
+const DEV_ROOT = '/home/host/projeto'
+const DEV_TREE: Record<
+  string,
+  { name: string; kind: 'file' | 'dir'; size?: number; mtime: number }[]
+> = {
+  [DEV_ROOT]: [
+    { name: 'src', kind: 'dir', mtime: 1 },
+    { name: 'README.md', kind: 'file', size: 18, mtime: 1 }
+  ],
+  [`${DEV_ROOT}/src`]: [{ name: 'app.ts', kind: 'file', size: 18, mtime: 1 }]
+}
+/** `path` do `fs.list` → absoluto (vazio = a raiz; relativo resolve contra ela, §8.6). */
+const devAbs = (path: string): string => {
+  const p = path.replace(/\/+$/, '')
+  if (!p) return DEV_ROOT
+  return p.startsWith('/') ? p : `${DEV_ROOT}/${p}`
+}
 
 export interface DevHostTimers {
   setTimeout: (fn: () => void, ms: number) => unknown
@@ -190,7 +212,8 @@ export class DevLiveHost {
     sid: string,
     role: 'user' | 'assistant',
     content: unknown,
-    parentId: string | null
+    parentId: string | null,
+    meta: MessageMeta = {}
   ): string {
     const id = this.uid('m')
     c.seq++
@@ -199,7 +222,7 @@ export class DevLiveHost {
       sessionId: sid,
       seq: c.seq,
       message: { role, content },
-      meta: {},
+      meta,
       createdAt: this.now() + c.seq,
       parentId
     })
@@ -412,11 +435,14 @@ export class DevLiveHost {
         if (c.seenCmds.has(cmdId)) return reply({ status: 'duplicate' })
         c.seenCmds.add(cmdId)
         await reply({ status: 'accepted', queued: false })
+        // arquivo selecionado (1.13.0): validado e normalizado pela raiz DESTE host
+        const raw = sendMetaOpenFile(p.meta)
         await this.turn(
           c,
           String(p.sessionId),
           String(p.text ?? ''),
-          (p.attachments as AttachmentInfo[]) ?? []
+          (p.attachments as AttachmentInfo[]) ?? [],
+          raw ? parseOpenFile(raw, DEV_ROOT) : null
         )
         return
       }
@@ -460,15 +486,20 @@ export class DevLiveHost {
         this.change(chatId, [{ type: 'message', id: r.id, data: null }])
         return reply({ status: 'accepted' })
       }
-      case 'fs.list':
+      case 'fs.list': {
+        const dir = devAbs(String(p.path ?? ''))
+        const entries = DEV_TREE[dir]
+        if (!entries)
+          return reply({ status: 'rejected', error: 'Pasta não encontrada.', code: 'missing' })
         return reply({
           status: 'accepted',
-          dir: '/home/host/projeto',
-          root: '/home/host/projeto',
+          dir,
+          root: DEV_ROOT,
           confine: true,
           truncated: false,
-          entries: [{ name: 'README.md', kind: 'file', size: 18, mtime: 1 }]
+          entries
         })
+      }
       case 'fs.read': {
         const data = utf8('# Projeto ao vivo\n')
         return reply({
@@ -650,7 +681,8 @@ export class DevLiveHost {
     c: HostChat,
     sid: string,
     text: string,
-    attachments: AttachmentInfo[]
+    attachments: AttachmentInfo[],
+    openFile: OpenFileMeta | null = null
   ): Promise<void> {
     const parts = attachments.length
       ? [
@@ -664,7 +696,14 @@ export class DevLiveHost {
           }))
         ]
       : text
-    const userId = this.addMessage(c, sid, 'user', parts, this.lastMain(c))
+    const userId = this.addMessage(
+      c,
+      sid,
+      'user',
+      parts,
+      this.lastMain(c),
+      openFile ? { openFile } : {}
+    )
     this.change(c.id, [c.items.get(k('message', userId))!])
     c.running = true
     await this.announce(false, [c.id])

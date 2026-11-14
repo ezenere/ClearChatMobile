@@ -1,6 +1,8 @@
 // Visualizador de um arquivo do HOST (`fs.read` em pedaços, SYNC_PROTOCOL.md §8.6): texto/código/
 // Markdown paginados ("Carregar mais", corte de UTF-8 respeitado, tamanho/mtime conferidos a cada
 // pedaço), imagens inteiras com progresso, e os demais tipos com "Baixar e abrir". Somente leitura.
+// Protocolo 1.13.0: o arquivo aberto aqui vira o "arquivo selecionado" da conversa (o chip
+// `[arquivo ×]` do composer, que manda `meta.openFile` — @/chat/openFileStore).
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { File, Paths } from 'expo-file-system'
 import { live, liveTempFile } from '@/live/native'
@@ -27,6 +29,7 @@ import {
 import { safeFileName, type RemoteFsFailure } from '@shared/remoteFs'
 import type { ViewerKind } from '@shared/types'
 import { Markdown } from '@/chat/Markdown'
+import { openFileStore } from '@/chat/openFileStore'
 import { concatBytes, fetchRange, formatBytes, RemoteFileError, splitUtf8 } from '@/remote/files'
 import { remote } from '@/remote/react'
 import { colors, font } from '@/ui/theme'
@@ -49,11 +52,14 @@ export default function HostFile() {
   const {
     chat,
     path,
-    name: nameParam
+    name: nameParam,
+    root
   } = useLocalSearchParams<{
     chat: string
     path: string
     name?: string
+    /** Raiz do chat no host (da listagem): o chip mostra o caminho como ele vai ficar. */
+    root?: string
   }>()
   const router = useRouter()
   const insets = useSafeAreaInsets()
@@ -67,6 +73,10 @@ export default function HostFile() {
   const [imageUri, setImageUri] = useState<string | null>(null)
   const [rendered, setRendered] = useState(true)
   const alive = useRef({ aborted: false })
+  // arquivo aberto = o selecionado da conversa (volta a mencionar mesmo depois do × do chip)
+  useEffect(() => {
+    if (chat && path) openFileStore.open(chat, { path, root: root || null })
+  }, [chat, path, root])
   const read = useCallback(
     (offset: number, length: number) => remote.fsRead(chat, path, offset, length),
     [chat, path]

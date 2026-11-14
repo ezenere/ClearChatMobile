@@ -4,6 +4,9 @@
 // chamada, mensagens de outros chats/agente pai/irmãos, resultado de subagente, extração de memória.
 // Busca nativa de tools (1.12.0): o chip "buscou tools: …" de cada busca do provedor (blocos de
 // `native`) e o modo em que a resposta foi gerada no rodapé (`meta.toolSearch`).
+// Arquivo selecionado (1.13.0): a linha "Arquivo selecionado: <caminho>" acima do balão (toque longo
+// → folha com o texto EXATO enviado ao modelo) e os `@caminho` do texto destacados; num chat de
+// outro dispositivo o toque confere no host e abre o visualizador (`onOpenPath`).
 import Ionicons from '@expo/vector-icons/Ionicons'
 import {
   createContext,
@@ -35,6 +38,8 @@ import type { ToolRun } from '@/remote/mirror'
 import type { VoiceFollow } from '@/voice/follow'
 import type { Row } from './viewModel'
 import { BranchSwitcher, CopyButton, DayPill, MonoBlock, MsgTime } from './ui'
+import { mentionSegments, openFileLineOf, type OpenFileLine } from './chatPaths'
+import { Sheet, SheetItem } from '@/ui/Sheet'
 
 export interface RowContext {
   depth: number
@@ -53,6 +58,12 @@ export interface RowContext {
    * resposta fica esmaecido). Ausente = controle remoto/ao vivo (só as tags e o resto não ouvido).
    */
   voiceFollow?: VoiceFollow
+  /**
+   * Caminho citado tocado (arquivo selecionado, `@caminho`) num chat executado em outro
+   * dispositivo com os arquivos do host ao alcance: confere e abre no visualizador. Ausente = só
+   * o destaque (chat executado aqui não tem arquivos de host).
+   */
+  onOpenPath?: (path: string) => void
 }
 
 export interface RowLive {
@@ -150,6 +161,90 @@ function OriginLabel({
   )
 }
 
+/** "Arquivo selecionado: <caminho>" acima do balão; toque longo → o texto exato enviado ao modelo. */
+function OpenFileLineView({ line }: { line: OpenFileLine }) {
+  const c = useRow()
+  const [info, setInfo] = useState(false)
+  const open = c.onOpenPath
+  return (
+    <>
+      <Pressable
+        onPress={() => (open ? open(line.path) : setInfo(true))}
+        onLongPress={() => setInfo(true)}
+        delayLongPress={320}
+        hitSlop={6}
+        style={st.openFile}
+        accessibilityRole="button"
+        accessibilityLabel={line.label}
+        accessibilityHint={
+          open ? 'Abre o arquivo; toque longo mostra o texto enviado ao modelo' : undefined
+        }
+        testID="msg-open-file"
+      >
+        <Ionicons name="document-text-outline" size={11} color={colors.subtle} />
+        <Text style={st.openFileLabel}>Arquivo selecionado:</Text>
+        <Text
+          style={[st.openFilePath, open && st.openFileLink]}
+          numberOfLines={1}
+          ellipsizeMode="middle"
+          testID="msg-open-file-path"
+        >
+          {line.path}
+        </Text>
+      </Pressable>
+      <Sheet
+        visible={info}
+        onClose={() => setInfo(false)}
+        title="Arquivo selecionado"
+        subtitle={line.path}
+        testID="open-file-sheet"
+      >
+        <MonoBlock label="Enviado ao modelo depois da mensagem" text={line.modelText} />
+        {open ? (
+          <SheetItem
+            icon="open-outline"
+            label="Abrir o arquivo"
+            detail="Confere no host e abre no visualizador"
+            onPress={() => {
+              setInfo(false)
+              open(line.path)
+            }}
+            testID="open-file-open"
+          />
+        ) : null}
+      </Sheet>
+    </>
+  )
+}
+
+/** Texto do balão com os `@caminho` destacados (tocáveis num chat de outro dispositivo). */
+function MentionText({ text }: { text: string }) {
+  const c = useRow()
+  const parts = mentionSegments(text)
+  if (!parts) return <>{text}</>
+  const open = c.onOpenPath
+  return (
+    <>
+      {parts.map((p, i) =>
+        'mention' in p ? (
+          <Text
+            key={i}
+            style={st.mention}
+            onPress={open ? () => open(p.mention.path) : undefined}
+            accessibilityRole={open ? 'link' : undefined}
+            accessibilityHint={open ? `Abre ${p.mention.path}` : undefined}
+            testID="msg-path"
+          >
+            {p.text}
+          </Text>
+        ) : (
+          p.text
+        )
+      )}
+    </>
+  )
+}
+
 function UserMessage({ msg }: { msg: StoredMessage }) {
   const c = useRow()
   const m = msg.message
@@ -157,6 +252,8 @@ function UserMessage({ msg }: { msg: StoredMessage }) {
   const atts = m.role === 'user' && Array.isArray(m.content) ? m.content : null
   const hasAtts = messageAttachments(m).length > 0
   const kind = msg.meta.kind
+  /** Arquivo selecionado ao enviar (1.13.0): linha acima do balão. */
+  const openFile = openFileLineOf(msg.meta, m.role)
   let origin: ReactNode = null
   let body = text
   let accent = false
@@ -201,6 +298,7 @@ function UserMessage({ msg }: { msg: StoredMessage }) {
         </View>
       ) : null}
       {origin}
+      {openFile ? <OpenFileLineView line={openFile} /> : null}
       {atts ? <MessageAttachments parts={atts} /> : null}
       {body || !hasAtts ? (
         <View style={[st.bubble, accent && st.bubbleAccent]}>
@@ -208,7 +306,7 @@ function UserMessage({ msg }: { msg: StoredMessage }) {
             style={[st.bubbleText, msg.meta.voice?.source === 'call' && st.italic]}
             selectable={!c.live?.onLongPress}
           >
-            {body}
+            <MentionText text={body} />
           </Text>
         </View>
       ) : null}
@@ -878,6 +976,22 @@ const st = StyleSheet.create({
     paddingRight: 2
   },
   origin: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '88%' },
+  openFile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: '88%',
+    paddingRight: 2
+  },
+  openFileLabel: { color: colors.subtle, fontSize: 11, flexShrink: 0 },
+  openFilePath: { flexShrink: 1, color: colors.muted, fontSize: 11, fontFamily: font.mono },
+  openFileLink: { textDecorationLine: 'underline' },
+  mention: {
+    color: colors.accentStrong,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    fontFamily: font.mono,
+    fontSize: 14
+  },
   originText: { color: 'rgba(167,139,250,0.9)', fontSize: 11, fontWeight: '500' },
   queued: { color: colors.subtle, fontSize: 11 },
   assistant: { paddingVertical: 6 },

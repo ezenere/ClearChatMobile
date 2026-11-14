@@ -1,7 +1,7 @@
 # ClearChat Mobile — plano
 
 App Android (iOS depois) em **Expo SDK 58 / React Native 0.88**, com dev build (`expo prebuild`) —
-precisamos de módulos nativos. Implementa o protocolo de sync v1.12.0.
+precisamos de módulos nativos. Implementa o protocolo de sync v1.13.0.
 
 ## Escopo
 
@@ -701,6 +701,18 @@ Verificado: typecheck, lint, `npm test` (inclui `tests/toolSearch.test.ts` e `to
 `vendor:check`, integração no servidor local; no AVD (Pixel 9 Pro, Hermes, modo sem conta): Novo chat com
 a versão local (motivo + aviso) e com a busca nativa da Anthropic (provedor falso como host oficial),
 configurações do chat com "adiada"/"carregada", o item exato e a entrada de busca, e o chip na conversa.
+
+## Arquivo selecionado e `@caminho` (protocolo 1.13.0) — estado (2026-11-14)
+
+Feito (vendor do desktop 2dff858, `@shared/openFile`, `@shared/pathMentions`): texto fixo do arquivo
+selecionado em toda request que o celular monta como host (turno, subagente, voz, compactação, busca
+nativa); `meta.openFile` do `send`/`force` validado e guardado como veio (o celular não tem raiz), na fila,
+no repasse da troca de host e na "nova versão"; linha "Arquivo selecionado" com o texto exato e `@caminho`
+destacados na conversa (local, remoto, ao vivo), com toque que confere no host antes de abrir o
+visualizador; chip `[arquivo ×]` do último arquivo aberto no visualizador do host e popup de `@` pasta por
+pasta no composer dos chats de outro dispositivo. Detalhes: README § "Arquivo selecionado e menções".
+
+Fora: destaque do `@caminho` dentro do campo de texto (o desktop tem; aqui só nas mensagens enviadas).
 
 ## Ideias
 

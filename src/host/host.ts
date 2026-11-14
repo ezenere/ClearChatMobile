@@ -10,10 +10,12 @@ import { WsRequestError } from '@vendor/desktop/sync/ws'
 import { diffDraft, toStreamDraft, type DraftState } from '@vendor/desktop/sync/stream'
 import type { ApprovalItemDecision } from '@shared/approvalPolicy'
 import { sanitizeDictationMeta, type VoiceMessageMeta } from '@shared/voiceCallMarks'
+import { parseOpenFile, sendMetaOpenFile, type OpenFileMeta } from '@shared/openFile'
 import type {
   AgentEvent,
   ApiMessage,
   AttachmentInfo,
+  MessageMeta,
   QuestionAnswer,
   QueuedMessage,
   StreamDraft
@@ -124,6 +126,25 @@ function localVoiceMeta(v: unknown): VoiceMessageMeta | null {
     out.durationMs = Math.round(o.durationMs)
   if (typeof o.sttModel === 'string' && o.sttModel) out.sttModel = o.sttModel
   return out
+}
+
+/**
+ * Raiz do chat NESTE host para o arquivo selecionado (1.13.0, §4.3.8): o celular não tem pasta de
+ * trabalho (sem ferramentas locais, §8.9) — sem raiz, `parseOpenFile` guarda o caminho COMO VEIO
+ * (absoluto continua absoluto; relativo continua relativo à raiz do computador que o mandou, já
+ * normalizado lá), só validado (≤ 1024, sem caracteres de controle). Nunca resolvido contra o
+ * `hostCwd` do registro: aquela raiz é a do computador, não a deste host.
+ */
+export const PHONE_CHAT_ROOT: string | null = null
+
+/**
+ * `meta` de um `send`/`force` (§8.6) → o arquivo selecionado validado e normalizado pela raiz
+ * deste host (PHONE_CHAT_ROOT), ou null (ausente/malformado: a mensagem segue sem ele, nunca é
+ * recusada por isso).
+ */
+export function hostOpenFile(meta: unknown): OpenFileMeta | null {
+  const raw = sendMetaOpenFile(meta)
+  return raw ? parseOpenFile(raw, PHONE_CHAT_ROOT) : null
 }
 
 export class HostService {
@@ -659,7 +680,9 @@ export class HostService {
             text: it.text,
             attachments: it.attachments ?? [],
             skills: [],
-            createdAt: it.createdAt
+            createdAt: it.createdAt,
+            // arquivo selecionado (1.13.0): a fila repassada leva o `openFile` junto (= desktop)
+            ...(it.meta?.openFile ? { meta: { openFile: it.meta.openFile } } : {})
           })
         })
       }
@@ -783,7 +806,14 @@ export class HostService {
         // voz (só ações da tela deste aparelho — `local` nunca recebe comandos remotos): o texto
         // ditado no composer ou a fala da chamada vão com `meta.voice` (§4.3.8)
         const voice = localVoiceMeta(p.voice)
-        const r = await runner.send(sid, String(p.text ?? ''), atts, voice ? { voice } : {})
+        // arquivo selecionado (1.13.0): `meta.openFile` como no `send` remoto do §8.6 (validado;
+        // inválido → a mensagem segue sem ele) — sem raiz aqui, guardado como veio
+        const openFile = hostOpenFile(p.meta)
+        const meta: MessageMeta = {
+          ...(voice ? { voice } : {}),
+          ...(openFile ? { openFile } : {})
+        }
+        const r = await runner.send(sid, String(p.text ?? ''), atts, meta)
         if (k === 'force' && r.queued) {
           const q = runner.getQueue(sid)
           const last = q[q.length - 1]
