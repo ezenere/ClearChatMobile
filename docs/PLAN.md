@@ -15,7 +15,8 @@ precisamos de módulos nativos. Implementa o protocolo de sync v1.13.0.
    chats e subagentes — e as de localização só do celular (`get_location`, `nearby_places`). Só com o app em primeiro plano (o SO suspende em segundo plano). **Decisão de
    produto:** chats executados no celular não são controlados remotamente (as tools são só
    conversacionais): o celular não publica o stream e recusa comandos remotos; um computador que quiser
-   o chat o traz com "Executar neste dispositivo" (§8.8) e continua lá.
+   o chat o traz com "Executar neste dispositivo" (§8.8) e continua lá. Quando é o celular que assume,
+   a fila que o host antigo repassa no `host.release` roda aqui (os únicos comandos aceitos).
 3. Configurações sincronizadas: provedores, personas, memórias, pesquisa na web, novos chats, conta,
    dispositivos.
 4. Depois: voz (ditado e chamada), notificações push (1.7.0), iOS.

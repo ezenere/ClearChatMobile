@@ -25,6 +25,8 @@ export class FakeWs implements HostWs {
   online = true
   /** Respostas forçadas por tipo (erro do servidor). */
   fail = new Map<string, { code: string; details?: Record<string, unknown> }>()
+  /** `host.takeover` com o host atual online → troca pendente (§8.8) em vez de concedida na hora. */
+  takeoverPending = false
 
   constructor(readonly me: string) {}
 
@@ -48,6 +50,7 @@ export class FakeWs implements HostWs {
         this.windowOpen = false
         return { handover_pending: false }
       case 'host.takeover':
+        if (this.takeoverPending) return { status: 'pending' }
         this.host = this.me
         this.epoch++
         this.windowOpen = false

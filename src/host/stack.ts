@@ -329,7 +329,8 @@ export function createHostStack(d: HostStackDeps): HostStack {
     log: d.log,
     timing: d.timing,
     divergence: () => divergence,
-    localOnly: d.localOnly
+    localOnly: d.localOnly,
+    ensureAttachment: (file) => d.files.ensure(file)
   })
   const divergence = new DivergenceService({
     store: d.store,

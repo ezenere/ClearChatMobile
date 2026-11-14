@@ -307,7 +307,10 @@ Host (`src/host/`, sem React Native):
   virar host, "Executar neste dispositivo" (`host.takeover`, com `confirm_pinned`), troca pedida por
   outro dispositivo (`host.handover_request`: o turno para **na hora**, a outbox sobe, a janela fecha e
   `host.release` repassa a fila), perda do host (`host.revoked`/`chat.state`), recusa de comandos
-  remotos, ações da tela (`local(kind, payload)` com os mesmos kinds do
+  remotos — salvo a **fila repassada** quando é o celular que assume (§8.8: os `send` do host
+  antigo, entregues logo depois do `host.granted` e só dele, numa janela de 15 s, rodam aqui em ordem,
+  validados como os da tela: sessão do chat, anexos baixados e conferidos, `meta.openFile`; inválido →
+  descartado com aviso e `rejected`; skills não rodam no celular) —, ações da tela (`local(kind, payload)` com os mesmos kinds do
   §8.6) e o **espelho local**: os eventos do runner alimentam o mesmo `LiveMirror` do controle remoto.
 - Segundo plano: `AccountService.beforeBackground` roda antes de fechar o WebSocket — para os turnos
   (parcial `interrupted`, sessão `interrupted`, fila descartada), envia a outbox **sem timers** (o
@@ -1066,8 +1069,8 @@ Contrato: §4.3.8 ("Arquivo selecionado", `MessageMeta.openFile`) e §8.6 (`send
   então o caminho fica como veio (absoluto continua absoluto; relativo continua o relativo do
   computador) — inválido → a mensagem segue sem ele. A fila e o repasse da troca de host levam o
   `openFile`; "nova versão" mantém o da original. O celular continua recusando `remote.command` (os
-  chats dele não têm controle remoto), então o `meta.openFile` só chega pela tela daqui ou pelo
-  histórico sincronizado.
+  chats dele não têm controle remoto), então o `meta.openFile` chega pela tela daqui, pelo histórico
+  sincronizado ou pela fila que o host antigo repassa quando o celular assume (§8.8).
 - **Na conversa** (local, controle remoto e ao vivo — `src/chat/MessageRow.tsx`, `src/chat/chatPaths.ts`):
   linha discreta "Arquivo selecionado: <caminho>" acima do balão; toque longo (ou toque, num chat daqui)
   → folha com o texto EXATO enviado ao modelo. Num chat de outro dispositivo com os arquivos do host ao

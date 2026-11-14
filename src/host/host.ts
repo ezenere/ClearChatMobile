@@ -4,7 +4,10 @@
 // Decisão de produto: chats executados no celular NÃO são controlados remotamente — o celular não
 // publica o stream (§11) e recusa todo `remote.command` na hora com um texto claro; um computador
 // que queira continuar o chat o traz com "Executar neste dispositivo" (§8.8): aqui o turno para, a
-// janela fecha e o host é liberado. A tela local usa o mesmo modelo do controle remoto (LiveMirror)
+// janela fecha e o host é liberado. A única exceção é a fila REPASSADA na troca (§8.8): quando o
+// celular assume um chat que estava rodando noutro aparelho, os `send` que o host antigo repassa no
+// `host.release` (o servidor os entrega logo depois do `host.granted`, vindos dele) rodam aqui, em
+// ordem, validados como os da tela (sessão do chat, anexos baixados e conferidos, `meta.openFile`). A tela local usa o mesmo modelo do controle remoto (LiveMirror)
 // alimentado pelos eventos do runner. Só em primeiro plano: segundo plano = turno interrompido.
 import { WsRequestError } from '@vendor/desktop/sync/ws'
 import { diffDraft, toStreamDraft, type DraftState } from '@vendor/desktop/sync/stream'
@@ -23,7 +26,7 @@ import type {
 import type { Subkeys } from '@/crypto'
 import type { LocalStore } from '@/data/store'
 import type { ChatState } from '@/data/types'
-import { sealCommand, sealResult, type Envelope } from '@/remote/crypto'
+import { openCommand, sealCommand, sealResult, type Envelope } from '@/remote/crypto'
 import { LiveMirror, type MirrorView } from '@/remote/mirror'
 import type { CommandKind, CommandResult } from '@/remote/types'
 import type { Runner } from '@/agent/runner'
@@ -62,6 +65,8 @@ export interface HostDeps {
    * de escrita, sem push (a outbox só sobe depois do merge do primeiro login, §12).
    */
   localOnly?: () => boolean
+  /** Garante um anexo no aparelho (baixa o blob do servidor) — anexos da fila repassada (§8.8). */
+  ensureAttachment?: (file: string) => Promise<void>
 }
 
 export const HOST_TIMING = {
@@ -69,7 +74,13 @@ export const HOST_TIMING = {
   /** Ocioso por tanto tempo (e outbox vazia) → host.end. */
   idleCloseMs: 700,
   /** Intervalo do draft no espelho local. */
-  draftMs: 60
+  draftMs: 60,
+  /**
+   * Fila repassada na troca de host (§8.8): o servidor manda os `send` do host antigo logo depois do
+   * `host.granted` — só nesta janela (a partir do `host.granted`) eles são aceitos; depois, um
+   * `remote.command` dele é controle remoto comum (recusado).
+   */
+  forwardWindowMs: 15_000
 }
 
 /** Resposta a qualquer comando remoto num chat executado neste celular. */
@@ -156,6 +167,15 @@ export class HostService {
   private idleSeen = new Map<string, number>()
   /** Troca de host pedida por outro dispositivo (§8.8): parar, fechar a janela e liberar. */
   private handoverOut = new Map<string, { items: QueuedMessage[]; releasing: boolean }>()
+  /**
+   * Troca pedida por ESTE celular (§8.8): de quem vem a fila repassada (`from` = o host de antes) e,
+   * depois do `host.granted`, até quando ela é aceita (`until`; null = ainda pendente).
+   */
+  private handoverIn = new Map<string, { from: string; until: number | null }>()
+  /** Fila repassada sendo processada, em ordem, por chat (depois do pull até o `head`). */
+  private forwardChain = new Map<string, Promise<void>>()
+  /** Pull disparado pelo `host.granted` (a fila repassada espera ele, §8.8). */
+  private grantPull = new Map<string, Promise<void>>()
   private connected = false
   private foreground = true
   private idleTimer: ReturnType<typeof setInterval> | null = null
@@ -333,13 +353,22 @@ export class HostService {
         return
       case 'host.granted': {
         const chatId = String(f.chat_id)
+        // troca pedida daqui: a fila do host antigo chega em seguida (só dele, só nesta janela)
+        const prev = this.state(chatId)?.host?.device_id
+        const h = this.handoverIn.get(chatId)
+        const from = h?.from ?? (prev && prev !== this.me ? prev : null)
+        if (from) this.handoverIn.set(chatId, { from, until: this.now() + this.t.forwardWindowMs })
+        else this.handoverIn.delete(chatId)
         this.setOptimistic(chatId, {
           epoch: Number(f.epoch ?? 0),
           host: this.hostMe(),
           window: null,
           handover: null
         })
-        void this.d.pull().catch(() => undefined)
+        this.grantPull.set(
+          chatId,
+          this.d.pull().catch(() => undefined)
+        )
         this.d.notice?.({ chatId, tone: 'success', text: 'Este celular agora executa o chat.' })
         return
       }
@@ -350,7 +379,8 @@ export class HostService {
         void this.onHandoverRequest(f)
         return
       case 'remote.command':
-        void this.rejectRemote(f)
+        if (this.isForwarded(f)) this.acceptForwarded(f)
+        else void this.rejectRemote(f)
         return
       // stream.resync_request: o celular não publica o stream (chats dele não têm controle remoto)
     }
@@ -376,10 +406,103 @@ export class HostService {
   private async onLostHost(chatId: string): Promise<void> {
     this.windows.delete(chatId)
     this.handoverOut.delete(chatId)
+    this.handoverIn.delete(chatId)
     this.optimistic.delete(chatId)
     if (this.busy(chatId))
       await this.d.runner.stopChat(chatId, true, 'interrupted').catch(() => undefined)
     this.changed()
+  }
+
+  private now(): number {
+    return Date.now()
+  }
+
+  /**
+   * É um item da fila repassada na troca pedida por este celular (§8.8)? `send`, vindo do host de
+   * antes, depois do `host.granted` e dentro da janela. Qualquer outro `remote.command` é controle
+   * remoto comum — recusado como sempre.
+   */
+  private isForwarded(f: Record<string, unknown>): boolean {
+    const chatId = String(f.chat_id ?? '')
+    const h = this.handoverIn.get(chatId)
+    if (!h || h.until === null) return false
+    if (this.now() > h.until) {
+      this.handoverIn.delete(chatId)
+      return false
+    }
+    return f.kind === 'send' && f.from_device_id === h.from && this.isHostHere(chatId)
+  }
+
+  /** Enfileira um item repassado: roda depois do pull e dos anteriores, na ordem em que chegaram. */
+  private acceptForwarded(f: Record<string, unknown>): void {
+    const chatId = String(f.chat_id ?? '')
+    const prev = this.forwardChain.get(chatId) ?? Promise.resolve()
+    const next = prev.then(() => this.runForwarded(f)).catch(() => undefined)
+    this.forwardChain.set(chatId, next)
+  }
+
+  /**
+   * Um `send` da fila repassada: decifra, valida como um envio da tela (sessão deste chat, anexos
+   * baixados do servidor e conferidos, `meta.openFile` por `hostOpenFile`; skills não rodam no
+   * celular) e entrega ao runner — o 1º vira turno, os seguintes entram na fila dele em ordem.
+   * Inválido → descartado com aviso e `rejected` ao remetente.
+   */
+  private async runForwarded(f: Record<string, unknown>): Promise<void> {
+    const chatId = String(f.chat_id ?? '')
+    const cmdId = String(f.cmd_id ?? '')
+    const keys = this.d.keys()
+    if (!keys) return
+    const reply = async (r: Record<string, unknown>): Promise<void> => {
+      try {
+        await this.d.ws.request('remote.result', {
+          chat_id: chatId,
+          cmd_id: cmdId,
+          env: await sealResult(keys.sk.stream, keys.userId, chatId, cmdId, r)
+        })
+      } catch (e) {
+        this.log(`remote.result falhou: ${errMsg(e)}`)
+      }
+    }
+    // "Ao virar host, N DEVE puxar até head … então processar os itens repassados" (§8.8)
+    await this.grantPull.get(chatId)
+    let p: Record<string, unknown>
+    try {
+      p = await openCommand(keys.sk.stream, keys.userId, chatId, cmdId, f.env as Envelope)
+    } catch {
+      this.forwardDropped(chatId, 'não deu para decifrar')
+      return reply({ status: 'rejected', error: 'Comando ilegível.' })
+    }
+    try {
+      if (p.kind !== undefined && p.kind !== 'send') throw new Error('Só mensagens vêm na fila.')
+      const atts = Array.isArray(p.attachments) ? p.attachments : []
+      for (const a of atts) {
+        const file = (a as Partial<AttachmentInfo> | null)?.file
+        if (typeof file !== 'string') throw new Error('Anexo inválido.')
+        await this.d.ensureAttachment?.(file)
+      }
+      const skills = Array.isArray(p.skills) ? p.skills.filter((x) => typeof x === 'string') : []
+      if (skills.length)
+        this.log(`fila repassada: skills ignoradas no celular (${skills.join(', ')})`)
+      const r = await this.local(chatId, 'send', {
+        sessionId: p.sessionId,
+        text: typeof p.text === 'string' ? p.text : '',
+        attachments: atts,
+        ...(p.meta !== undefined ? { meta: p.meta } : {})
+      })
+      await reply({ status: 'accepted', ...(r.queued !== undefined ? { queued: r.queued } : {}) })
+    } catch (e) {
+      this.forwardDropped(chatId, errMsg(e))
+      await reply({ status: 'rejected', error: errMsg(e) })
+    }
+  }
+
+  private forwardDropped(chatId: string, why: string): void {
+    this.log(`fila repassada: item descartado (${why})`)
+    this.d.notice?.({
+      chatId,
+      tone: 'danger',
+      text: `Uma mensagem da fila do outro dispositivo não veio: ${why}`
+    })
   }
 
   /** Comando remoto num chat deste celular: recusado na hora (§8.6 `rejected`), sem executar. */
@@ -634,6 +757,9 @@ export class HostService {
       if (Number(ack.head ?? 0) > this.d.store.cursor) await this.d.pull().catch(() => undefined)
       return 'granted'
     }
+    // o host atual repassa a fila dele no `host.release` (§8.8): aceita só dele, depois do grant
+    const from = this.state(chatId)?.host?.device_id
+    if (from && from !== this.me) this.handoverIn.set(chatId, { from, until: null })
     this.setOptimistic(chatId, {
       handover: { to_device_id: this.me, to_name: this.d.deviceName(), mode: opts.mode }
     })
@@ -642,6 +768,7 @@ export class HostService {
 
   async cancelHandover(chatId: string): Promise<void> {
     await this.d.ws.request('host.handover_cancel', { chat_id: chatId })
+    this.handoverIn.delete(chatId)
     const st = this.state(chatId)
     if (st?.handover) this.setOptimistic(chatId, { handover: null })
   }

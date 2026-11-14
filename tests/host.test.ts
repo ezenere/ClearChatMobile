@@ -2,7 +2,7 @@
 // chats com ferramentas locais hospedados sem elas (§4.3.6, §8.9), comandos remotos recusados na hora (o celular não
 // é controlado remotamente), troca de host pedida por outro dispositivo no meio do turno, segundo
 // plano e o espelho local da tela.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_CHAT_CONFIG } from '../src/vendor/shared/defaults'
 import type { ChatConfig } from '../src/vendor/shared/types'
 import { openResult, sealCommand, type Envelope } from '../src/remote/crypto'
@@ -174,6 +174,199 @@ describe('controle remoto recusado', () => {
     }
     expect(h.stack.repo.path(sid)).toEqual([])
     expect(h.ws.count('host.begin')).toBe(0)
+  })
+})
+
+describe('fila repassada na troca de host (§8.8)', () => {
+  /** Chat do PC (online) que este celular pede para assumir: troca pendente → concedida. */
+  async function takeoverFromPc() {
+    const { chatId, sid } = newChat()
+    await h.stack.writer.flush(chatId)
+    h.ws.host = 'dev-pc'
+    const pc = {
+      chat_id: chatId,
+      ssq: 7,
+      epoch: 4,
+      head: 0,
+      pinned: false,
+      host: { device_id: 'dev-pc', name: 'PC', platform: 'linux', status: 'online' as const },
+      window: null,
+      handover: null,
+      diverged: null
+    }
+    h.store.upsertChatState(pc)
+    h.ws.takeoverPending = true
+    expect(await h.stack.host.takeover(chatId, { mode: 'next_turn' })).toBe('pending')
+    // o PC termina o turno e libera: o servidor concede (chat.state antes, como o broadcast) e
+    // repassa a fila dele logo depois do host.granted
+    h.ws.host = 'dev-mobile'
+    h.ws.epoch = 5
+    const mine = {
+      ...pc,
+      ssq: 8,
+      epoch: 5,
+      host: {
+        device_id: 'dev-mobile',
+        name: 'Pixel',
+        platform: 'android',
+        status: 'online' as const
+      }
+    }
+    h.store.upsertChatState(mine)
+    h.stack.host.onEvent({ t: 'chat.state', ...mine })
+    h.stack.host.onEvent({ t: 'host.granted', chat_id: chatId, epoch: 5, head: 0 })
+    return { chatId, sid }
+  }
+  const keys = () => ({ userId: h.server.userId, sk: h.desk.sk })
+  /** Um `remote.command` como o servidor entrega (o env cifrado pelo host antigo). */
+  async function command(
+    chatId: string,
+    cmdId: string,
+    payload: Record<string, unknown>,
+    o: { from?: string; kind?: string; envCmdId?: string } = {}
+  ) {
+    const env = await sealCommand(keys().sk.stream, keys().userId, chatId, o.envCmdId ?? cmdId, {
+      sv: 1,
+      kind: 'send',
+      attachments: [],
+      skills: [],
+      createdAt: 1,
+      ...payload
+    })
+    h.stack.host.onEvent({
+      t: 'remote.command',
+      chat_id: chatId,
+      cmd_id: cmdId,
+      kind: o.kind ?? 'send',
+      env,
+      from_device_id: o.from ?? 'dev-pc',
+      created_at: '2026-11-14T00:00:00Z'
+    })
+  }
+  async function resultOf(chatId: string, cmdId: string): Promise<Record<string, unknown>> {
+    await until(
+      () => h.ws.requests.some((r) => r.t === 'remote.result' && r.fields.cmd_id === cmdId),
+      8000,
+      `resultado de ${cmdId}`
+    )
+    const res = h.ws.requests.find((r) => r.t === 'remote.result' && r.fields.cmd_id === cmdId)!
+    return openResult(keys().sk.stream, keys().userId, chatId, cmdId, res.fields.env as Envelope)
+  }
+
+  it('assumir com fila repassada: os itens rodam aqui em ordem; inválidos descartados com aviso', async () => {
+    const { chatId, sid } = await takeoverFromPc()
+    const other = newChat()
+    const missing = `${'a'.repeat(64)}.png`
+    await command(chatId, 'f1', {
+      sessionId: sid,
+      text: '/slow primeira da fila',
+      meta: { openFile: { path: 'src/a.ts' } }
+    })
+    await command(chatId, 'f2', { sessionId: sid, text: 'ilegível' }, { envCmdId: 'outro' })
+    await command(chatId, 'f3', { sessionId: other.sid, text: 'de outro chat' })
+    await command(chatId, 'f4', {
+      sessionId: sid,
+      text: 'com anexo que não existe',
+      attachments: [{ file: missing, kind: 'image', name: 'x.png', mime: 'image/png', size: 3 }]
+    })
+    await command(chatId, 'f5', {
+      sessionId: sid,
+      text: 'segunda da fila',
+      meta: { openFile: { path: 'a\nb' } }
+    })
+    await command(chatId, 'f6', { sessionId: sid, text: '   ' })
+    await command(chatId, 'f7', { sessionId: sid, text: 'terceira da fila', skills: ['deploy'] })
+    expect(await resultOf(chatId, 'f1')).toMatchObject({ status: 'accepted', queued: false })
+    expect(await resultOf(chatId, 'f2')).toMatchObject({ status: 'rejected' })
+    expect(await resultOf(chatId, 'f3')).toMatchObject({
+      status: 'rejected',
+      error: 'Sessão não pertence a este chat.'
+    })
+    expect(await resultOf(chatId, 'f4')).toMatchObject({ status: 'rejected' })
+    expect(await resultOf(chatId, 'f5')).toMatchObject({ status: 'accepted', queued: true })
+    expect(await resultOf(chatId, 'f6')).toMatchObject({
+      status: 'rejected',
+      error: 'Mensagem vazia.'
+    })
+    expect(await resultOf(chatId, 'f7')).toMatchObject({ status: 'accepted', queued: true })
+    await until(
+      () =>
+        !h.stack.runner.isRunning(sid) &&
+        h.stack.repo.path(sid).some((m) => m.message.content === 'terceira da fila'),
+      15_000,
+      'fila rodar'
+    )
+    await idle(sid)
+    const users = h.stack.repo.path(sid).filter((m) => m.message.role === 'user')
+    expect(users.map((m) => m.message.content)).toEqual([
+      '/slow primeira da fila',
+      'segunda da fila',
+      'terceira da fila'
+    ])
+    // validado como na tela: o arquivo selecionado válido fica; o inválido some
+    expect(users[0].meta.openFile).toEqual({ path: 'src/a.ts' })
+    expect(users[1].meta.openFile).toBeUndefined()
+    // o turno rodou aqui, na janela deste celular
+    expect(h.ws.count('host.begin')).toBeGreaterThan(0)
+    expect(h.stack.repo.path(other.sid)).toEqual([])
+    // os descartados viram aviso na tela
+    expect(h.notices.filter((n) => /fila do outro dispositivo não veio/.test(n)).length).toBe(4)
+  })
+
+  it('fora da troca continua recusado: outro aparelho, outro kind, janela vencida, sem troca pedida', async () => {
+    const { chatId, sid } = await takeoverFromPc()
+    // de outro aparelho (não o host antigo) na janela → controle remoto comum
+    await command(chatId, 'x1', { sessionId: sid, text: 'do notebook' }, { from: 'dev-notebook' })
+    expect(await resultOf(chatId, 'x1')).toMatchObject({
+      status: 'rejected',
+      error: REMOTE_REFUSAL
+    })
+    // outro kind do host antigo → recusado
+    await command(chatId, 'x2', { sessionId: sid }, { kind: 'stop' })
+    expect(await resultOf(chatId, 'x2')).toMatchObject({
+      status: 'rejected',
+      error: REMOTE_REFUSAL
+    })
+    // janela vencida: o PC agora é um controle remoto comum
+    const real = Date.now
+    const env = await sealCommand(keys().sk.stream, keys().userId, chatId, 'x3', {
+      sv: 1,
+      kind: 'send',
+      sessionId: sid,
+      text: 'depois da troca',
+      attachments: [],
+      skills: [],
+      createdAt: 1
+    })
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    h.stack.host.onEvent({
+      t: 'remote.command',
+      chat_id: chatId,
+      cmd_id: 'x3',
+      kind: 'send',
+      env,
+      from_device_id: 'dev-pc'
+    })
+    spy.mockRestore()
+    expect(await resultOf(chatId, 'x3')).toMatchObject({
+      status: 'rejected',
+      error: REMOTE_REFUSAL
+    })
+    // e a janela não volta
+    await command(chatId, 'x4', { sessionId: sid, text: 'de novo' })
+    expect(await resultOf(chatId, 'x4')).toMatchObject({
+      status: 'rejected',
+      error: REMOTE_REFUSAL
+    })
+    // chat sem troca pedida por aqui: `send` do host dele → recusado (como sempre)
+    const c2 = newChat()
+    await command(c2.chatId, 'x5', { sessionId: c2.sid, text: 'oi' })
+    expect(await resultOf(c2.chatId, 'x5')).toMatchObject({
+      status: 'rejected',
+      error: REMOTE_REFUSAL
+    })
+    expect(h.stack.repo.path(sid)).toEqual([])
+    expect(h.stack.repo.path(c2.sid)).toEqual([])
   })
 })
 

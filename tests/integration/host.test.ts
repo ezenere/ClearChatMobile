@@ -3,8 +3,9 @@
 // roda turnos dentro de janelas (host.begin/host.end, chat_bases + host_epochs) com web_search e
 // aprovação; um "desktop" (dispositivo can_host no WebSocket real) vê os registros e recebe a recusa
 // do controle remoto; um chat com tools locais roda no celular sem elas (§4.3.6, §8.9); o desktop
-// assume o chat do celular no meio de um turno (§8.8) continuando de onde parou. Segundo plano →
-// turno interrompido e janela fechada.
+// assume o chat do celular no meio de um turno (§8.8) continuando de onde parou, e o celular o traz de
+// volta com a fila do desktop repassada no `host.release`. Segundo plano → turno interrompido e
+// janela fechada.
 import { afterAll, describe, expect, it } from 'vitest'
 import { AccountService } from '../../src/account/service'
 import { MemoryKeyValueStore, MemorySecretStore } from '../../src/account/storage'
@@ -382,6 +383,68 @@ describe.skipIf(!enabled)('host no celular contra o servidor real (provedor fals
     await expect(host.local(c1.id, 'send', { sessionId: s1.id, text: 'x' })).rejects.toThrow(
       /executado em/
     )
+
+    // ---- 5b. o celular assume de volta com o PC online: a fila do PC vem no host.release e roda
+    // aqui, em ordem (§8.8); item inválido é descartado ----
+    expect(await host.takeover(c1.id, { mode: 'next_turn' })).toBe('pending')
+    await waitFor(
+      () => deskEvents.find((e) => e.t === 'host.handover_request' && e.chat_id === c1.id),
+      'pedido de troca no PC',
+      20_000
+    )
+    const fwd: { cmd_id: string; env: Envelope }[] = []
+    const fwdPlain = [
+      { text: 'fila do PC 1', meta: { openFile: { path: 'src/a.ts' } } },
+      { text: '' },
+      { text: 'fila do PC 2' }
+    ]
+    for (const it of fwdPlain) {
+      const cmd_id = crypto.randomUUID()
+      fwd.push({
+        cmd_id,
+        env: await sealCommand(desk.sk.stream, desk.userId, c1.id, cmd_id, {
+          sv: 1,
+          kind: 'send',
+          sessionId: s1.id,
+          attachments: [],
+          skills: [],
+          createdAt: Date.now(),
+          ...it
+        })
+      })
+    }
+    await deskWs.request('host.release', {
+      chat_id: c1.id,
+      epoch: Number((await serverState(c1.id))!.epoch),
+      forwarded: fwd
+    })
+    await waitFor(
+      () =>
+        repo.path(s1.id).some((m) => m.message.content === 'fila do PC 2') &&
+        !runner.isRunning(s1.id),
+      'fila do PC rodou no celular',
+      30_000
+    )
+    const fromPc = repo
+      .path(s1.id)
+      .filter(
+        (m) => m.message.role === 'user' && String(m.message.content).startsWith('fila do PC')
+      )
+    expect(fromPc.map((m) => m.message.content)).toEqual(['fila do PC 1', 'fila do PC 2'])
+    expect(fromPc[0].meta.openFile).toEqual({ path: 'src/a.ts' })
+    expect((await serverState(c1.id))?.host?.device_id).toBe(phoneId)
+    const results = await Promise.all(
+      fwd.map(async (x) => {
+        const res = await waitFor(
+          () => deskEvents.find((e) => e.t === 'remote.result' && e.cmd_id === x.cmd_id),
+          'resultado do repassado'
+        )
+        return (
+          await openResult(desk.sk.stream, desk.userId, c1.id, x.cmd_id, res!.env as Envelope)
+        ).status
+      })
+    )
+    expect(results).toEqual(['accepted', 'rejected', 'accepted'])
 
     // ---- 6. segundo plano no meio do turno ----
     const { chat: c2, session: s2 } = newChat()
