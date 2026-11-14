@@ -72,6 +72,8 @@ import {
   thanksSkipReason,
   toolPhraseCategory,
   toolPhraseSkipReason,
+  toolPhraseWaitFor,
+  type ToolPhraseWait,
   type BargeInReason,
   type DelayPhraseState,
   type FillerState,
@@ -144,6 +146,21 @@ function safeCall<T>(fn: () => T, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+/** Frase de ferramenta pronta (clipe ou síntese ao vivo) — a que toca já ou espera na fila. */
+interface QueuedToolPhrase {
+  category: NonNullable<ReturnType<typeof toolPhraseCategory>>
+  /** Variante (1-based) no pool. */
+  variant: number
+  text: string
+  audio: Uint8Array
+  mime: string
+  /** Sintetizada ao vivo (sem clipe). */
+  live: boolean
+  decidedAt: number
+  /** O que ela esperou terminar na fila (null = tocou já). */
+  wait: ToolPhraseWait | null
 }
 
 /** Dependências injetadas (testes usam fakes; a fiação real está em `src/main/ipc.ts`). */
@@ -402,8 +419,12 @@ export class VoiceCallManager {
   #toolAbort: AbortController | null = null
   /** Índices do pool usados por último (nunca repete os últimos `TOOL_PHRASE_RECENT_WINDOW`). */
   #toolRecent: number[] = []
-  /** Fim do preâmbulo deste turno (ms) — a frase de ferramenta só sai 3 s depois dele. */
-  #fillerEndedAt: number | null = null
+  /**
+   * Frase de ferramenta pronta esperando o áudio tocando terminar (preâmbulo, "manter viva", a
+   * resposta anterior): sai no `playback-idle`, logo depois dele — nunca sobrepõe nem corta; cai se a
+   * resposta começar antes, o usuário falar, o desligamento armar ou a chamada acabar.
+   */
+  #toolQueued: QueuedToolPhrase | null = null
   /** tool_call id → nome (das mensagens do assistente — o `tool-running` só traz o id). */
   #toolNames = new Map<string, string>()
   // ---- histórico e custos da chamada (marcadores, meta.voice) ----
@@ -528,7 +549,7 @@ export class VoiceCallManager {
     this.#clearSynth()
     this.#ttsFeedCall((f) => f.close()) // [tts-feed] fim da chamada: fecha a conexão
     this.#resetFiller(true)
-    this.#resetToolPhrase(true)
+    this.#resetToolPhrase(true, 'stopped')
     this.#resetDelay(true, 'stopped')
     this.#awaitingUser = false
     this.#machine.stop()
@@ -614,7 +635,7 @@ export class VoiceCallManager {
     // (nunca falam por cima do usuário): ruído/"uhum" (transcrição vazia) retoma a espera do turno
     // — antes elas eram zeradas e nada mais tocava no turno; o turno novo/continuado rearma
     this.#resetFiller(true)
-    this.#resetToolPhrase(true)
+    this.#resetToolPhrase(true, 'user-speaking')
     this.#pauseDelay('user-speaking')
     // a fala anterior ainda está transcrevendo (o silêncio fechou o turno no meio da frase): o
     // texto dela será unido ao desta fala em vez de virar turno sozinho
@@ -730,8 +751,6 @@ export class VoiceCallManager {
     // resposta): o silêncio das frases de espera conta deste FIM, nunca da decisão nem da emissão
     // (a latência da síntese e a duração do áudio não comem o silêncio)
     const shortEnded = !!this.#fillerUttId || !!this.#delayPlaying || !!this.#toolUttId
-    // o preâmbulo terminou agora: a frase de ferramenta conta 3 s daqui
-    if (this.#fillerUttId) this.#fillerEndedAt = this.#now()
     this.#playbackActive = false
     this.#fillerUttId = null
     this.#delayPlaying = null
@@ -745,6 +764,8 @@ export class VoiceCallManager {
       if (shortEnded) this.#delay.lastShortEndAt = now
       this.#scheduleDelay()
     }
+    // frase de ferramenta na fila (o preâmbulo/frase de espera que tocava terminou): sai agora
+    this.#flushQueuedTool()
     // preâmbulo segurado enquanto algo tocava (a resposta anterior na fila): tenta de novo agora
     void this.#tryFiller()
     if (this.#checkHangup()) return this.state()
@@ -781,7 +802,7 @@ export class VoiceCallManager {
     this.#playbackActive = false
     this.#interruptingSpeech = true // a transcrição desta fala chega no próximo `turn`
     this.#resetFiller(true) // quem falou é o usuário: sem filler no meio da fala dele
-    this.#resetToolPhrase(true)
+    this.#resetToolPhrase(true, 'barge-in')
     this.#resetDelay(true, 'barge-in')
     this.#interruptAnswer(played, this.#partialHeard(input?.current))
     this.#machine.bargeIn()
@@ -928,7 +949,7 @@ export class VoiceCallManager {
     this.#speakCancelled = true
     this.#clearSynth()
     this.#resetFiller(true)
-    this.#resetToolPhrase(true)
+    this.#resetToolPhrase(true, 'user-speaking')
     this.#machine.suspend()
     this.#machine.turnArrived(text) // vira o pendente (suspenso: nada sai antes do ajuste)
     const canMerge = !!prev?.userMessageId && !prev.toolsRan && !!this.#deps.amendTurn
@@ -1065,6 +1086,11 @@ export class VoiceCallManager {
       const m: StoredMessage = e.message
       if (m.sessionId !== sessionId) return
       if (m.message.role === 'user') {
+        // mensagem do APP no meio do turno do agente (resultados das tools no modo texto, resumo da
+        // compactação automática no limite de passo, retorno de subagente drenado da fila): o turno
+        // é o MESMO — nada é zerado (antes cortava a frase de ferramenta tocando, rearmava o
+        // preâmbulo e trocava a mensagem do turno, que o barge-in ajusta, pela do app)
+        if (m.meta?.synthetic && this.#machine.responseInFlight) return
         // novo turno (falado, digitado ou drenado da fila): a próxima resposta volta a ser falada
         const text =
           typeof m.message.content === 'string'
@@ -1230,6 +1256,9 @@ export class VoiceCallManager {
     this.#keyText.set(key, text)
     this.#stepKeys.push(key)
     this.#sentencesThisTurn++
+    // a 1ª frase da resposta chegou com a frase de ferramenta ainda na fila (não tocou): ela cai —
+    // viria depois do que ela anunciava
+    this.#dropQueuedTool('answer-first')
     if (this.#speakCancelled) return
     if (this.#holdAnswer) {
       this.#heldTexts.push({ key, text })
@@ -1390,7 +1419,7 @@ export class VoiceCallManager {
     this.#uttSpeech = new Map()
     this.#sentencesThisTurn = 0
     this.#resetFiller(true) // turno novo: o filler do turno anterior (se tocando) é cancelado
-    this.#resetToolPhrase(true)
+    this.#resetToolPhrase(true, 'new-turn')
     this.#toolNames = new Map()
     this.#resetDelay(true, 'new-turn')
   }
@@ -1414,9 +1443,8 @@ export class VoiceCallManager {
   #armFiller(text: string, voicedMs: number | null = null): void {
     this.#resetFiller(true)
     // turno novo: a frase de ferramenta volta a valer (1 por turno)
-    this.#resetToolPhrase(true)
+    this.#resetToolPhrase(true, 'new-turn')
     this.#toolDecided = false
-    this.#fillerEndedAt = null
     this.#armDelayPhrases() // frases de demora valem em todo turno respondido (fala curta inclusive)
     const resolved = this.#resolved()
     this.#fillerContext = classifyFillerContext(text)
@@ -1557,8 +1585,9 @@ export class VoiceCallManager {
    * A 1ª tool que começa no turno: decide a frase de ferramenta (no máx. 1 por turno — a decisão
    * vale mesmo quando ela é pulada). Pula (`toolPhraseSkipReason`): desligada, tool sem frase, o
    * assistente já falou/cortou uma frase da resposta (ele mesmo anunciou), desligamento armado, o
-   * usuário falando, frase curta tocando agora, preâmbulo terminado há < 3 s, outro áudio tocando.
-   * Preâmbulo que ainda não tocou é SUBSTITUÍDO (nenhum preâmbulo neste turno).
+   * usuário falando. Outro áudio tocando (preâmbulo, "manter viva") NÃO pula: a frase entra na fila
+   * e toca logo depois dele. Preâmbulo que ainda não tocou é SUBSTITUÍDO (nenhum preâmbulo neste
+   * turno).
    */
   #onFirstTool(toolCallId: string): void {
     if (this.#toolDecided || !this.#turn || !this.#sessionId) return
@@ -1568,20 +1597,12 @@ export class VoiceCallManager {
     this.#toolDecided = true
     const phase = this.#machine.phase
     const now = this.#now()
-    // fim da última frase curta deste turno (preâmbulo ou frase de demora): 3 s de folga
-    const ends = [this.#fillerEndedAt, this.#delay.lastShortEndAt].filter(
-      (t): t is number => t != null
-    )
     const skip = toolPhraseSkipReason({
       enabled: this.#resolved().toolPhrases,
       category,
       answerStarted: this.#keyText.size > 0 || this.#delay.answerSpoken,
       hangup: !!this.#hangup,
-      userSpeaking: phase === 'listening' || phase === 'transcribing',
-      shortPlaying: !!this.#fillerUttId || !!this.#delayPlaying || !!this.#toolUttId,
-      preambleEndedAt: ends.length ? Math.max(...ends) : null,
-      playbackActive: this.#playbackActive,
-      now
+      userSpeaking: phase === 'listening' || phase === 'transcribing'
     })
     if (skip) {
       this.#toolSkip(category, skip)
@@ -1601,18 +1622,18 @@ export class VoiceCallManager {
         played: false,
         reason: 'tool-phrase'
       })
-    void this.#playToolPhrase(category, toolCallId, now)
+    void this.#playToolPhrase(category, now)
   }
 
   /**
-   * Toca a frase da categoria (sem repetir as últimas): o clipe pré-gerado `TOOL_<n>` (latência
-   * zero); sem clipe, síntese AO VIVO (como as frases de demora — caracteres no custo). Pronta tarde
-   * demais — a tool terminou (só na síntese ao vivo), a resposta começou, o usuário falou… — é
-   * descartada.
+   * Prepara a frase da categoria (sem repetir as últimas): o clipe pré-gerado `TOOL_<n>` (latência
+   * zero); sem clipe, síntese AO VIVO (como as frases de demora — caracteres no custo). Pronta: toca
+   * JÁ, ou — com o preâmbulo/uma frase de espera/outro áudio tocando — entra na FILA e toca logo
+   * depois dele (`playback-idle`). Cai (pronta ou na fila) se a resposta começou, o usuário falou ou
+   * o desligamento armou. A tool já de volta NÃO descarta: o modelo ainda processa o resultado.
    */
   async #playToolPhrase(
     category: NonNullable<ReturnType<typeof toolPhraseCategory>>,
-    toolCallId: string,
     decidedAt: number
   ): Promise<void> {
     const gen = this.#toolGen
@@ -1642,30 +1663,62 @@ export class VoiceCallManager {
       }
       if (gen !== this.#toolGen || !this.#sessionId) return
     }
-    const phase = this.#machine.phase
-    // síntese ao vivo que ficou pronta com a tool já terminada: tarde demais. O clipe (latência
-    // ~zero) toca mesmo com uma tool rápida já de volta — o modelo ainda processa o resultado
-    const why =
-      live && !this.#toolsRunningIds.has(toolCallId)
-        ? 'tool-done'
-        : this.#keyText.size > 0 || this.#delay.answerSpoken
-          ? 'answer-first'
-          : this.#hangup
-            ? 'hangup'
-            : phase === 'listening' || phase === 'transcribing'
-              ? 'user-speaking'
-              : this.#fillerUttId || this.#delayPlaying
-                ? 'clip-playing'
-                : this.#playbackActive
-                  ? 'assistant-audio'
-                  : null
+    const q: QueuedToolPhrase = {
+      category,
+      variant: idx + 1,
+      text,
+      audio: r.audio,
+      mime: r.mime,
+      live,
+      decidedAt,
+      wait: null
+    }
+    // a tool já de volta não conta (clipe OU síntese ao vivo): a frase pronta — paga, no caso da
+    // síntese — ainda cabe enquanto o modelo processa o resultado
+    const why = this.#toolDropReason()
     if (why) return this.#toolSkip(category, live ? `live/${why}` : why, text)
+    // outro áudio tocando: na fila, logo depois dele (antes: pulada — `clip-playing`/3 s depois do
+    // preâmbulo; o usuário quer a frase no instante da tool — "é a primeira coisa que acontece")
+    const wait = toolPhraseWaitFor({
+      fillerPlaying: !!this.#fillerUttId,
+      delayPlaying: !!this.#delayPlaying,
+      playbackActive: this.#playbackActive
+    })
+    if (wait) {
+      this.#toolQueued = { ...q, wait }
+      this.#emitTimeline({
+        ts: this.#now(),
+        kind: 'clip-queued',
+        class: 'TOOL',
+        variant: q.variant,
+        reason: `after-${wait}`,
+        text: text.slice(0, EVAL_TAIL_MAX_CHARS)
+      })
+      return
+    }
+    this.#emitToolPhrase(q)
+  }
+
+  /** Por que a frase de ferramenta pronta (ou na fila) não toca mais (null = toca). */
+  #toolDropReason(): 'answer-first' | 'hangup' | 'user-speaking' | null {
+    const phase = this.#machine.phase
+    return this.#keyText.size > 0 || this.#delay.answerSpoken
+      ? 'answer-first'
+      : this.#hangup
+        ? 'hangup'
+        : phase === 'listening' || phase === 'transcribing'
+          ? 'user-speaking'
+          : null
+  }
+
+  /** Emite a frase de ferramenta pronta (decisão "tocou" na timeline; na fila → `.../after-<o quê>`). */
+  #emitToolPhrase(q: QueuedToolPhrase): void {
     this.#uttSeq++
     const id = `u${this.#uttSeq}`
     this.#toolUttId = id
     this.#playbackActive = true
     this.#delay.silentSince = null // algo tocando: o silêncio das frases de demora volta no idle
-    this.#deps.emitUtterance({ id, audio: r.audio, mime: r.mime, kind: 'tool' })
+    this.#deps.emitUtterance({ id, audio: q.audio, mime: q.mime, kind: 'tool' })
     this.#scheduleDelay()
     const now = this.#now()
     this.#emitTimeline({
@@ -1673,13 +1726,53 @@ export class VoiceCallManager {
       kind: 'decision',
       class: 'TOOL',
       id,
-      variant: idx + 1,
+      variant: q.variant,
       played: true,
-      latencyMs: Math.max(0, now - decidedAt),
-      text: text.slice(0, EVAL_TAIL_MAX_CHARS),
-      reason: live ? `${category}/live` : category
+      latencyMs: Math.max(0, now - q.decidedAt),
+      text: q.text.slice(0, EVAL_TAIL_MAX_CHARS),
+      reason: this.#toolReason(q, null)
     })
-    this.#emitTimeline({ ts: now, kind: 'clip-emitted', class: 'TOOL', id, variant: idx + 1 })
+    this.#emitTimeline({ ts: now, kind: 'clip-emitted', class: 'TOOL', id, variant: q.variant })
+  }
+
+  /**
+   * Motivo na timeline: `<categoria>[/live][/after-<filler|delay|audio>][/<por que caiu>]` (`live` =
+   * síntese ao vivo; `after-…` = esperou na fila o fim do preâmbulo/frase de espera/outro áudio).
+   */
+  #toolReason(q: QueuedToolPhrase, dropped: string | null): string {
+    return [q.category, q.live ? 'live' : null, q.wait ? `after-${q.wait}` : null, dropped]
+      .filter(Boolean)
+      .join('/')
+  }
+
+  /** O áudio que tocava terminou: a frase na fila toca agora (ou cai, se não cabe mais). */
+  #flushQueuedTool(): void {
+    const q = this.#toolQueued
+    if (!q || !this.#sessionId) return
+    this.#toolQueued = null
+    const why = this.#toolDropReason()
+    if (why) return this.#toolQueuedSkip(q, why)
+    this.#emitToolPhrase(q)
+  }
+
+  /** Tira da fila a frase de ferramenta que ainda não tocou (motivo na timeline). */
+  #dropQueuedTool(reason: string): void {
+    const q = this.#toolQueued
+    if (!q) return
+    this.#toolQueued = null
+    this.#toolQueuedSkip(q, reason)
+  }
+
+  #toolQueuedSkip(q: QueuedToolPhrase, reason: string): void {
+    this.#emitTimeline({
+      ts: this.#now(),
+      kind: 'decision',
+      class: 'TOOL',
+      variant: q.variant,
+      played: false,
+      reason: this.#toolReason(q, reason),
+      text: q.text.slice(0, EVAL_TAIL_MAX_CHARS)
+    })
   }
 
   /**
@@ -1697,11 +1790,15 @@ export class VoiceCallManager {
     })
   }
 
-  /** Descarta a frase de ferramenta em voo; `cancelPlaying` corta a que está tocando (fade). */
-  #resetToolPhrase(cancelPlaying: boolean): void {
+  /**
+   * Descarta a frase de ferramenta em voo e a da fila (`reason` na timeline); `cancelPlaying` corta
+   * a que está tocando (fade).
+   */
+  #resetToolPhrase(cancelPlaying: boolean, reason = 'cancelled'): void {
     this.#toolGen++
     this.#toolAbort?.abort()
     this.#toolAbort = null
+    this.#dropQueuedTool(reason)
     const id = this.#toolUttId
     if (cancelPlaying && id) {
       this.#toolUttId = null

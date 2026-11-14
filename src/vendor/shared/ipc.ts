@@ -119,7 +119,10 @@ export const IPC = {
     readFile: 'fs:readFile',
     pickDirectory: 'fs:pickDirectory',
     homeDir: 'fs:homeDir',
-    mkdir: 'fs:mkdir'
+    mkdir: 'fs:mkdir',
+    rename: 'fs:rename',
+    remove: 'fs:remove',
+    index: 'fs:index'
   },
   viewer: {
     open: 'viewer:open',
@@ -519,6 +522,12 @@ export type VoiceSettingsView = VoiceSettingsMap
 export interface VoiceLayersInput {
   chat?: unknown
   persona?: unknown
+  /**
+   * Assinatura de app do chat/persona dessas camadas (`{ appSignature, appSignatureCustom }` da
+   * config): os pedidos de voz (ditado) levam os mesmos headers de atribuição do chat. Ausente = a
+   * padrão. A resolução da voz não usa.
+   */
+  signature?: unknown
 }
 
 /**
@@ -651,6 +660,8 @@ export interface VoiceApi {
       text?: string
       /** `VoiceTtsChoice` de uma persona/chat: o teste/prévia sai com ela (não com a deste dispositivo). */
       tts?: unknown
+      /** Assinatura de app dessa persona/chat (headers de atribuição da request; ausente = a padrão). */
+      signature?: unknown
     }): Promise<TtsSynthResult>
     clips: {
       /**
@@ -658,13 +669,25 @@ export interface VoiceApi {
        * emitindo `voice:tts:clips:progress` a cada clipe. Cache válido (mesma voz/definição) é
        * reutilizado; voz muda → gera no diretório da voz nova.
        */
-      generate(input?: { tts?: unknown }): Promise<TtsClipsView>
+      generate(input?: {
+        tts?: unknown
+        call?: boolean
+        signature?: unknown
+      }): Promise<TtsClipsView>
       /**
        * Cache de clipes da voz atual (null = ainda não gerados). `input.tts` (gerar/listar) = a voz
        * de uma persona/chat (`VoiceTtsChoice`) em vez da deste dispositivo — "Gerar clipes desta
-       * voz" (nunca gerados sozinhos: uma API paga só com o clique do usuário).
+       * voz" (nunca gerados sozinhos: uma API paga só com o clique do usuário); `input.call: true`
+       * = a voz da chamada em andamento (a da persona/chat decidida no início dela — o dock confere
+       * e gera os clipes que a chamada toca; sem chamada = a deste dispositivo). `signature` (gerar)
+       * = a assinatura de app da persona/chat do editor (headers de atribuição; a chamada usa a do
+       * chat dela; ausente = a padrão).
        */
-      list(input?: { tts?: unknown }): Promise<TtsClipsView | null>
+      list(input?: {
+        tts?: unknown
+        call?: boolean
+        signature?: unknown
+      }): Promise<TtsClipsView | null>
     }
     /** Vozes do motor local atual (com estado de instalação) + sugestões livres para a API. */
     voices(): Promise<TtsVoicesView>
@@ -977,6 +1000,11 @@ export interface VoiceCallTimelineEvent {
     | 'decision'
     /** Clipe (preâmbulo/frase de demora) emitido ao renderer. */
     | 'clip-emitted'
+    /**
+     * Frase de ferramenta pronta esperando na fila o fim do áudio tocando (`reason` =
+     * `after-filler`|`after-delay`|`after-audio`) — toca logo depois dele (main).
+     */
+    | 'clip-queued'
     /** Clipe cancelado (filler interrompido pela 1ª sentença/reset). */
     | 'clip-cancelled'
     /** Sentença da resposta emitida ao renderer. */
@@ -1106,9 +1134,14 @@ export interface ClearApi {
       skills?: string[],
       /**
        * Extras da mensagem: `voice` = texto ditado no composer (`{ source: 'dictation' }` — o main
-       * só aceita ditado daqui; a fala da chamada é marcada pelo próprio main).
+       * só aceita ditado daqui; a fala da chamada é marcada pelo próprio main). `openFile` = arquivo
+       * selecionado (1.13.0, `meta.openFile`): o host valida e normaliza pela raiz do chat; num
+       * chat de outro dispositivo vai no comando remoto `send` (`meta.openFile`).
        */
-      opts?: { voice?: import('./voiceCallMarks').VoiceMessageMeta }
+      opts?: {
+        voice?: import('./voiceCallMarks').VoiceMessageMeta
+        openFile?: { path: string }
+      }
     ): Promise<{ queued: boolean }>
     /** ⚡: aborta o que está rodando e injeta a mensagem já. */
     forceSend(queuedId: string): Promise<void>
@@ -1183,6 +1216,20 @@ export interface ClearApi {
     homeDir(): Promise<string>
     /** Cria uma pasta (pai precisa existir; erro se já existir). Retorna o caminho absoluto. */
     mkdir(path: string): Promise<string>
+    /**
+     * Aba Arquivos → Renomear: `path` (absoluto ou relativo à raiz) ganha `newName` na mesma pasta,
+     * com o confinamento do chat (como as tools de arquivo). Nunca sobrescreve. Devolve o caminho
+     * novo. Só em chats executados neste dispositivo.
+     */
+    rename(chatId: string, path: string, newName: string): Promise<string>
+    /** Aba Arquivos → Excluir (já confirmado na UI): lixeira do sistema se houver, senão apaga. */
+    remove(chatId: string, path: string): Promise<'trash' | 'deleted'>
+    /**
+     * Índice da raiz do chat para o popup de `@` (caminhos relativos com `/`, pastas com `/` no
+     * fim; ignora .git, node_modules e o .gitignore como o find_files). null = chat executado em
+     * outro dispositivo (o popup lista pasta por pasta pela fonte remota).
+     */
+    index(chatId: string): Promise<{ entries: string[]; truncated: boolean } | null>
   }
   /** Visualizador de arquivos — só arquivos da allowlist do main (ver SPEC). */
   viewer: {

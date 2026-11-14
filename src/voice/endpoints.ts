@@ -22,7 +22,7 @@ import {
   voiceProviderSupport
 } from '@shared/voiceCatalog'
 import { providerKind } from '@shared/providerKinds'
-import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
+import { appSignatureHeadersOf, type AppSignatureConfig } from '@shared/appSignatures'
 import type { Provider } from '@shared/types'
 
 export interface VoiceSettings {
@@ -63,23 +63,17 @@ const ENDPOINT_RUNTIME = ['baseUrl', 'apiKey', 'providerKind', 'extraBody', 'app
 
 /**
  * Assinatura de app de um contexto (a config do chat/persona — `appSignature` + a personalizada;
- * = `AppSignatureConfig` do desktop) — null = sem contexto (a padrão).
+ * `AppSignatureConfig` vendorado do desktop) — null = sem contexto (a padrão).
  */
-export type VoiceSignature = {
-  appSignature?: string | null
-  appSignatureCustom?: { referer: string; title: string } | null
-} | null
+export type VoiceSignature = AppSignatureConfig | null
 
 /**
  * Headers de atribuição (`HTTP-Referer`/`X-Title`) das requests de voz feitas num contexto — as
- * MESMAS regras das requests do chat (= `appSignatureHeadersOf` do desktop): a assinatura da config;
- * sem contexto/sem assinatura = a padrão (ClearChat); 'none' = nenhum.
+ * MESMAS regras das requests do chat (`appSignatureHeadersOf` vendorado do desktop): a assinatura
+ * da config; sem contexto/sem assinatura = a padrão (ClearChat); 'none' = nenhum.
  */
 export function voiceAppHeaders(sig?: VoiceSignature): Record<string, string> {
-  return resolveAppSignatureHeaders(
-    sig?.appSignature || DEFAULT_APP_SIGNATURE,
-    sig?.appSignatureCustom ?? undefined
-  )
+  return appSignatureHeadersOf(sig)
 }
 
 /**

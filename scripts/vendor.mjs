@@ -103,7 +103,12 @@ const GROUPS = {
       'datetime.ts',
       // 1.12.0: busca nativa de ferramentas (modo por request, array tools da Messages API,
       // `native` gravação/reenvio/filtro, carregadas à força, toolSearchCaps, textos da UI)
-      'toolSearch.ts'
+      'toolSearch.ts',
+      // 1.13.0: arquivo selecionado (texto fixo enviado ao modelo, normalização do caminho,
+      // `meta.openFile` do send/force remoto) e as menções `@caminho` (tokens fora de código,
+      // popup do composer)
+      'openFile.ts',
+      'pathMentions.ts'
     ]
   },
   desktop: {

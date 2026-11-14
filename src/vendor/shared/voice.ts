@@ -114,6 +114,12 @@ export interface SttEndpointConfig {
   /** Tipo do provedor salvo, preenchido SÓ pelo main (decide os `params` da família). */
   providerKind?: string
   /**
+   * Headers de atribuição (assinatura de app — `HTTP-Referer`/`X-Title`, `appSignatureHeadersOf`)
+   * da request de transcrição, preenchidos SÓ pelo main a partir da config do chat/persona do
+   * pedido (sem contexto = a padrão) — os MESMOS das requests do chat; nunca gravados.
+   */
+  appHeaders?: Record<string, string>
+  /**
    * Parâmetros do modelo por família de API (`temperature`, `prompt` — `@shared/voiceParams`): só
    * os escolhidos (aditivo). Nas settings deste dispositivo não sincroniza (1.9.0); na escolha de
    * uma persona/chat (`VoiceSttChoice.api.params`) vai junto com ela.
@@ -207,6 +213,13 @@ export interface TtsEndpointConfig {
    * direta (REST `/v1/text-to-speech` + WebSocket na chamada — `voice/elevenlabs*.ts`).
    */
   providerKind?: string
+  /**
+   * Headers de atribuição (assinatura de app — `HTTP-Referer`/`X-Title`, `appSignatureHeadersOf`)
+   * do `/audio/speech`, preenchidos SÓ pelo main a partir da config do chat/persona do pedido (sem
+   * contexto = a padrão) — os MESMOS das requests do chat; a ElevenLabs direta e o servidor da GPU
+   * não os recebem. Nunca gravados.
+   */
+  appHeaders?: Record<string, string>
   /**
    * ElevenLabs direta: a chamada usa o WebSocket multi-contexto (texto em streaming) quando o
    * modelo aceita. Ausente = ligado (padrão); `false` = força HTTP por frase. Gravado só quando
@@ -1811,6 +1824,24 @@ export function applyTtsChoice(
       ...(device.gpu?.params ? { params: device.gpu.params } : {})
     }
   }
+}
+
+/**
+ * De qual voz são os clipes que o renderer pede (`voice:tts:clips:list|generate`): `input.tts` = a
+ * escolha de uma persona/chat ("Gerar clipes desta voz"); `input.call: true` = a voz da CHAMADA em
+ * andamento (`callTts` — a da persona/chat decidida no início dela; null = a deste dispositivo) —
+ * o dock confere e gera os clipes que a chamada vai tocar (antes ele olhava a voz deste
+ * dispositivo: com a voz da persona/chat sem clipes, o aviso sumia, "Gerar clipes" gerava para a
+ * voz errada e as frases de ferramenta saíam ao vivo); nada = a deste dispositivo. Puro.
+ */
+export function clipsTtsChoice(
+  input: unknown,
+  callTts: VoiceTtsChoice | null | undefined
+): VoiceTtsChoice | null {
+  const o = asObject(input)
+  const explicit = normalizeVoiceTtsChoice(o?.tts)
+  if (explicit) return explicit
+  return o?.call === true ? (callTts ?? null) : null
 }
 
 /**

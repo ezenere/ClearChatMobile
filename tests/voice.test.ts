@@ -984,13 +984,14 @@ describe('ditado e chamada de voz no host do celular', () => {
     const tool = h.stack.repo.path(sid).find((m) => m.message.role === 'tool')!
     expect(tool.message.content).toBe('Chamada encerrada pelo agente.')
     // assinatura de app (uso real, 2026-11-14 — "Unknown" na atividade do OpenRouter): a
-    // transcrição da chamada leva o HTTP-Referer/X-Title do chat (a fala também, pelo
-    // `api.appHeaders` que o `/audio/speech` vendorado do desktop manda)
-    const stt = h.llm.voice.log
-      .slice(logFrom)
-      .filter((l) => l.path.endsWith('/audio/transcriptions'))
+    // transcrição da chamada leva o HTTP-Referer/X-Title do chat, e a fala também (pelo
+    // `api.appHeaders` que o `/audio/speech` vendorado do desktop manda desde 8ea14ae)
+    const voiceLog = h.llm.voice.log.slice(logFrom)
+    const stt = voiceLog.filter((l) => l.path.endsWith('/audio/transcriptions'))
+    const tts = voiceLog.filter((l) => l.path.endsWith('/audio/speech'))
     expect(stt.length).toBeGreaterThan(0)
-    for (const l of stt)
+    expect(tts.length).toBeGreaterThan(0)
+    for (const l of [...stt, ...tts])
       expect(l.appHeaders).toEqual({ 'HTTP-Referer': 'https://cline.bot', 'X-Title': 'Cline' })
     // registro: o marcador vai como memory-extraction + voiceCall (§4.3.8)
     await h.stack.writer.flush(chatId)
