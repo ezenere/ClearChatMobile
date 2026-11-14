@@ -706,6 +706,24 @@ export class LocalStore {
     return this.listChats().find((c) => c.id === chatId) ?? null
   }
 
+  /**
+   * A escolha de fala (`config.voice.tts`, crua) de toda persona e todo chat do cache — a limpeza
+   * dos clipes de voz nunca apaga os de uma voz em uso.
+   */
+  voiceTtsChoices(): unknown[] {
+    const out: unknown[] = []
+    for (const r of this.sql.all<{ plain: string | null }>(
+      "SELECT plain FROM records WHERE type IN ('preset', 'chat') AND deleted = 0 AND plain IS NOT NULL"
+    )) {
+      const config = parse(r.plain)?.config
+      const voice =
+        config && typeof config === 'object' ? (config as Record<string, unknown>).voice : null
+      const tts = voice && typeof voice === 'object' ? (voice as Record<string, unknown>).tts : null
+      if (tts && typeof tts === 'object') out.push(tts)
+    }
+    return out
+  }
+
   /** Persona (nome/ícone) de cada registro `preset`. */
   presets(): Map<string, { name: string; icon: string }> {
     const out = new Map<string, { name: string; icon: string }>()

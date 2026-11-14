@@ -1,16 +1,23 @@
 // Clipes da chamada de voz no celular (preâmbulos, frases de ferramenta e "obrigado por aguardar") — adaptação de
 // ClearChatDesktop/src/main/voice/clips.ts (shim gerado em src/vendor/desktop/voice/clips.ts: o
 // `VoiceCallManager` vendorado importa daqui o tipo `ClipClass`). O desktop grava os clipes em
-// `<userData>/voice-clips/<voz>` com node:fs + hash-wasm; aqui a MESMA definição (o pool da classe,
-// voz, modelo, parâmetros) vira um hash POR CLASSE e os bytes ficam num `ClipStore` injetado (no
-// aparelho: `Documents/voice-clips/`, `src/voice/native.ts`) — o cache é por voz (a voz entra no
-// hash): a voz de uma persona tem os clipes dela. Classes: `FILLER` (o pool de preâmbulos), `TOOL`
-// (as frases de ferramenta) e `THANKS` (o "obrigado por aguardar" — `delayPhrases.thanksPool`);
-// mudar as frases de uma classe não invalida as outras (hash por classe — o de `FILLER` é o mesmo
-// de antes). Clipe ausente ou de definição velha → null: o preâmbulo não toca; a frase de
-// ferramenta e o agradecimento são sintetizados ao vivo (= desktop). Classes antigas
-// (interjeições "Uhum/Aham", saíram em 2026-11-12) contam como velhas e somem na próxima geração.
-// Clipes só são gerados com o clique do usuário (uma API paga). Sem React Native (testável no Node).
+// `<userData>/voice-clips/<voz>/<configuração>` com node:fs + hash-wasm; aqui a MESMA definição (o
+// pool da classe, voz, modelo, parâmetros) vira um hash POR CLASSE e os bytes ficam num `ClipStore`
+// injetado (no aparelho: `Documents/voice-clips/`, `src/voice/native.ts`) — o cache é por
+// CONFIGURAÇÃO de voz (`clipScope` = voz + os 16 hex de `clipConfigKey`, a mesma chave do desktop:
+// provedor, modelo, voz, parâmetros): a voz deste aparelho e a de uma persona com o MESMO id de voz
+// mas outro modelo/instruções convivem (antes a geração de uma apagava as chaves `<voz>__…` da outra
+// e cada lado via o outro "faltando"). Classes: `FILLER` (o pool de preâmbulos), `TOOL` (as frases
+// de ferramenta) e `THANKS` (o "obrigado por aguardar" — `delayPhrases.thanksPool`); mudar as frases
+// de uma classe não invalida as outras (hash por classe — o de `FILLER` é o mesmo de antes). Clipe
+// ausente ou de definição velha → null: o preâmbulo não toca; a frase de ferramenta e o
+// agradecimento são sintetizados ao vivo (= desktop). Chaves do formato anterior (`<voz>__<hash>…`,
+// sem a configuração — o hash da classe já era da configuração) continuam tocando e são copiadas
+// para a chave nova na próxima geração, sem sintetizar. Limpeza (`pruneClips`, depois de cada
+// geração): as vozes em uso (a daqui, as das personas/chats, a da chamada) nunca perdem clipes; um
+// conjunto sem voz em uso e sem uso há `CLIP_UNUSED_MAX_AGE_MS` sai. Classes antigas (interjeições
+// "Uhum/Aham", saíram em 2026-11-12) contam como velhas e somem na limpeza. Clipes só são gerados
+// com o clique do usuário (uma API paga). Sem React Native (testável no Node).
 //
 // Mudança sugerida no desktop: mover a parte pura de clips.ts para um módulo sem node:fs (ex.:
 // `clipsCore.ts`) para o celular vendorar em vez de copiar.
@@ -76,6 +83,80 @@ export function clipVoiceId(settings: TtsSettings): string {
     .replace(/^[^A-Za-z0-9]+/, '')
     .slice(0, 64)
   return safe || 'voz'
+}
+
+/**
+ * O que muda o SOM dos clipes além das frases (= `clipConfigPayload` do desktop): backend; na API
+ * o provedor (id + tipo), o modelo, a voz e os parâmetros do modelo (`api.params`, sem o
+ * `auto_mode` da ElevenLabs); no local o motor e a voz; na GPU motor, voz, passos e parâmetros.
+ * NÃO entram endereço/chave/headers (a assinatura de app varia por chat sem mudar o som),
+ * `elevenLabsWs` e `installed`. Puro.
+ */
+export function clipConfigPayload(settings: TtsSettings): Record<string, unknown> {
+  if (settings.backend === 'local')
+    return {
+      backend: 'local',
+      engine: settings.local?.engine ?? 'kokoro',
+      voice: settings.local?.voice ?? null
+    }
+  if (settings.backend === 'gpu') {
+    const g = settings.gpu
+    return {
+      backend: 'gpu',
+      engine: g?.engine ?? null,
+      voice: g?.voice ?? null,
+      steps: g?.steps ?? null,
+      params: g ? resolveGpuParams(g.engine, g.params?.[g.engine]) : null
+    }
+  }
+  const api = settings.api
+  return {
+    backend: 'api',
+    providerId: api.providerId?.trim() || null,
+    providerKind: api.providerKind ?? null,
+    model: api.model.trim(),
+    voice: (api.voice ?? '').trim() || null,
+    params: soundApiParams(api.params) ?? null
+  }
+}
+
+/** `api.params` só com o que muda o som (sem `elevenlabs.auto_mode`, famílias vazias fora). */
+function soundApiParams(params: TtsSettings['api']['params']): Record<string, unknown> | null {
+  if (!params) return null
+  const p = JSON.parse(JSON.stringify(params)) as Record<string, Record<string, unknown>>
+  if (p.elevenlabs) delete p.elevenlabs.auto_mode
+  for (const k of Object.keys(p)) if (!p[k] || !Object.keys(p[k]).length) delete p[k]
+  return Object.keys(p).length ? p : null
+}
+
+/** JSON com as chaves ordenadas (a ordem em que a UI gravou os parâmetros não muda a chave). */
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object')
+    return `{${Object.keys(v)
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson((v as Record<string, unknown>)[k])}`)
+      .join(',')}}`
+  return JSON.stringify(v ?? null)
+}
+
+/** Chave (sha256 hex) da configuração de voz — o mesmo valor do `clipConfigKey` do desktop. */
+export function clipConfigKey(settings: TtsSettings): string {
+  return bytesToHex(
+    sha256(new TextEncoder().encode(stableJson({ v: 1, ...clipConfigPayload(settings) })))
+  )
+}
+
+/** Nome guardável de uma chave (o mesmo saneamento do store em arquivos). */
+export const safeClipKey = (key: string): string => key.replace(/[^A-Za-z0-9_-]/g, '_')
+
+/**
+ * Conjunto de clipes de uma configuração de voz: `<voz>__<16 hex de clipConfigKey>` — o prefixo
+ * das chaves dela (a mesma voz efetiva dá sempre o mesmo conjunto: tela, editor, dock e chamada).
+ */
+export function clipScope(settings: TtsSettings): string {
+  return safeClipKey(`${clipVoiceId(settings)}__${clipConfigKey(settings).slice(0, 16)}`)
 }
 
 /**
@@ -147,29 +228,70 @@ export function clipsHash(
   return phrasesHash(settings, clipPhraseSet(fillerPool, toolPool, thanksPool))
 }
 
-/** Onde os bytes dos clipes ficam (aparelho: arquivos; testes: memória). */
+/**
+ * Onde os bytes dos clipes ficam (aparelho: arquivos; testes: memória). As chaves chegam já
+ * guardáveis (`safeClipKey`) e `list` devolve as guardadas no mesmo formato.
+ */
 export interface ClipStore {
   read(key: string): Promise<{ audio: Uint8Array; mime: string } | null>
   write(key: string, clip: { audio: Uint8Array; mime: string }): Promise<void>
-  /**
-   * Apaga os clipes da voz `voiceId` (chaves `<voz>__…`) que não estão em `keep` (definições velhas)
-   * e os do formato antigo (sem a voz na chave); os das outras vozes ficam.
-   */
-  prune(keep: readonly string[], voiceId: string): Promise<void>
+  /** Todas as chaves guardadas (limpeza). */
+  list(): Promise<string[]>
+  /** Apaga estas chaves (idempotente). */
+  remove(keys: readonly string[]): Promise<void>
+  /** Último uso de cada conjunto (`clipScope` → epoch ms), guardado junto dos clipes. */
+  readUsage(): Promise<Record<string, number>>
+  writeUsage(usage: Record<string, number>): Promise<void>
 }
 
-/** O clipe de chave `key` deve sair num `prune(keep, voiceId)`? (mesma regra nos dois stores). */
-export function prunable(key: string, keep: readonly string[], voiceId: string): boolean {
-  if (keep.includes(key)) return false
-  return !key.includes('__') || key.startsWith(`${voiceId}__`)
-}
-
-/** Chave de um clipe: hash da definição + classe + variante (nada de texto livre no nome). */
-export function clipKey(voiceId: string, hash: string, cls: ClipClass, n: number): string {
+function checkClip(cls: ClipClass, n: number): void {
   if (!CLIP_CLASSES.includes(cls)) throw new Error(`classe de clipe desconhecida: ${cls}`)
   if (!Number.isInteger(n) || n < 1 || n > CLIP_MAX_VARIANTS)
     throw new Error(`variante de clipe inválida: ${n}`)
-  return `${voiceId}__${hash.slice(0, 24)}_${cls}_${n}`
+}
+
+/**
+ * Chave de um clipe: conjunto da configuração (`clipScope`) + hash da classe + classe + variante
+ * (nada de texto livre no nome).
+ */
+export function clipKey(scope: string, hash: string, cls: ClipClass, n: number): string {
+  checkClip(cls, n)
+  return safeClipKey(`${scope}__${hash.slice(0, 24)}_${cls}_${n}`)
+}
+
+/**
+ * Chave do formato anterior (`<voz>__<hash da classe>_<CLASSE>_<n>`, sem a configuração): o hash
+ * da classe já cobria voz/modelo/parâmetros, então o clipe vale para a configuração que o gerou —
+ * lido como reserva e copiado para a chave nova na próxima geração.
+ */
+export function legacyClipKey(voiceId: string, hash: string, cls: ClipClass, n: number): string {
+  checkClip(cls, n)
+  return safeClipKey(`${voiceId}__${hash.slice(0, 24)}_${cls}_${n}`)
+}
+
+const NEW_KEY_RE = /^(.+__[0-9a-f]{16})__[0-9a-f]{24}_[A-Z]+_\d+$/
+const LEGACY_KEY_RE = /^(.+)__[0-9a-f]{24}_[A-Z]+_\d+$/
+/** O formato mais antigo (`<hash>_<CLASSE>_<n>`, sem a voz): não vale para ninguém. */
+const ANCIENT_KEY_RE = /^[0-9a-f]{24}_[A-Z]+_\d+$/
+
+/**
+ * Conjunto de uma chave guardada: `clipScope` no formato novo, `legacy:<voz>` no anterior, null
+ * no mais antigo (sem a voz) e em nomes desconhecidos.
+ */
+function scopeOfKey(key: string): string | null {
+  const m = NEW_KEY_RE.exec(key)
+  if (m) return m[1]
+  const l = LEGACY_KEY_RE.exec(key)
+  return l ? `legacy:${l[1]}` : null
+}
+
+/** Uma entrada da definição atual: a chave, a do formato anterior, classe, variante e texto. */
+export interface ClipEntry {
+  key: string
+  legacyKey: string
+  cls: ClipClass
+  n: number
+  text: string
 }
 
 /** Todas as chaves da definição atual (classe, variante, texto) — a chave leva o hash da classe. */
@@ -178,18 +300,50 @@ export function clipEntries(
   fillerPool?: readonly FillerPhrase[] | null,
   toolPool?: readonly ToolPhrase[] | null,
   thanksPool?: readonly string[] | null
-): { key: string; cls: ClipClass; n: number; text: string }[] {
+): ClipEntry[] {
   const set = clipPhraseSet(fillerPool, toolPool, thanksPool)
   const voice = clipVoiceId(settings)
+  const scope = clipScope(settings)
   return CLIP_CLASSES.flatMap((cls) => {
     const hash = clipClassHash(settings, cls, fillerPool, toolPool, thanksPool)
     return set[cls].map((text, i) => ({
-      key: clipKey(voice, hash, cls, i + 1),
+      key: clipKey(scope, hash, cls, i + 1),
+      legacyKey: legacyClipKey(voice, hash, cls, i + 1),
       cls,
       n: i + 1,
       text
     }))
   })
+}
+
+/** Bytes de uma entrada: a chave nova ou, sem ela, a do formato anterior (mesma definição). */
+async function readEntry(
+  store: ClipStore,
+  e: Pick<ClipEntry, 'key' | 'legacyKey'>
+): Promise<{ audio: Uint8Array; mime: string } | null> {
+  return (await store.read(e.key)) ?? (await store.read(e.legacyKey))
+}
+
+/** Conjunto sem voz em uso e sem uso há mais que isto sai na limpeza. */
+export const CLIP_UNUSED_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+/** A marca de uso é regravada no máximo 1× por isto por conjunto (a chamada lê clipes o tempo todo). */
+const USAGE_THROTTLE_MS = 60 * 60 * 1000
+const usageWritten = new WeakMap<ClipStore, Map<string, number>>()
+
+/** Marca o conjunto como usado agora (tocado, conferido ou gerado); falha = ignora. */
+async function markUsed(store: ClipStore, scope: string, force = false): Promise<void> {
+  const now = Date.now()
+  let seen = usageWritten.get(store)
+  if (!seen) usageWritten.set(store, (seen = new Map()))
+  const last = seen.get(scope)
+  if (!force && last !== undefined && now - last < USAGE_THROTTLE_MS) return
+  seen.set(scope, now)
+  try {
+    const usage = await store.readUsage()
+    await store.writeUsage({ ...usage, [scope]: now })
+  } catch {
+    // a marca não é essencial
+  }
 }
 
 /** Estado dos clipes da voz (CTA "Gerar clipes"): no total e por classe. */
@@ -211,11 +365,12 @@ export async function clipsStatus(
   const entries = clipEntries(settings, fillerPool, toolPool, thanksPool)
   for (const e of entries) {
     byClass[e.cls].total++
-    if (await store.read(e.key)) {
+    if (await readEntry(store, e)) {
       ready++
       byClass[e.cls].ready++
     }
   }
+  if (ready) await markUsed(store, clipScope(settings))
   return { total: entries.length, ready, byClass }
 }
 
@@ -232,20 +387,21 @@ export async function loadCurrentClipAudio(
   if (!CLIP_CLASSES.includes(cls)) return null
   const count = clipPhraseSet(fillerPool, toolPool, thanksPool)[cls].length
   if (!Number.isInteger(n) || n < 1 || n > count) return null
-  return store.read(
-    clipKey(
-      clipVoiceId(settings),
-      clipClassHash(settings, cls, fillerPool, toolPool, thanksPool),
-      cls,
-      n
-    )
-  )
+  const hash = clipClassHash(settings, cls, fillerPool, toolPool, thanksPool)
+  const clip = await readEntry(store, {
+    key: clipKey(clipScope(settings), hash, cls, n),
+    legacyKey: legacyClipKey(clipVoiceId(settings), hash, cls, n)
+  })
+  if (clip) await markUsed(store, clipScope(settings))
+  return clip
 }
 
 /**
- * Gera (sintetiza) os clipes da voz que faltam (preâmbulos, frases de ferramenta e agradecimentos) e apaga os de
- * definições velhas DESTA voz — os de outras vozes (personas) ficam. `synth` = a mesma síntese da
- * chamada (bytes completos). Progresso por clipe; cancelável. Só com o clique do usuário.
+ * Gera (sintetiza) os clipes da configuração de voz que faltam (preâmbulos, frases de ferramenta e
+ * agradecimentos) — os do formato anterior desta configuração são copiados, sem sintetizar — e
+ * apaga os de definições velhas DESTA configuração; os de outras configurações (outra persona,
+ * mesma voz com outro modelo/instruções) ficam. `synth` = a mesma síntese da chamada (bytes
+ * completos). Progresso por clipe; cancelável. Só com o clique do usuário.
  */
 export async function generateClips(opts: {
   store: ClipStore
@@ -258,6 +414,7 @@ export async function generateClips(opts: {
   onProgress?: (done: number, total: number) => void
 }): Promise<{ total: number; generated: number }> {
   const entries = clipEntries(opts.settings, opts.fillerPool, opts.toolPool, opts.thanksPool)
+  const scope = clipScope(opts.settings)
   const signal = opts.signal ?? new AbortController().signal
   let done = 0
   let generated = 0
@@ -265,28 +422,101 @@ export async function generateClips(opts: {
   for (const e of entries) {
     if (signal.aborted) throw new Error('cancelado')
     if (!(await opts.store.read(e.key))) {
-      const clip = await opts.synth(e.text, signal)
-      await opts.store.write(e.key, clip)
-      generated++
+      const old = await opts.store.read(e.legacyKey)
+      if (old) await opts.store.write(e.key, old)
+      else {
+        const clip = await opts.synth(e.text, signal)
+        await opts.store.write(e.key, clip)
+        generated++
+      }
     }
     opts.onProgress?.(++done, entries.length)
   }
-  await opts.store.prune(
-    entries.map((e) => e.key),
-    clipVoiceId(opts.settings)
+  // velhos DESTA configuração e os do formato mais antigo (sem a voz — não valem para ninguém)
+  const keep = new Set(entries.map((e) => e.key))
+  const stale = (await opts.store.list()).filter(
+    (k) => ANCIENT_KEY_RE.test(k) || (k.startsWith(`${scope}__`) && !keep.has(k))
   )
+  await opts.store.remove(stale)
+  await markUsed(opts.store, scope, true)
   return { total: entries.length, generated }
 }
 
-/** Store em memória (testes e fallback). */
+/**
+ * Limpeza (armazenamento limitado): `keep` = as settings RESOLVIDAS (`resolveTts`) de toda voz em
+ * uso — a deste aparelho, as das personas/chats e a da chamada. Os clipes da definição atual delas
+ * (inclusive os do formato anterior) nunca saem; os velhos delas (frases que mudaram) e os do
+ * formato mais antigo (sem a voz na chave) saem já; um conjunto que nenhuma delas usa ganha uma
+ * marca na 1ª vez que é visto e sai quando fica `maxAgeMs` sem uso. Nomes desconhecidos ficam.
+ */
+export async function pruneClips(
+  store: ClipStore,
+  opts: {
+    keep: readonly TtsSettings[]
+    fillerPool?: readonly FillerPhrase[] | null
+    toolPool?: readonly ToolPhrase[] | null
+    thanksPool?: readonly string[] | null
+    maxAgeMs?: number
+    now?: number
+  }
+): Promise<{ removed: string[] }> {
+  const now = opts.now ?? Date.now()
+  const maxAge = opts.maxAgeMs ?? CLIP_UNUSED_MAX_AGE_MS
+  const keepScopes = new Set<string>()
+  const keepKeys = new Set<string>()
+  for (const s of opts.keep) {
+    keepScopes.add(clipScope(s))
+    for (const e of clipEntries(s, opts.fillerPool, opts.toolPool, opts.thanksPool)) {
+      keepKeys.add(e.key)
+      keepKeys.add(e.legacyKey)
+    }
+  }
+  const usage = { ...(await store.readUsage()) }
+  const remove: string[] = []
+  const groups = new Map<string, string[]>()
+  for (const k of await store.list()) {
+    if (keepKeys.has(k)) continue
+    if (ANCIENT_KEY_RE.test(k)) {
+      remove.push(k) // formato mais antigo (sem a voz): não vale para ninguém
+      continue
+    }
+    const scope = scopeOfKey(k)
+    if (!scope) continue
+    if (keepScopes.has(scope)) {
+      remove.push(k) // definição velha de uma configuração em uso
+      continue
+    }
+    groups.set(scope, [...(groups.get(scope) ?? []), k])
+  }
+  for (const [scope, keys] of groups) {
+    const t = usage[scope]
+    if (t === undefined)
+      usage[scope] = now // 1ª vez vista sem voz em uso: começa a contar
+    else if (now - t > maxAge) {
+      remove.push(...keys)
+      delete usage[scope]
+    }
+  }
+  for (const scope of Object.keys(usage))
+    if (!groups.has(scope) && !keepScopes.has(scope)) delete usage[scope]
+  await store.remove(remove)
+  await store.writeUsage(usage)
+  return { removed: remove }
+}
+
+/** Store em memória (testes e fallback) — as chaves saneadas como no store em arquivos. */
 export function memoryClipStore(): ClipStore & { keys(): string[] } {
   const m = new Map<string, { audio: Uint8Array; mime: string }>()
+  let usage: Record<string, number> = {}
   return {
-    read: async (k) => m.get(k) ?? null,
-    write: async (k, c) => void m.set(k, c),
-    prune: async (keep, voiceId) => {
-      for (const k of [...m.keys()]) if (prunable(k, keep, voiceId)) m.delete(k)
+    read: async (k) => m.get(safeClipKey(k)) ?? null,
+    write: async (k, c) => void m.set(safeClipKey(k), c),
+    list: async () => [...m.keys()],
+    remove: async (keys) => {
+      for (const k of keys) m.delete(safeClipKey(k))
     },
+    readUsage: async () => ({ ...usage }),
+    writeUsage: async (u) => void (usage = { ...u }),
     keys: () => [...m.keys()]
   }
 }

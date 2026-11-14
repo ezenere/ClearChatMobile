@@ -68,6 +68,7 @@ export function createVoiceStack(d: VoiceStackDeps): VoiceStack {
     mic: d.mic,
     playback: d.playback,
     clips: d.clips,
+    ttsChoices: () => store.voiceTtsChoices(),
     bargeIn: d.bargeIn,
     ...(d.activationDb ? { activationDb: d.activationDb } : {}),
     setVoiceCallSource,

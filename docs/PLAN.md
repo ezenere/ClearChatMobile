@@ -337,7 +337,11 @@ Decisões:
 - O `transcribeAudio` vendorado monta `FormData` com `Blob` de bytes, que o RN não aceita: o celular
   tem uma cópia que monta o multipart em bytes (testada contra a vendorada no Node: mesmos campos).
 - Clipes: mesmas frases e mesmo payload de hash do desktop (pós-processamento próprio); bytes em
-  `Documents/voice-clips/`.
+  `Documents/voice-clips/`, um conjunto por CONFIGURAÇÃO de voz (`<voz>__<16 hex de clipConfigKey>`,
+  a mesma chave do desktop) — a voz deste aparelho e a de uma persona com o mesmo id de voz e outro
+  modelo/instruções convivem; chaves do formato anterior tocam como reserva e são copiadas na
+  geração; limpeza depois de cada geração (vozes em uso nunca perdem clipes; conjunto sem voz em uso
+  sai após 30 dias sem uso, marcas em `usage.json`).
 - Microfone de teste por polling (`/mic/next`), não por deep link: entregar um intent pausa a
   Activity, e o app trata como segundo plano (encerra a chamada) — o mesmo vale para o diálogo de
   permissão do microfone, que agora é ignorado nessa regra.

@@ -24,9 +24,11 @@ import type { VoiceCallTimelineEvent } from '@shared/ipc'
 import type { AgentEvent, Chat, ChatConfig, Provider, Session, StoredMessage } from '@shared/types'
 import {
   DEFAULT_BARGE_IN,
+  normalizeVoiceTtsChoice,
   resolveVoiceCallConfig,
   VOICE_CALL_INACTIVE,
   type ResolvedVoiceCall,
+  type TtsSettings,
   type TurnTiming,
   type VoiceCallConfig,
   type VoiceCallState,
@@ -42,9 +44,11 @@ import { VoiceCallManager, type VoiceCallAmend } from '@vendor/desktop/voice/cal
 import { classifyVoiceError, voiceProviderLabel } from '@vendor/desktop/voice/callErrors'
 import { synthesizeBlock } from '@vendor/desktop/voice/tts'
 import {
+  clipScope,
   clipsStatus,
   generateClips,
   loadCurrentClipAudio,
+  pruneClips,
   type ClipClass,
   type ClipStore
 } from './clips'
@@ -122,6 +126,11 @@ export interface CallDeps {
   mic(): MicSource
   playback: PlaybackBackend
   clips: ClipStore
+  /**
+   * As escolhas de fala (`config.voice.tts`, cruas) de toda persona e todo chat deste aparelho — a
+   * limpeza dos clipes nunca apaga os de uma voz em uso. Ausente = sem limpeza.
+   */
+  ttsChoices?(): unknown[]
   /**
    * "Falar por cima da resposta" (com fone): o microfone ouve durante a fala do assistente — falar
    * por cima abaixa a voz dele (ducking) e insistir interrompe. Padrão: false (meia-duplex surda).
@@ -243,6 +252,7 @@ export class VoiceCallController {
   private lastPlaybackAt = 0
   private lastPhase: VoiceCallState['phase'] = 'listening'
   private generation = 0
+  private pruning: Promise<void> = Promise.resolve()
 
   constructor(deps: CallDeps) {
     this.d = deps
@@ -717,6 +727,43 @@ export class VoiceCallController {
     } finally {
       if (mine) await this.refreshClips()
     }
+    // configuração nova gerada: os conjuntos sem voz em uso (e sem uso há 30 dias) podem sair
+    void this.pruneClips()
+  }
+
+  /**
+   * Limpeza dos clipes (`pruneClips`): as vozes em uso — a deste aparelho, a da chamada e a de toda
+   * persona/chat, resolvidas como a geração e a chamada as resolvem — ficam sempre. Uma por vez;
+   * falha só vai para o log.
+   */
+  pruneClips(): Promise<void> {
+    this.pruning = this.pruning
+      .then(async () => {
+        if (!this.d.ttsChoices) return
+        const device = this.deviceSettings()
+        const keep = new Map<string, TtsSettings>()
+        const add = (v: VoiceSettings): void => {
+          const r = resolveTts(v.tts, this.d.provider)
+          if (!('block' in r)) keep.set(clipScope(r.settings), r.settings)
+        }
+        add(device)
+        add(this.settings())
+        for (const raw of this.d.ttsChoices()) {
+          const tts = normalizeVoiceTtsChoice(raw)
+          if (tts) add(settingsWith(device, { tts, stt: null, language: null }))
+        }
+        const { removed } = await pruneClips(this.d.clips, {
+          keep: [...keep.values()],
+          fillerPool: device.voiceCallDefaults.fillers.pool,
+          toolPool: device.voiceCallDefaults.toolPhrases.pool,
+          thanksPool: device.voiceCallDefaults.delayPhrases.thanksPool
+        })
+        if (removed.length) this.d.log?.(`clipes sem uso removidos: ${removed.length}`)
+      })
+      .catch((e: unknown) =>
+        this.d.log?.(`limpeza dos clipes: ${e instanceof Error ? e.message : String(e)}`)
+      )
+    return this.pruning
   }
 
   // ---------------- captura + porta de fala ----------------

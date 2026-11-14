@@ -11,7 +11,7 @@ import {
   type AudioStatus,
   type AudioStreamBuffer
 } from 'expo-audio'
-import { prunable, type ClipStore } from './clips'
+import { safeClipKey, type ClipStore } from './clips'
 import { FrameAssembler, MIC_SAMPLE_RATE, type MicFrame, type MicSource } from './mic'
 import type { PlaybackBackend, PlaybackHandle } from './player'
 
@@ -212,10 +212,14 @@ export const expoPlayback: PlaybackBackend = {
   }
 }
 
-/** Cache dos clipes dos preâmbulos (derivado; regerado em cada aparelho — §4.4). */
+/**
+ * Cache dos clipes dos preâmbulos (derivado; regerado em cada aparelho — §4.4): um `<chave>.bin`
+ * por clipe e as marcas de uso dos conjuntos em `usage.json` (limpeza — `pruneClips`).
+ */
 export function fileClipStore(): ClipStore {
   const dir = new Directory(Paths.document, 'voice-clips')
-  const fileOf = (key: string) => new File(dir, `${key.replace(/[^A-Za-z0-9_-]/g, '_')}.bin`)
+  const fileOf = (key: string) => new File(dir, `${safeClipKey(key)}.bin`)
+  const usageFile = () => new File(dir, 'usage.json')
   return {
     async read(key) {
       const f = fileOf(key)
@@ -239,13 +243,39 @@ export function fileClipStore(): ClipStore {
       f.create({ overwrite: true })
       f.write(out)
     },
-    async prune(keep, voiceId) {
-      if (!dir.exists) return
-      const safe = (k: string) => k.replace(/[^A-Za-z0-9_-]/g, '_')
-      const names = keep.map((k) => `${safe(k)}.bin`)
-      // nomes já saneados: a mesma regra do `prunable` sobre o nome sem a extensão
-      for (const e of dir.list())
-        if (e instanceof File && prunable(e.name, names, `${safe(voiceId)}`)) e.delete()
+    async list() {
+      if (!dir.exists) return []
+      return dir
+        .list()
+        .filter((e): e is File => e instanceof File && e.name.endsWith('.bin'))
+        .map((e) => e.name.slice(0, -'.bin'.length))
+    },
+    async remove(keys) {
+      for (const k of keys) {
+        const f = fileOf(k)
+        if (f.exists) f.delete()
+      }
+    },
+    async readUsage() {
+      const f = usageFile()
+      if (!f.exists) return {}
+      try {
+        const o = JSON.parse(new TextDecoder().decode(await f.bytes())) as unknown
+        if (!o || typeof o !== 'object' || Array.isArray(o)) return {}
+        return Object.fromEntries(
+          Object.entries(o as Record<string, unknown>).filter(
+            (e): e is [string, number] => typeof e[1] === 'number' && Number.isFinite(e[1])
+          )
+        )
+      } catch {
+        return {}
+      }
+    },
+    async writeUsage(usage) {
+      if (!dir.exists) dir.create({ intermediates: true })
+      const f = usageFile()
+      f.create({ overwrite: true })
+      f.write(new TextEncoder().encode(JSON.stringify(usage)))
     }
   }
 }

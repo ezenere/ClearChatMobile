@@ -24,7 +24,8 @@ import {
   DEFAULT_TOOL_PHRASE_POOL,
   DEFAULT_STT_SETTINGS,
   DEFAULT_TTS_SETTINGS,
-  type SttSettings
+  type SttSettings,
+  type TtsSettings
 } from '../src/vendor/shared/voice'
 import { DEFAULT_ACTIVATION_DB } from '../src/vendor/shared/speechGate'
 import { transcribeAudio as vendoredTranscribe } from '../src/vendor/desktop/voice/stt'
@@ -35,15 +36,23 @@ import { transcribeAudio, SttError } from '../src/voice/stt'
 import { resetNoiseFloor, TranscribeSession } from '../src/voice/session'
 import { audioSettingOut, resolveStt, resolveTts, readVoiceSettings } from '../src/voice/endpoints'
 import { outgoingPlain } from '../src/data/legacy'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import {
   CLIP_CLASSES,
+  CLIP_UNUSED_MAX_AGE_MS,
   clipClassHash,
+  clipConfigKey,
   clipPhraseSet,
+  clipScope,
   clipsHash,
   clipsStatus,
+  clipVoiceId,
   generateClips,
+  legacyClipKey,
   loadCurrentClipAudio,
-  memoryClipStore
+  memoryClipStore,
+  pruneClips
 } from '../src/voice/clips'
 import {
   FakeMicSource,
@@ -734,6 +743,196 @@ describe('clipes e fila de reprodução', () => {
     const st2 = await clipsStatus(store, tts, null, null, ['Valeu pela paciência.'])
     expect(st2.byClass.THANKS).toEqual({ total: 1, ready: 0 })
     expect(st2.byClass.FILLER.ready).toBe(DEFAULT_FILLER_POOL.length)
+  })
+
+  // a mesma voz da Fish Audio (pelo OpenRouter) com modelo/instruções próprios — o bug real
+  const FISH = '6a93f84bfc184edaab0e36b9f7110759'
+  const fish = (model: string, params: Record<string, string | number | boolean>): TtsSettings => ({
+    ...DEFAULT_TTS_SETTINGS,
+    backend: 'api' as const,
+    api: {
+      providerId: 'p-or',
+      model,
+      voice: FISH,
+      params: { openrouter: params },
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-falsa',
+      providerKind: 'openrouter'
+    }
+  })
+  /** TTS falso: o "áudio" diz a configuração e a frase que o gerou. */
+  const synthOf = (s: { api: { model: string; params?: unknown } }, calls: string[]) => {
+    return async (t: string) => {
+      calls.push(t)
+      return {
+        audio: new TextEncoder().encode(`${s.api.model}|${JSON.stringify(s.api.params)}|${t}`),
+        mime: 'audio/wav'
+      }
+    }
+  }
+  const said = (a: { audio: Uint8Array } | null) => (a ? new TextDecoder().decode(a.audio) : '')
+  const totalClips =
+    DEFAULT_FILLER_POOL.length + DEFAULT_TOOL_PHRASE_POOL.length + DEFAULT_THANKS_POOL.length
+
+  it('bug: a voz deste aparelho e a da persona com o MESMO id de voz e outro modelo/instruções convivem — cada uma completa, tocando o próprio áudio', async () => {
+    // uso real (2026-11-14): gerar a de um lado apagava as chaves `<voz>__…` do outro e cada um
+    // via o outro "faltando"
+    const store = memoryClipStore()
+    const device = fish('fish-audio/s1', { instructions: 'fala calma' })
+    const persona = fish('fish-audio/drama-3', { instructions: 'fala animada' })
+    expect(clipVoiceId(device)).toBe(clipVoiceId(persona))
+    expect(clipScope(device)).not.toBe(clipScope(persona))
+    const calls: string[] = []
+    await generateClips({ store, settings: device, synth: synthOf(device, calls) })
+    await generateClips({ store, settings: persona, synth: synthOf(persona, calls) })
+    expect(calls).toHaveLength(totalClips * 2)
+    for (const [s, tag] of [
+      [device, 'fish-audio/s1|{"openrouter":{"instructions":"fala calma"}}'],
+      [persona, 'fish-audio/drama-3|{"openrouter":{"instructions":"fala animada"}}']
+    ] as const) {
+      const st = await clipsStatus(store, s)
+      expect(st.ready).toBe(totalClips)
+      expect(said(await loadCurrentClipAudio(store, s, null, 'FILLER', 1))).toBe(
+        `${tag}|${DEFAULT_FILLER_POOL[0].text}`
+      )
+      expect(said(await loadCurrentClipAudio(store, s, null, 'TOOL', 2))).toBe(
+        `${tag}|${DEFAULT_TOOL_PHRASE_POOL[1].text}`
+      )
+    }
+    // regerar a deste aparelho com outras instruções (e de novo a mesma): a da persona fica intacta
+    const device2 = fish('fish-audio/s1', { instructions: 'bem devagar' })
+    await generateClips({ store, settings: device2, synth: synthOf(device2, calls) })
+    await generateClips({ store, settings: device, synth: synthOf(device, calls) })
+    expect(calls).toHaveLength(totalClips * 3)
+    expect((await clipsStatus(store, persona)).ready).toBe(totalClips)
+    expect((await clipsStatus(store, device)).ready).toBe(totalClips)
+    expect((await clipsStatus(store, device2)).ready).toBe(totalClips)
+    expect(said(await loadCurrentClipAudio(store, persona, null, 'THANKS', 1))).toContain('drama-3')
+    // frases mudaram: só as velhas DESTA configuração saem
+    const tools = [{ text: 'Vou ver isso.', categories: ['generic' as const] }]
+    await generateClips({ store, settings: device, toolPool: tools, synth: synthOf(device, calls) })
+    expect(calls).toHaveLength(totalClips * 3 + 1)
+    const scopeOf = (k: string) => k.slice(0, clipScope(device).length)
+    expect(store.keys().filter((k) => scopeOf(k) === clipScope(device))).toHaveLength(
+      DEFAULT_FILLER_POOL.length + 1 + DEFAULT_THANKS_POOL.length
+    )
+    expect((await clipsStatus(store, persona)).ready).toBe(totalClips)
+  })
+
+  it('chave da configuração: a mesma voz efetiva dá o mesmo conjunto; o que muda o som muda; = desktop', () => {
+    const a = fish('fish-audio/s1', { instructions: 'calma', speed: 1.2 })
+    const k = clipConfigKey(a)
+    // chave/endereço/assinatura/transporte e a ordem dos parâmetros não mudam o som
+    expect(
+      clipConfigKey({ ...a, api: { ...a.api, apiKey: 'outra', baseUrl: 'https://x/v1' } })
+    ).toBe(k)
+    expect(clipConfigKey({ ...a, api: { ...a.api, appHeaders: { 'X-Title': 'P' } } })).toBe(k)
+    expect(clipConfigKey({ ...a, api: { ...a.api, elevenLabsWs: false } })).toBe(k)
+    expect(
+      clipConfigKey({
+        ...a,
+        api: { ...a.api, params: { openrouter: { speed: 1.2, instructions: 'calma' } } }
+      })
+    ).toBe(k)
+    const differ = [
+      fish('fish-audio/drama-3', { instructions: 'calma', speed: 1.2 }),
+      fish('fish-audio/s1', { instructions: 'animada', speed: 1.2 }),
+      fish('fish-audio/s1', { instructions: 'calma' }),
+      { ...a, api: { ...a.api, voice: 'outra' } },
+      { ...a, api: { ...a.api, providerId: 'p-fish' } },
+      { ...a, api: { ...a.api, providerKind: 'openai' } }
+    ]
+    expect(new Set([k, ...differ.map(clipConfigKey)]).size).toBe(differ.length + 1)
+    // o mesmo sha256 do `clipConfigKey` do desktop (payload com chaves ordenadas, `v: 1`)
+    expect(clipConfigKey(a)).toBe(
+      bytesToHex(
+        sha256(
+          new TextEncoder().encode(
+            JSON.stringify({
+              backend: 'api',
+              model: 'fish-audio/s1',
+              params: { openrouter: { instructions: 'calma', speed: 1.2 } },
+              providerId: 'p-or',
+              providerKind: 'openrouter',
+              v: 1,
+              voice: FISH
+            })
+          )
+        )
+      )
+    )
+  })
+
+  it('formato anterior das chaves (sem a configuração): toca como reserva, a outra configuração da mesma voz não o apaga, e a geração copia sem sintetizar', async () => {
+    const store = memoryClipStore()
+    const device = fish('fish-audio/s1', { instructions: 'fala calma' })
+    const persona = fish('fish-audio/drama-3', { instructions: 'fala animada' })
+    // como a versão anterior deixava os clipes da persona: `<voz>__<hash da classe>_<CLASSE>_<n>`
+    const set = clipPhraseSet()
+    for (const cls of CLIP_CLASSES)
+      for (const [i, t] of set[cls].entries())
+        await store.write(
+          legacyClipKey(clipVoiceId(persona), clipClassHash(persona, cls), cls, i + 1),
+          {
+            audio: new TextEncoder().encode(`antigo|${t}`),
+            mime: 'audio/wav'
+          }
+        )
+    expect((await clipsStatus(store, persona)).ready).toBe(totalClips)
+    expect(said(await loadCurrentClipAudio(store, persona, null, 'FILLER', 1))).toBe(
+      `antigo|${DEFAULT_FILLER_POOL[0].text}`
+    )
+    expect((await clipsStatus(store, device)).ready).toBe(0)
+    // gerar a deste aparelho (mesma voz) não mexe nos antigos da persona
+    const calls: string[] = []
+    await generateClips({ store, settings: device, synth: synthOf(device, calls) })
+    expect(calls).toHaveLength(totalClips)
+    expect((await clipsStatus(store, persona)).ready).toBe(totalClips)
+    // gerar a da persona: copiados para as chaves novas, nada sintetizado
+    const r = await generateClips({ store, settings: persona, synth: synthOf(persona, calls) })
+    expect(r.generated).toBe(0)
+    expect(calls).toHaveLength(totalClips)
+    expect(store.keys().filter((k) => k.startsWith(`${clipScope(persona)}__`))).toHaveLength(
+      totalClips
+    )
+    expect(said(await loadCurrentClipAudio(store, persona, null, 'TOOL', 3))).toBe(
+      `antigo|${DEFAULT_TOOL_PHRASE_POOL[2].text}`
+    )
+  })
+
+  it('limpeza: as vozes em uso nunca perdem clipes; conjunto sem voz em uso sai depois de 30 dias sem uso; nomes desconhecidos ficam', async () => {
+    const store = memoryClipStore()
+    const day = 24 * 60 * 60 * 1000
+    const a = fish('fish-audio/s1', { instructions: 'calma' })
+    const b = fish('fish-audio/drama-3', { instructions: 'animada' })
+    const c = fish('fish-audio/s1', { instructions: 'sem dono' })
+    for (const s of [a, b, c]) await generateClips({ store, settings: s, synth: synthOf(s, []) })
+    // um antigo (formato anterior) da `b`, um antigo sem dono, um do formato mais antigo e um estranho
+    const legacyB = legacyClipKey(clipVoiceId(b), clipClassHash(b, 'FILLER'), 'FILLER', 1)
+    const legacyX = legacyClipKey('api-outra', 'e'.repeat(64), 'FILLER', 1)
+    for (const k of [legacyB, legacyX, `${'f'.repeat(24)}_ACK_1`, 'meu-arquivo'])
+      await store.write(k, { audio: new Uint8Array([1]), mime: 'audio/wav' })
+    const now = Date.now()
+    const t0 = await pruneClips(store, { keep: [a, b], now })
+    expect(t0.removed).toEqual([`${'f'.repeat(24)}_ACK_1`])
+    expect((await clipsStatus(store, c)).ready).toBe(totalClips)
+    // 31 dias depois: `c` (e o antigo sem dono) saem; `a`/`b` e o antigo de `b` ficam
+    const later = now + CLIP_UNUSED_MAX_AGE_MS + day
+    const t1 = await pruneClips(store, { keep: [a, b], now: later })
+    expect(t1.removed).toHaveLength(totalClips + 1)
+    expect(t1.removed).toContain(legacyX)
+    expect((await clipsStatus(store, a)).ready).toBe(totalClips)
+    expect((await clipsStatus(store, b)).ready).toBe(totalClips)
+    expect((await clipsStatus(store, c)).ready).toBe(0)
+    expect(store.keys()).toContain(legacyB)
+    expect(store.keys()).toContain('meu-arquivo')
+    expect(Object.keys(await store.readUsage())).not.toContain(clipScope(c))
+    // usado há pouco (sem voz em uso): fica
+    await generateClips({ store, settings: c, synth: synthOf(c, []) })
+    await pruneClips(store, { keep: [a], now })
+    const t2 = await pruneClips(store, { keep: [a], now: now + 10 * day })
+    expect(t2.removed).toEqual([])
+    expect((await clipsStatus(store, b)).ready).toBe(totalClips)
   })
 
   it('ducking: rampa até o ganho, continua tocando, vale para a próxima e volta; posição da frase', async () => {
@@ -1454,6 +1653,63 @@ describe('voz da persona e settings de voz locais (1.9.0) no host do celular', (
     expect(sttLog().at(-1)?.fields).toMatchObject({ model: 'whisper-falso', language: 'en' })
     voice.call.stop()
     await until(() => !voice.call.getView().call.active, 4000)
+  }, 60_000)
+
+  it('clipes: a voz daqui e a de uma persona com o MESMO id de voz (outro modelo/instruções) convivem — gerar uma não deixa a outra faltando; a limpeza mantém as duas', async () => {
+    // a persona usa a mesma voz `alloy` daqui, com outro modelo e instruções (o bug real: gerar
+    // uma apagava os clipes da outra)
+    const sameVoice = {
+      backend: 'api' as const,
+      api: {
+        providerId: audioProv,
+        model: 'tts-outro',
+        voice: 'alloy',
+        params: { openai: { instructions: 'fala animada' } }
+      }
+    }
+    await h.desk.put('preset', 'pers-mesma-voz', null, {
+      sv: 1,
+      name: 'Animada',
+      description: '',
+      icon: 'sparkles',
+      config: { voice: { tts: sameVoice } },
+      createdAt: 3,
+      updatedAt: 3
+    })
+    await h.engine.sync()
+    const clips = memoryClipStore()
+    const voice = createVoiceStack({
+      stack: h.stack,
+      store: h.store,
+      mic: () => new ScriptedMic(),
+      playback: fakePlayback(10),
+      clips,
+      requestMic: async () => true,
+      bargeIn: () => false
+    })
+    const speech = () => h.llm.voice.log.filter((l) => l.path.endsWith('/audio/speech'))
+    await voice.call.generateClips()
+    const n = speech().length
+    expect(await voice.call.clipsOf(sameVoice)).toMatchObject({ state: 'missing', done: 0 })
+    // "Gerar clipes desta voz" (aba Voz da persona)
+    await voice.call.generateClips(sameVoice)
+    expect(
+      speech()
+        .slice(n)
+        .every((l) => l.fields.model === 'tts-outro')
+    ).toBe(true)
+    expect(await voice.call.clipsOf()).toMatchObject({ state: 'ok', missing: [] })
+    expect(await voice.call.clipsOf(sameVoice)).toMatchObject({ state: 'ok', missing: [] })
+    // e de novo a daqui: nada sintetizado, a da persona segue completa
+    const m = speech().length
+    await voice.call.generateClips()
+    expect(speech().length).toBe(m)
+    expect(await voice.call.clipsOf(sameVoice)).toMatchObject({ state: 'ok', missing: [] })
+    // a limpeza (roda depois de cada geração) vê a persona pelo registro: as duas ficam
+    await voice.call.pruneClips()
+    expect(await voice.call.clipsOf()).toMatchObject({ state: 'ok', missing: [] })
+    expect(await voice.call.clipsOf(sameVoice)).toMatchObject({ state: 'ok', missing: [] })
+    expect(new Set(clips.keys().map((k) => k.split('__').slice(0, 2).join('__'))).size).toBe(2)
   }, 60_000)
 })
 
