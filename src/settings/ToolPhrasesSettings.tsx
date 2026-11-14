@@ -13,7 +13,6 @@ import {
   type ToolPhraseCategory,
   type VoiceToolPhrases
 } from '@shared/voice'
-import { TOOL_PHRASE_AFTER_PREAMBLE_MS } from '@shared/voicePolicy'
 import {
   replaceCategoryLines,
   TOOL_PHRASE_CATEGORY_LABELS
@@ -88,7 +87,9 @@ export function ToolPhrasesSettings({
       {tp.enabled ? (
         <>
           <Note>
-            {`Só na 1ª tool do turno, nunca mais de uma por turno. Fica no lugar do preâmbulo quando ele ainda não tocou; se o preâmbulo já tocou, só sai ${TOOL_PHRASE_AFTER_PREAMBLE_MS / 1000} s depois do fim dele. Pulada quando o assistente já falou algo antes da tool, quando você está falando ou com outra frase curta tocando. Usa os clipes pré-gerados (“Gerar clipes”); sem eles, sintetiza na hora. Persona/chat podem ligar/desligar (★ segue este padrão).`}
+            {
+              'Só na 1ª tool do turno, nunca mais de uma por turno, no instante em que a tool começa: no lugar do preâmbulo quando ele ainda não tocou; com o preâmbulo (ou uma frase de espera) tocando, entra na fila e toca logo depois dele, sem cortá-lo. Pulada quando o assistente já falou algo antes da tool ou quando você está falando; na fila, cai se a resposta começar antes. Usa os clipes pré-gerados (“Gerar clipes”); sem eles, sintetiza na hora. Persona/chat podem ligar/desligar (★ segue este padrão).'
+            }
           </Note>
           <Pressable
             onPress={() => setOpen((o) => !o)}
