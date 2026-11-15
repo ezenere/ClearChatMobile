@@ -797,7 +797,9 @@ export function buildRequest(
       ? nativeToolsArray(plan.full, {
           deferred: new Set(toolSearch.deferred),
           entry: plan.searchEntry,
-          cache: cfg.cacheEnabled
+          cache: cfg.cacheEnabled,
+          // argumentos em streaming de verdade só na API nativa da Anthropic (messagesApiTool)
+          eager: !openRouter
         })
       : undefined
     return {
@@ -830,6 +832,7 @@ export function buildRequest(
         model: session.model,
         messages: sent,
         tools: cfg.nativeTools && tools.length ? tools : undefined,
+        eagerTools: true,
         params: support.send,
         cacheEnabled: cfg.cacheEnabled,
         extra

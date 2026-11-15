@@ -2,6 +2,10 @@
 // `snapshot` e os eventos do stream na ordem de `n`, pede resync em buraco, mantém o draft encerrado
 // na tela até a mensagem persistida chegar (como o HostController do desktop). Puro: sem rede nem
 // React — a tela lê `view` (imutável, troca a cada mudança).
+// Relógio do raciocínio por sessão (= `reasoningClocks` do store do desktop): o "Pensando… · N s"
+// do rascunho. O draft do stream não traz marcas (§11) — o relógio começa quando o raciocínio
+// aparece aqui; o host DESTE aparelho passa as marcas do runner (`setDraftMarks`), o que também
+// cobre o bloco de raciocínio sem texto da Messages API (`display: "omitted"`).
 import { toBranchSel, type BranchSel } from '@shared/branches'
 import type {
   ApprovalRequest,
@@ -21,6 +25,12 @@ import {
   type DraftDelta,
   type DraftState
 } from '@vendor/desktop/sync/stream'
+import { nextReasoningClock, type ReasoningClock } from '@vendor/renderer/reasoning'
+
+export type { ReasoningClock }
+
+/** Marcas do relógio do raciocínio do runner local (epoch ms deste aparelho). */
+export type DraftMarks = Pick<StreamDraft, 'reasoningStartedAt' | 'reasoningEndedAt'>
 
 export interface ToolRun {
   running: boolean
@@ -49,6 +59,8 @@ export interface MirrorView {
   branchSel: Record<string, BranchSel>
   /** Draft mostrado por sessão (o 1º encerrado ainda sem mensagem, senão o ao vivo). */
   drafts: Record<string, StreamDraft>
+  /** Relógio do raciocínio do draft mostrado (só quando há raciocínio). */
+  reasoningClocks: Record<string, ReasoningClock>
   tools: Record<string, Record<string, ToolRun>>
   compaction: Record<string, CompactionState>
   queues: Record<string, QueuedMessage[]>
@@ -72,6 +84,8 @@ export interface MirrorDeps {
   /** O estado mudou (a tela relê `view`). */
   changed: () => void
   timers?: MirrorTimers
+  /** Relógio (epoch ms) do "Pensando…" sem marcas do host — padrão `Date.now`. */
+  now?: () => number
 }
 
 /** Teto para um draft encerrado esperar a mensagem persistida (o push leva ~1 s). */
@@ -104,7 +118,13 @@ export class LiveMirror {
   private status = new Map<string, SessionStatus>()
   private branchSel = new Map<string, BranchSel>()
   private drafts = new Map<string, DraftState>()
+  /** Relógio do raciocínio do draft ao vivo (do stream `streamId`). */
+  private clocks = new Map<string, { streamId: string; clock: ReasoningClock }>()
+  /** Marcas do runner local (setDraftMarks) para o draft ao vivo. */
+  private marks = new Map<string, DraftMarks>()
   private ended = new Map<string, StreamDraft[]>()
+  /** O relógio (parado) de cada draft encerrado ainda na tela. */
+  private endedClocks = new WeakMap<StreamDraft, ReasoningClock>()
   private endedTimers = new Map<string, unknown>()
   private tools = new Map<string, Map<string, ToolRun>>()
   private compaction = new Map<string, CompactionState>()
@@ -119,11 +139,13 @@ export class LiveMirror {
   private cached: MirrorView | null = null
   private readonly d: MirrorDeps
   private readonly t: MirrorTimers
+  private readonly now: () => number
 
   constructor(epoch: number, deps: MirrorDeps) {
     this.epoch = epoch
     this.d = deps
     this.t = deps.timers ?? defaultTimers
+    this.now = deps.now ?? Date.now
   }
 
   get lastSeq(): number {
@@ -154,6 +176,54 @@ export class LiveMirror {
     if (!this.disposed) this.d.changed()
   }
 
+  /**
+   * Marcas do relógio do raciocínio do runner DESTE aparelho para o draft ao vivo da sessão (o
+   * stream §11 não as leva): o "Pensando… · N s" começa na abertura do bloco de raciocínio — mesmo
+   * sem texto (`display: "omitted"` da Messages API) — e para no fechamento. Só o host local chama.
+   */
+  setDraftMarks(sid: string, marks: DraftMarks): void {
+    if (this.disposed || !this.drafts.has(sid)) return
+    const next: DraftMarks = {
+      ...(marks.reasoningStartedAt != null ? { reasoningStartedAt: marks.reasoningStartedAt } : {}),
+      ...(marks.reasoningEndedAt != null ? { reasoningEndedAt: marks.reasoningEndedAt } : {})
+    }
+    const cur = this.marks.get(sid)
+    if (
+      cur?.reasoningStartedAt === next.reasoningStartedAt &&
+      cur?.reasoningEndedAt === next.reasoningEndedAt
+    )
+      return
+    this.marks.set(sid, next)
+    const before = this.clocks.get(sid)?.clock
+    this.updateClock(sid)
+    if (this.clocks.get(sid)?.clock !== before) this.touch()
+  }
+
+  /** Recalcula o relógio do draft ao vivo (mesmo objeto quando nada muda — nextReasoningClock). */
+  private updateClock(sid: string): void {
+    const live = this.drafts.get(sid)
+    if (!live) {
+      this.clocks.delete(sid)
+      this.marks.delete(sid)
+      return
+    }
+    const prev = this.clocks.get(sid)
+    const clock = nextReasoningClock(
+      prev?.streamId === live.streamId ? prev.clock : undefined,
+      { ...toStreamDraft(live), ...this.marks.get(sid) },
+      this.now()
+    )
+    if (clock) this.clocks.set(sid, { streamId: live.streamId, clock })
+    else this.clocks.delete(sid)
+  }
+
+  /** O draft ao vivo saiu (encerrado, trocado pela mensagem, sessão apagada): sem relógio/marcas. */
+  private dropLive(sid: string): void {
+    this.drafts.delete(sid)
+    this.clocks.delete(sid)
+    this.marks.delete(sid)
+  }
+
   private apply(kind: string, p: Record<string, unknown>): void {
     switch (kind) {
       case 'snapshot':
@@ -162,12 +232,16 @@ export class LiveMirror {
       case 'draft.delta': {
         const d = p as unknown as DraftDelta
         if (!d?.sessionId) return
-        const next = applyDraftDelta(this.drafts.get(d.sessionId) ?? null, d)
+        const cur = this.drafts.get(d.sessionId) ?? null
+        const next = applyDraftDelta(cur, d)
         if (next === 'resync') {
           this.d.resync()
           return
         }
+        // resposta nova: as marcas da anterior não valem mais
+        if (cur?.streamId !== next.streamId) this.marks.delete(d.sessionId)
         this.drafts.set(d.sessionId, next)
+        this.updateClock(d.sessionId)
         return
       }
       case 'draft.end':
@@ -264,6 +338,7 @@ export class LiveMirror {
           reasoning: s.draft.reasoning ?? '',
           toolCalls: (s.draft.toolCalls ?? []).map((t) => ({ ...t }))
         })
+        this.updateClock(sid)
       } else if (this.drafts.has(sid)) {
         // o `draft.end` se perdeu: como se tivesse chegado
         this.endLiveDraft(sid)
@@ -273,7 +348,7 @@ export class LiveMirror {
       else this.compaction.delete(sid)
     }
     // sessões que sumiram do snapshot (apagadas no host): nada ao vivo delas
-    for (const sid of [...this.drafts.keys()]) if (!seen.has(sid)) this.drafts.delete(sid)
+    for (const sid of [...this.drafts.keys()]) if (!seen.has(sid)) this.dropLive(sid)
     for (const sid of [...this.tools.keys()]) if (!seen.has(sid)) this.tools.delete(sid)
     const queues = (p.queues && typeof p.queues === 'object' ? p.queues : {}) as Record<
       string,
@@ -311,7 +386,7 @@ export class LiveMirror {
     }
     const live = this.drafts.get(sid)
     if (live && (synthetic || draftMatchesMessage(toStreamDraft(live), msg.message))) {
-      this.drafts.delete(sid)
+      this.dropLive(sid)
       this.touch()
     }
   }
@@ -322,6 +397,8 @@ export class LiveMirror {
     for (const t of this.endedTimers.values()) this.t.clearTimeout(t)
     this.endedTimers.clear()
     this.drafts.clear()
+    this.clocks.clear()
+    this.marks.clear()
     this.ended.clear()
     this.tools.clear()
     this.status.clear()
@@ -338,10 +415,14 @@ export class LiveMirror {
 
   private endLiveDraft(sid: string): void {
     const had = this.drafts.get(sid)
-    this.drafts.delete(sid)
+    const clock = this.clocks.get(sid)?.clock
+    this.dropLive(sid)
     if (had && (had.content.trim() || had.toolCalls.length)) {
       const list = this.ended.get(sid) ?? []
-      list.push(toStreamDraft(had))
+      const ended = toStreamDraft(had)
+      // o relógio para onde estava (a resposta já começou: tem `end`)
+      if (clock) this.endedClocks.set(ended, clock)
+      list.push(ended)
       this.ended.set(sid, list)
       this.armEnded(sid)
     }
@@ -370,12 +451,18 @@ export class LiveMirror {
   get view(): MirrorView {
     if (this.cached) return this.cached
     const drafts: Record<string, StreamDraft> = {}
+    const reasoningClocks: Record<string, ReasoningClock> = {}
     for (const sid of new Set([...this.ended.keys(), ...this.drafts.keys()])) {
       const ended = this.ended.get(sid)
-      if (ended?.length) drafts[sid] = ended[0]
-      else {
+      if (ended?.length) {
+        drafts[sid] = ended[0]
+        const c = this.endedClocks.get(ended[0])
+        if (c) reasoningClocks[sid] = c
+      } else {
         const live = this.drafts.get(sid)
         if (live) drafts[sid] = toStreamDraft(live)
+        const c = this.clocks.get(sid)?.clock
+        if (live && c) reasoningClocks[sid] = c
       }
     }
     const tools: Record<string, Record<string, ToolRun>> = {}
@@ -388,6 +475,7 @@ export class LiveMirror {
       status: Object.fromEntries(this.status),
       branchSel: Object.fromEntries(this.branchSel),
       drafts,
+      reasoningClocks,
       tools,
       compaction: Object.fromEntries(this.compaction),
       queues: Object.fromEntries([...this.queues].filter(([, q]) => q.length)),

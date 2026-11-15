@@ -15,6 +15,8 @@
 //   1.11.0: "/now [formato]" → datetime;  "/lookup <nomes…>" → tool_search (tools compactadas;
 //   "/lookup-old <nomes…>" com o nome antigo search_tool);
 //   "/badargs" → web_search com argumentos inválidos ({ q } em vez de { query });
+//   "/omitted [ms]" (Messages API) → bloco thinking SEM texto (`display: "omitted"` dos Claude ≥ 4.7)
+//   aberto por ms (padrão 600) e depois a resposta — o "Pensando… · N s" sem texto do raciocínio;
 //   1.12.0: na Messages API com tools adiadas (`defer_loading`), "/now" faz antes a busca do servidor
 //   (server_tool_use + tool_search_tool_result com a referência ao datetime) — o chip na conversa;
 //   requests laterais: compactação (prompt de resumo) → <conversation_summary>…; título (prompt do
@@ -573,6 +575,40 @@ export function startFakeLlm(
       write(chunk({ content: 'parcial que vai ' }))
       await sleep(80)
       res.destroy()
+      return
+    }
+    if (text.startsWith('/omitted') && anthropic) {
+      const ms = Number(text.split(/\s+/)[1]) || 600
+      write(
+        ev('message_start', {
+          message: { id: 'm', model, usage: { input_tokens: 100, output_tokens: 1 } }
+        })
+      )
+      write(
+        ev('content_block_start', { index: 0, content_block: { type: 'thinking', thinking: '' } })
+      )
+      await sleep(ms)
+      write(
+        ev('content_block_delta', {
+          index: 0,
+          delta: { type: 'signature_delta', signature: 'sig' }
+        })
+      )
+      write(ev('content_block_stop', { index: 0 }))
+      await sleep(Math.min(ms, 300))
+      write(ev('content_block_start', { index: 1, content_block: { type: 'text', text: '' } }))
+      write(
+        ev('content_block_delta', {
+          index: 1,
+          delta: { type: 'text_delta', text: 'ok: pensei sem mostrar' }
+        })
+      )
+      write(ev('content_block_stop', { index: 1 }))
+      write(
+        ev('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 40 } })
+      )
+      write(ev('message_stop', {}))
+      res.end()
       return
     }
     if (text.startsWith('/slow'))

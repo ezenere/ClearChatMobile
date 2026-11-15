@@ -2,6 +2,8 @@
 // fila"/"enviada agora", voz), resposta do assistente (raciocínio recolhível, Markdown, cards das
 // tools, rodapé com modelo/tokens/cache/custo/duração), resumo de compactação, erro, marcadores de
 // chamada, mensagens de outros chats/agente pai/irmãos, resultado de subagente, extração de memória.
+// Raciocínio sem texto (bloco omitido da Messages API): "Pensando… · N s" no rascunho e
+// "Raciocínio · N s" na mensagem gravada, só o cabeçalho (= desktop d1a8965).
 // Busca nativa de tools (1.12.0): o chip "buscou tools: …" de cada busca do provedor (blocos de
 // `native`) e o modo em que a resposta foi gerada no rodapé (`meta.toolSearch`).
 // Arquivo selecionado (1.13.0): a linha "Arquivo selecionado: <caminho>" acima do balão (toque longo
@@ -12,6 +14,7 @@ import {
   createContext,
   memo,
   useContext,
+  useEffect,
   useState,
   useSyncExternalStore,
   type ReactNode
@@ -27,7 +30,7 @@ import { callUsageLines, voiceBadgeText } from '@shared/voiceCallMarks'
 import { liveDimFrom } from '@shared/heardText'
 import { dayLabel } from '@vendor/renderer/dates'
 import { CHANGE_LABEL, extractionOf } from '@vendor/renderer/memory'
-import { reasoningHeader } from '@vendor/renderer/reasoning'
+import type { ReasoningClock } from '@vendor/renderer/reasoning'
 import { callMarkLabel, readVoiceCallMark } from '@vendor/site/data/voice'
 import { colors, font } from '@/ui/theme'
 import { MessageAttachments } from './Attachments'
@@ -37,6 +40,13 @@ import { EndCallLine, ToolCard, type ToolLive } from './ToolCard'
 import type { ToolRun } from '@/remote/mirror'
 import type { VoiceFollow } from '@/voice/follow'
 import type { Row } from './viewModel'
+import {
+  draftReasoningUi,
+  draftThinking,
+  savedReasoningUi,
+  type DraftReasoningUi,
+  type ReasoningHeaderUi
+} from './reasoningUi'
 import { BranchSwitcher, CopyButton, DayPill, MonoBlock, MsgTime } from './ui'
 import { mentionSegments, openFileLineOf, type OpenFileLine } from './chatPaths'
 import { Sheet, SheetItem } from '@/ui/Sheet'
@@ -321,12 +331,49 @@ function UserMessage({ msg }: { msg: StoredMessage }) {
 
 // ---------------- assistente ----------------
 
-function Reasoning({ msg, text }: { msg: StoredMessage; text: string }) {
+/** "Raciocínio · 12 s · 1,2 mil tokens" / "Pensando… · 8 s" (detalhes esmaecidos). */
+function ReasonLabel({ ui }: { ui: { label: string; details: string[] } }) {
+  return (
+    <Text style={st.reasonLabel}>
+      {ui.label}
+      {ui.details.map((d) => (
+        <Text key={d} style={{ color: colors.faint, fontVariant: ['tabular-nums'] }}>
+          {' · '}
+          {d}
+        </Text>
+      ))}
+    </Text>
+  )
+}
+
+/**
+ * Raciocínio sem texto (o provedor o omite — `display: "omitted"` dos Claude ≥ 4.7): só o
+ * cabeçalho com o tempo, sem caixa nem expandir (= `reasoning-omitted` do desktop).
+ */
+function ReasoningOmitted({
+  ui,
+  live
+}: {
+  ui: { label: string; details: string[] }
+  live?: boolean
+}) {
+  return (
+    <View style={st.reasoning}>
+      <View style={st.reasonHead} testID="reasoning-omitted">
+        {live ? (
+          <ActivityIndicator size={11} color={colors.subtle} />
+        ) : (
+          <Ionicons name="bulb-outline" size={13} color={colors.subtle} />
+        )}
+        <ReasonLabel ui={ui} />
+      </View>
+    </View>
+  )
+}
+
+function Reasoning({ ui, text }: { ui: ReasoningHeaderUi; text: string }) {
   const [open, setOpen] = useState(false)
-  const h = reasoningHeader({
-    durationMs: msg.meta.reasoningMs,
-    tokens: msg.meta.usage?.reasoningTokens
-  })
+  if (ui.empty) return <ReasoningOmitted ui={ui} />
   return (
     <View style={st.reasoning}>
       <Pressable
@@ -336,15 +383,7 @@ function Reasoning({ msg, text }: { msg: StoredMessage; text: string }) {
         testID="reasoning-header"
       >
         <Ionicons name="bulb-outline" size={13} color={colors.subtle} />
-        <Text style={st.reasonLabel}>
-          {h.label}
-          {h.details.map((d) => (
-            <Text key={d} style={{ color: colors.faint }}>
-              {' · '}
-              {d}
-            </Text>
-          ))}
-        </Text>
+        <ReasonLabel ui={ui} />
         <Ionicons
           name={open ? 'chevron-down' : 'chevron-forward'}
           size={12}
@@ -459,9 +498,10 @@ function AssistantMessage({ msg }: { msg: StoredMessage }) {
   if (msg.message.role !== 'assistant') return null
   const m = msg.message
   const content = m.content ?? ''
+  const reasoning = savedReasoningUi(msg)
   return (
     <View style={st.assistant} testID="msg-assistant">
-      {m.reasoning ? <Reasoning msg={msg} text={m.reasoning} /> : null}
+      {reasoning ? <Reasoning ui={reasoning} text={m.reasoning ?? ''} /> : null}
       {content ? (
         msg.meta.voice?.source === 'call' ? (
           // resposta falada na chamada: itálico (o texto é o que foi dito), tags de voz esmaecidas
@@ -756,18 +796,41 @@ function SystemMessage({ msg }: { msg: StoredMessage }) {
 
 // ---------------- ao vivo (controle remoto) ----------------
 
-function DraftReasoning({ text, thinking }: { text: string; thinking: boolean }) {
+/** Agora (ms), atualizado a cada segundo enquanto `active` (o "Pensando… · N s"). */
+function useSecondTick(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    const tick = (): void => setNow(Date.now())
+    const first = setTimeout(tick, 0)
+    const t = setInterval(tick, 1000)
+    return () => {
+      clearTimeout(first)
+      clearInterval(t)
+    }
+  }, [active])
+  return now
+}
+
+function DraftReasoning({ text, ui }: { text: string; ui: DraftReasoningUi }) {
   const [open, setOpen] = useState(false)
+  if (ui.empty) return <ReasoningOmitted ui={ui} live={ui.live} />
+  const thinking = ui.live
   const tail = text.split('\n').filter(Boolean).slice(-3).join('\n')
   return (
     <View style={st.reasoning}>
-      <Pressable onPress={() => setOpen((o) => !o)} style={st.reasonHead} hitSlop={6}>
+      <Pressable
+        onPress={() => setOpen((o) => !o)}
+        style={st.reasonHead}
+        hitSlop={6}
+        testID="draft-reasoning-header"
+      >
         {thinking ? (
           <ActivityIndicator size={11} color={colors.subtle} />
         ) : (
           <Ionicons name="bulb-outline" size={13} color={colors.subtle} />
         )}
-        <Text style={st.reasonLabel}>{thinking ? 'Pensando…' : 'Raciocínio'}</Text>
+        <ReasonLabel ui={ui} />
         <Ionicons
           name={open ? 'chevron-down' : 'chevron-forward'}
           size={12}
@@ -796,19 +859,23 @@ function useInCall(sessionId: string): boolean {
 /** Resposta ao vivo do host: raciocínio, texto e tool calls atualizando no lugar (§11). */
 export const DraftMessage = memo(function DraftMessage({
   draft,
-  sessionId
+  sessionId,
+  clock
 }: {
   draft: StreamDraft
   sessionId: string
+  /** Relógio do raciocínio (espelho): "Pensando… · N s", também com o bloco sem texto. */
+  clock?: ReasoningClock
 }) {
   const c = useRow()
   const inCall = useInCall(sessionId)
   const content = draft.content
-  const thinking = !!draft.reasoning && !content && !draft.toolCalls.length
-  const empty = !content && !draft.reasoning && !draft.toolCalls.length
+  // o relógio anda só enquanto pensa (o segundo a segundo do "Pensando… · N s")
+  const now = useSecondTick(clock != null && draftThinking(draft, clock))
+  const rsn = draftReasoningUi(draft, clock, now)
   return (
     <View style={st.assistant} testID="msg-draft">
-      {draft.reasoning ? <DraftReasoning text={draft.reasoning} thinking={thinking} /> : null}
+      {rsn.show ? <DraftReasoning text={draft.reasoning} ui={rsn} /> : null}
       {content ? (
         inCall ? (
           // resposta da chamada ainda chegando: itálico + tags + leitura ao vivo
@@ -824,7 +891,7 @@ export const DraftMessage = memo(function DraftMessage({
           live={toolLive(c, tc.id) ?? { run: { running: true } }}
         />
       ))}
-      {empty ? (
+      {rsn.typing ? (
         <View style={st.typing} testID="draft-typing">
           <ActivityIndicator size={12} color={colors.accentStrong} />
           <Text style={st.typingText}>Gerando resposta…</Text>
@@ -891,7 +958,7 @@ export const MessageRow = memo(function MessageRow({
   if (row.kind === 'draft')
     return (
       <View style={st.row}>
-        <DraftMessage draft={row.draft} sessionId={row.sessionId} />
+        <DraftMessage draft={row.draft} sessionId={row.sessionId} clock={row.clock} />
       </View>
     )
   if (row.kind === 'sending')

@@ -707,6 +707,15 @@ Verificado: typecheck, lint, `npm test` (inclui `tests/toolSearch.test.ts` e `to
 a versão local (motivo + aviso) e com a busca nativa da Anthropic (provedor falso como host oficial),
 configurações do chat com "adiada"/"carregada", o item exato e a entrada de busca, e o chip na conversa.
 
+Depois (vendor do desktop ec6198a e d1a8965, 2026-11-14): `eager_input_streaming: true` em toda tool do
+app nos turnos do chat na Anthropic nativa (modo nativo — adiadas também —, local e off; nunca no
+OpenRouter, na entrada de busca do servidor nem nas chamadas laterais), com o item exato na aba Tools;
+resposta com tool calls cortada por `max_tokens` ou recusada não roda nenhuma (cada uma ganha "Erro: não
+executada: …" e o turno termina). Raciocínio omitido (bloco thinking sem texto dos Claude ≥ 4.7): o
+relógio do espelho (`reasoningClocks`; no host local com as marcas do runner) mostra "Pensando… · N s" no
+rascunho e a mensagem gravada mostra "Raciocínio · N s"; no controle remoto/ao vivo o stream não leva as
+marcas (como no desktop), então um bloco sem texto continua como "Gerando resposta…".
+
 ## Arquivo selecionado e `@caminho` (protocolo 1.13.0) — estado (2026-11-14)
 
 Feito (vendor do desktop 2dff858, `@shared/openFile`, `@shared/pathMentions`): texto fixo do arquivo

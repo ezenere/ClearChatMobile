@@ -110,8 +110,9 @@ export function toolChipText(native: boolean, full: boolean): string {
 /**
  * Estado de uma tool num modo nativo, NESTA request (= `NativeToolDefInfo` do desktop): adiada ou
  * carregada (uma adiada já usada no histórico sem a busca vai carregada — `forced`) e o item EXATO
- * do array `tools` (com `defer_loading` e o `cache_control` se for o ponto de cache); uma tool fora
- * da request (desligada) → o item que iria pela config.
+ * do array `tools` (com `defer_loading`, o `cache_control` se for o ponto de cache e, na Anthropic
+ * nativa, `eager_input_streaming`); uma tool fora da request (desligada) → o item que iria pela
+ * config.
  */
 export function nativeToolState(
   view: ToolSearchModeView,
@@ -121,5 +122,7 @@ export function nativeToolState(
 ): { deferred: boolean; forced: boolean; item: Record<string, unknown> } {
   const forced = view.forceLoaded.includes(name)
   const deferred = view.items[name] ? view.deferred.includes(name) : configDeferred
-  return { deferred, forced, item: view.items[name] ?? messagesApiTool(fullDef, deferred) }
+  const item =
+    view.items[name] ?? messagesApiTool(fullDef, deferred, view.mode === 'native-anthropic')
+  return { deferred, forced, item }
 }

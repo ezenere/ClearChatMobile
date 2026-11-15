@@ -281,8 +281,9 @@ export function applyAnthropicCache(
   return { system: sys, messages: msgs }
 }
 
-export function anthropicTools(defs: ToolDefinition[]): Record<string, unknown>[] {
-  return defs.map((d) => messagesApiTool(d))
+/** `eager`: `eager_input_streaming` em cada tool (turnos do chat na API nativa — messagesApiTool). */
+export function anthropicTools(defs: ToolDefinition[], eager = false): Record<string, unknown>[] {
+  return defs.map((d) => messagesApiTool(d, false, eager))
 }
 
 /**
@@ -311,6 +312,8 @@ export function buildAnthropicBody(input: {
   model: string
   messages: ApiMessage[]
   tools?: ToolDefinition[]
+  /** `eager_input_streaming` nas `tools` (turnos do chat; as chamadas laterais ficam sem). */
+  eagerTools?: boolean
   toolsArray?: Record<string, unknown>[]
   params?: ChatParams & { stop?: string | string[] }
   cacheEnabled?: boolean
@@ -331,7 +334,8 @@ export function buildAnthropicBody(input: {
   if (system.length) body.system = system
   body.messages = messages
   if (input.toolsArray?.length) body.tools = input.toolsArray
-  else if (input.tools?.length) body.tools = anthropicTools(input.tools)
+  else if (input.tools?.length)
+    body.tools = anthropicTools(input.tools, !!input.eagerTools && !openRouter)
   if (ok(params.temperature)) body.temperature = params.temperature
   if (ok(params.top_p)) body.top_p = params.top_p
   if (ok(params.top_k)) body.top_k = params.top_k
@@ -433,6 +437,8 @@ export function applyAnthropicEvent(acc: StreamAccumulator, ev: Record<string, u
         s.blocks.set(idx, { type: String(b.type), at })
         if (b.type === 'text' && typeof b.text === 'string') acc.content += b.text
         if (b.type === 'thinking' && typeof b.thinking === 'string') acc.reasoning += b.thinking
+        // raciocínio começou (com ou sem texto — "omitted" manda o bloco vazio)
+        if (b.type === 'thinking' || b.type === 'redacted_thinking') acc.thinking = 'open'
       }
       return
     }
@@ -475,6 +481,7 @@ export function applyAnthropicEvent(acc: StreamAccumulator, ev: Record<string, u
       // input completo de tool_use/server_tool_use no bloco guardado (o JSON chegou em pedaços)
       const st = s.blocks.get(n(ev.index) ?? -1)
       const blk = blockAt(acc, s, n(ev.index) ?? -1)
+      if (st && (st.type === 'thinking' || st.type === 'redacted_thinking')) acc.thinking = 'closed'
       if (st?.json !== undefined && blk) {
         const raw = st.json.trim()
         try {

@@ -70,8 +70,10 @@ import { migrateMessageJson } from '../src/vendor/shared/toolRename'
 import { buildCompactionRequest, compactionMeta } from '../src/vendor/desktop/agent/compaction'
 import {
   applyAnthropicEvent,
-  applyAnthropicMessage
+  applyAnthropicMessage,
+  buildAnthropicBody
 } from '../src/vendor/desktop/agent/adapters/anthropic'
+import { buildExtractionRequest } from '../src/vendor/desktop/memory/extraction'
 import { fetchGenerationCost, newAccumulator } from '../src/vendor/desktop/agent/llm'
 import {
   buildRequest,
@@ -342,6 +344,15 @@ describe('(A) lógica pura vendorada', () => {
     })
     expect(all.every((t) => !t.cache_control)).toBe(true)
     expect(all.at(-1)).toEqual({ type: 'openrouter:tool_search' })
+    expect(all.every((t) => t.eager_input_streaming === undefined)).toBe(true)
+    // eager (Anthropic nativa): nas tools do app (adiadas também), nunca na entrada do servidor
+    const eager = nativeToolsArray(defs(['web_search', 'browse_url', 'datetime']), {
+      deferred: new Set(['browse_url']),
+      entry: { ...ANTHROPIC_SEARCH_TOOL },
+      eager: true
+    })
+    expect(eager.map((t) => t.eager_input_streaming ?? null)).toEqual([true, true, true, null])
+    expect(eager.at(-1)).toEqual(ANTHROPIC_SEARCH_TOOL)
   })
 
   it('native: gravado só com blocos do servidor, sem pensamento, na ordem', () => {
@@ -667,6 +678,8 @@ describe('(B) request do celular', () => {
     expect(b.tools[1].input_schema).toEqual(toolDefinitions(['browse_url'])[0].function.parameters)
     expect(b.tools[1].description).toBe(toolDefinitions(['browse_url'])[0].function.description)
     expect(b.tools.at(-1)).toEqual(ANTHROPIC_SEARCH_TOOL)
+    // argumentos em streaming nas tools do app (adiadas também); nunca na entrada do servidor
+    expect(b.tools.slice(0, -1).every((t: any) => t.eager_input_streaming === true)).toBe(true)
     // o prompt fixo nativo no fim do system prompt, com as adiadas DESTA request (nunca o da local)
     expect(b.system[0].text).toBe(
       `SYS\n\n${nativeToolSearchPrompt(['browse_url', 'datetime'], 'native-anthropic')}`
@@ -693,6 +706,8 @@ describe('(B) request do celular', () => {
     expect(req.headers.Authorization).toBe('Bearer sk-or-k')
     expect(req.headers['x-api-key']).toBeUndefined()
     expect(b.tools.at(-1)).toEqual({ type: 'openrouter:tool_search' })
+    // o OpenRouter não recebe eager_input_streaming (proxy: não verificado com o campo)
+    expect(JSON.stringify(b.tools)).not.toContain('eager_input_streaming')
     expect(b.max_tokens).toBeUndefined()
     expect(b.usage).toBeUndefined()
     expect(b.stream_options).toBeUndefined()
@@ -743,6 +758,60 @@ describe('(B) request do celular', () => {
     )
     expect(e.toolSearch?.mode).toBe('local')
     expect(e.toolSearch!.reason).toMatch(/não é servido pela Messages API/)
+  })
+
+  it('eager_input_streaming: Anthropic (local e off) em toda tool do app; nunca na Chat Completions nem nas chamadas laterais', () => {
+    // versão local na Anthropic (gateway): compactas e a tool_search, todas com eager
+    const local = buildRequest(
+      mkChat(),
+      S,
+      [],
+      { ...ANTH, baseUrl: 'https://gateway.example.com/v1' },
+      ENV
+    )
+    const lb = local.body as any
+    expect(local.toolSearch?.mode).toBe('local')
+    expect(lb.tools.at(-1).name).toBe('tool_search')
+    expect(lb.tools.every((t: any) => t.eager_input_streaming === true)).toBe(true)
+    // off (compactação desligada): as definições completas, com eager
+    const off = buildRequest(mkChat({ toolsCompact: false }), S, [], ANTH, ENV)
+    const ob = off.body as any
+    expect(off.toolSearch?.mode).toBe('off')
+    expect(toolNames(ob)).toEqual(['web_search', 'browse_url', 'datetime'])
+    expect(ob.tools.every((t: any) => t.eager_input_streaming === true)).toBe(true)
+    // OpenRouter na Chat Completions (versão local): nada
+    const orl = buildRequest(
+      mkChat({ providerId: 'po', params: { seed: 7 } }),
+      { depth: 0, model: 'x/y' },
+      [],
+      ORP,
+      ENV
+    )
+    expect(orl.api).toBe('chat')
+    expect(JSON.stringify(orl.body)).not.toContain('eager_input_streaming')
+    // chamadas laterais (extração de memória com tools; juiz sem tools): sem eager
+    const ex = buildExtractionRequest(ANTH, 'claude-haiku-4-5', mkChat(), [], ['datetime'])
+    expect((ex.body as any).tools).toHaveLength(1)
+    expect(JSON.stringify(ex.body)).not.toContain('eager_input_streaming')
+    // o body da Anthropic só liga com o pedido e nunca no sabor OpenRouter
+    const td = defs(['datetime'])
+    const plain = buildAnthropicBody({ model: 'm', messages: [], tools: td }) as any
+    expect(plain.tools[0].eager_input_streaming).toBeUndefined()
+    const eager = buildAnthropicBody({
+      model: 'm',
+      messages: [],
+      tools: td,
+      eagerTools: true
+    }) as any
+    expect(eager.tools[0].eager_input_streaming).toBe(true)
+    const orBody = buildAnthropicBody({
+      model: 'm',
+      messages: [],
+      tools: td,
+      eagerTools: true,
+      flavor: 'openrouter'
+    }) as any
+    expect(orBody.tools[0].eager_input_streaming).toBeUndefined()
   })
 
   it('Anthropic de terceiros e genérico → versão local com o motivo', () => {
@@ -1316,6 +1385,34 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
               { type: 'message_stop' }
             ])
           )
+        // resposta cortada (max_tokens) ou recusada no meio de um tool_use: com
+        // eager_input_streaming o servidor não confere o JSON — o app não pode rodar a tool
+        if (lastText === 'cortada' || lastText === 'cortada-ok' || lastText === 'recusa')
+          return void res.end(
+            sseOf([
+              { type: 'message_start', message: { model: body.model, usage: {} } },
+              {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'tool_use', id: 'toolu_cut', name: 'datetime', input: {} }
+              },
+              {
+                type: 'content_block_delta',
+                index: 0,
+                delta: {
+                  type: 'input_json_delta',
+                  partial_json: lastText === 'cortada' ? '{"format":"%Y-%' : '{"format":"%Y"}'
+                }
+              },
+              { type: 'content_block_stop', index: 0 },
+              {
+                type: 'message_delta',
+                delta: { stop_reason: lastText === 'recusa' ? 'refusal' : 'max_tokens' },
+                usage: { output_tokens: 2 }
+              },
+              { type: 'message_stop' }
+            ])
+          )
         if (lastText === 'busca-local')
           return void res.end(
             sseOf(toolUseEvents(body.model, 'toolu_ts', 'tool_search', '{"names":["datetime"]}'))
@@ -1412,6 +1509,12 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
       'tool_search_tool_regex'
     ])
     expect(JSON.stringify(reqs[1].body.tools)).toBe(JSON.stringify(reqs[0].body.tools))
+    expect(reqs[0].body.tools.map((t: any) => t.eager_input_streaming ?? null)).toEqual([
+      true,
+      true,
+      true,
+      null
+    ])
     const a = msgs.find((m) => m.message.role === 'assistant' && m.message.tool_calls)!
     const native = (a.message as any).native
     expect(native.content.map((b: any) => b.type)).toEqual([
@@ -1522,6 +1625,32 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
     const n1 = hits.length
     await turn(sid, 'mais uma')
     expect(JSON.stringify(hits[n1].body.messages)).not.toContain('server_tool_use')
+  })
+
+  it('resposta cortada por max_tokens ou recusada com tool_use → a tool NÃO roda (erro no resultado) e o turno termina', async () => {
+    for (const [text, why] of [
+      ['cortada', /max_tokens/],
+      ['cortada-ok', /max_tokens/],
+      ['recusa', /recusa/]
+    ] as const) {
+      // um chat por caso (o falso responde "FIM" a qualquer request com tool_result no fim)
+      const { sid } = await newChat('anthropic', 'claude-opus-5-5', {
+        toolsFull: ['datetime'] as ToolName[]
+      })
+      const n0 = hits.length
+      const msgs = await turn(sid, text)
+      expect(hits.length - n0, `${text}: nenhuma request depois (o turno termina)`).toBe(1)
+      const a = msgs.at(-2)!
+      expect(a.message.role).toBe('assistant')
+      expect((a.message as any).tool_calls[0].id).toBe('toolu_cut')
+      const tool = msgs.at(-1)!
+      expect(tool.message.role, `${text}: o tool_use ganhou resultado`).toBe('tool')
+      expect((tool.message as any).tool_call_id).toBe('toolu_cut')
+      expect(tool.meta.toolStatus).toBe('error')
+      expect(textOfContent(tool.message.content)).toMatch(/não executada/)
+      expect(textOfContent(tool.message.content)).toMatch(why)
+      expect(h.stack.repo.session(sid)!.status).toBe('idle')
+    }
   })
 
   it('pause_turn → nova request sem mensagem do usuário, terminando no assistente pausado', async () => {

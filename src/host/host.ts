@@ -1131,6 +1131,9 @@ export class HostService {
       const { delta, state } = diffDraft(sid, this.drafts.get(sid) ?? null, d)
       this.drafts.set(sid, state)
       if (delta) this.feed({ kind: 'draft.delta', ...delta })
+      // o relógio do raciocínio do runner (o stream não leva): o "Pensando… · N s" também com o
+      // bloco de raciocínio sem texto da Messages API, que não muda o draft
+      this.mirror?.setDraftMarks(sid, d)
     }
     this.pendingDraft.clear()
   }

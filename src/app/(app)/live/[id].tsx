@@ -22,6 +22,7 @@ import { toolLabel } from '@/agent/toolLabels'
 import { ChatAvatar, RenameDialog } from '@/chat/ChatBits'
 import { MessageRow, RowCtx, type RowContext, type RowLive } from '@/chat/MessageRow'
 import { openHostPath } from '@/chat/chatPaths'
+import { draftThinking } from '@/chat/reasoningUi'
 import { openFileStore, useOpenFileSelection } from '@/chat/openFileStore'
 import { RemoteComposer, type ComposerAttach, type SendInput } from '@/chat/remote/Composer'
 import { MessageActionsSheet, type MessageActionHandlers } from '@/chat/remote/MessageActions'
@@ -275,6 +276,7 @@ export default function LiveChatScreen() {
   )
 
   const draft = liveView?.drafts[sid] ?? null
+  const clock = liveView?.reasoningClocks[sid]
   const rows = useMemo<Row[]>(() => {
     if (!view) return []
     const out = [...view.rows]
@@ -282,9 +284,9 @@ export default function LiveChatScreen() {
       if (s.sessionId === sid)
         out.push({ kind: 'sending', key: s.key, type: 'sending', text: s.text, files: s.files })
     if (draft)
-      out.push({ kind: 'draft', key: `draft-${sid}`, type: 'draft', draft, sessionId: sid })
+      out.push({ kind: 'draft', key: `draft-${sid}`, type: 'draft', draft, sessionId: sid, clock })
     return out
-  }, [view, sending, draft, sid])
+  }, [view, sending, draft, clock, sid])
 
   const regen = useMemo(() => (view ? regenerateTargets(view.path) : new Set<string>()), [view])
   const trailingError = useMemo(() => (view ? trailingErrorId(view.path) : null), [view])
@@ -401,7 +403,7 @@ export default function LiveChatScreen() {
               ? 'Compactando conversa…'
               : toolName
                 ? `Executando ${toolLabel(toolName)}…`
-                : draft && draft.reasoning && !draft.content && !draft.toolCalls.length
+                : draftThinking(draft, clock)
                   ? 'Pensando…'
                   : 'Trabalhando…'
   const sessionError = liveView?.errors[sid]

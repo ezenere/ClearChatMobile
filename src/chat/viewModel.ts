@@ -8,6 +8,7 @@ import { isSiblingKind } from '@shared/siblings'
 import type { Session, StoredMessage, StreamDraft } from '@shared/types'
 import { branchView } from '@vendor/renderer/branchView'
 import { dayStarts } from '@vendor/renderer/dates'
+import type { ReasoningClock } from '@vendor/renderer/reasoning'
 import { isExtractionMessage } from '@vendor/renderer/memory'
 import type { LoadedChat } from '@/data/store'
 
@@ -37,8 +38,18 @@ export type Row =
       switcherAbove: boolean
     }
   | { kind: 'divider'; key: string; type: 'divider'; count: number; showOld: boolean }
-  /** Resposta ao vivo do host (stream §11) — sempre a última linha. */
-  | { kind: 'draft'; key: string; type: 'draft'; draft: StreamDraft; sessionId: string }
+  /**
+   * Resposta ao vivo do host (stream §11) — sempre a última linha; `clock` = relógio do raciocínio
+   * do espelho ("Pensando… · N s").
+   */
+  | {
+      kind: 'draft'
+      key: string
+      type: 'draft'
+      draft: StreamDraft
+      sessionId: string
+      clock?: ReasoningClock
+    }
   /** Mensagem enviada daqui esperando o `accepted` do host (§8.6: "enviando…"). */
   | { kind: 'sending'; key: string; type: 'sending'; text: string; files: number }
 
