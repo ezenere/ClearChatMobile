@@ -61,6 +61,8 @@ export const PRESET_FIELDS = [
   'sandboxBash',
   'memory',
   'skills',
+  'mcpServers',
+  'mcpSubagents',
   'voice'
 ] as const satisfies readonly (keyof ChatConfig)[]
 

@@ -108,7 +108,10 @@ const GROUPS = {
       // `meta.openFile` do send/force remoto) e as menções `@caminho` (tokens fora de código,
       // popup do composer)
       'openFile.ts',
-      'pathMentions.ts'
+      'pathMentions.ts',
+      // 1.14.0: conectores (servidores MCP) — registro, escolha por persona/chat com herança por
+      // conector, nomes das tools, aprovação, formulário de elicitação (o celular não executa stdio)
+      'mcp.ts'
     ]
   },
   desktop: {

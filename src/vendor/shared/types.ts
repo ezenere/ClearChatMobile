@@ -220,6 +220,14 @@ export interface ChatConfig {
   toolsCompact?: boolean
   /** Com a compactação, estas vão completas (as de `enabledTools`, memória e skills). Ausente = []. */
   toolsFull?: ToolName[]
+  /**
+   * Conectores MCP (SPEC → "Conectores (MCP)", @shared/mcp): a escolha por servidor — id do registro
+   * `mcp_server` → ligado, tools desligadas, instruções do servidor. Cada servidor é uma unidade da
+   * herança (`mcpServers.<id>`); ausente = desligado.
+   */
+  mcpServers?: Record<string, import('./mcp').McpServerChoice>
+  /** Subagentes recebem as tools dos conectores ligados (padrão false). */
+  mcpSubagents?: boolean
   /** Anexa bloco <environment> (cwd, SO, shell) ao system prompt (padrão true). */
   envInPrompt: boolean
   /** Adiciona breakpoints cache_control (padrão: true se baseUrl contém openrouter.ai). */
@@ -907,7 +915,8 @@ export interface ApprovalCheck {
 
 /** meta.approval da mensagem tool (modo lists/smart; `always` só com o modo). */
 export interface ApprovalRecord {
-  item: ApprovalItem
+  /** `mcp` = tool de conector (o modo vem do cadastro do servidor — @shared/mcp). */
+  item: ApprovalItem | 'mcp'
   mode: ApprovalMode
   /** Sub-comandos/URL liberados pela whitelist. */
   allowed?: { text: string; entry: string }[]
@@ -1103,6 +1112,11 @@ export type AgentEvent =
   | { type: 'memory-changed'; collectionId: string | null; memoryId: string | null }
   /** Locais de skills mudaram ou "Reescanear" (Configurações → Skills): listas recarregam. */
   | { type: 'skills-changed' }
+  /** Conectores (MCP): cadastro, estado do aparelho ou conexões mudaram — a UI relê. */
+  | { type: 'mcp-changed' }
+  /** Conectores (MCP): um servidor pediu dados ao usuário (formulário) / o pedido terminou. */
+  | { type: 'mcp-elicit'; request: McpElicitRequest }
+  | { type: 'mcp-elicit-done'; id: string }
   /** Chat apagado fora da UI (sync: apagado em outro dispositivo / divergência descartada). */
   | { type: 'chat-deleted'; chatId: string }
   /** Sync: estado da conta/conexão mudou. */
@@ -1117,3 +1131,18 @@ export type AgentEvent =
   | { type: 'sync-notice'; kind: 'info' | 'error' | 'success'; text: string; chatId?: string }
   /** Atualizações: resultado de uma checagem da última release (aviso discreto; nunca toast). */
   | { type: 'update-status'; status: import('./updates').UpdateStatus }
+
+/**
+ * Pedido de dados de um conector (elicitação, modo formulário — SPEC → "Conectores (MCP)"): aparece
+ * como card no chat da tool que o servidor estava executando (ou, sem dono, nas Configurações).
+ */
+export interface McpElicitRequest {
+  id: string
+  chatId: string | null
+  sessionId: string | null
+  toolCallId: string | null
+  serverId: string
+  serverLabel: string
+  form: import('./mcp').McpForm
+  createdAt: number
+}

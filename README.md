@@ -1108,6 +1108,17 @@ o `send` com meta válido/inválido no host real com o provedor falso, fila/repa
 abrir com a conferência), `tests/remote.test.ts` (`send`/`force` com `meta.openFile`) e
 `tests/live.test.ts` (chat ao vivo: o host falso normaliza pela raiz dele e a linha volta no `rec`).
 
+## Conectores (servidores MCP, protocolo 1.14.0)
+
+Contrato: §4.3.10 (`mcp_server`, `ChatConfig.mcpServers`/`mcpSubagents`) e §4.4 (`mcpLocal`/`mcpAuth`,
+nunca sincronizados). Nesta versão o celular **não executa conectores** e não os mostra: os registros
+`mcp_server` ficam guardados como opacos (tipo desconhecido para `src/data`, como manda a §4.2) e a
+escolha por persona/chat (`mcpServers`, unidade da herança `mcpServers.<id>` no `@shared/chatInherit`
+vendorado) é preservada em qualquer edição feita aqui. Um chat com conector ligado conta como "ferramentas
+locais" na troca de host (`usesLocalTools` vendorado, §8.9): assumir o chat pelo celular mostra o aviso
+forte e o turno roda sem as tools dos conectores (o request do celular não as conhece). As partes puras
+(`@shared/mcp`) já vêm vendoradas para uma versão futura (conectores HTTP no próprio celular).
+
 ## Build iOS no Mac
 
 O iOS **nunca foi compilado nem testado** (o desenvolvimento é no Linux). Tudo o que é nativo vem
