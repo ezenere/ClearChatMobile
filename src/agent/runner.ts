@@ -49,6 +49,7 @@ import {
   type BranchSel
 } from '@shared/branches'
 import {
+  activeHistory,
   compactThreshold,
   contextUsage,
   hasCompactableHistory,
@@ -2180,6 +2181,22 @@ export class Runner {
     const m = this.repo.update(id, withoutStaleNative(message))
     this.emit({ type: 'message-updated', message: m })
     return m
+  }
+
+  /**
+   * Chamada de voz (= desktop `resumeVoiceTurn`): a fala que parou o turno (turno continuado) era
+   * ruído/"uhum" — o MESMO turno volta a rodar do histórico já ajustado, sem mensagem nova. Só na
+   * sessão principal ociosa cujo histórico espera o assistente (termina numa mensagem do usuário ou
+   * num resultado de tool). true = voltou a rodar.
+   */
+  resumeVoiceTurn(sessionId: string): boolean {
+    const session = this.repo.session(sessionId)
+    if (!session || session.depth !== 0 || this.isSessionBusy(session)) return false
+    const sent = activeHistory(this.repo.path(sessionId)).filter((m) => !isDisplayOnly(m.meta))
+    const last = sent[sent.length - 1]
+    if (!last || last.message.role === 'assistant') return false
+    this.startLoop(session)
+    return true
   }
 
   /**

@@ -29,6 +29,7 @@
 //   FAKE_STT_FIXTURES=<pasta com .wav + .txt> → transcrições determinísticas por fixture.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { handleVoice, loadFixtures, type FakeVoiceState, type VoiceFixture } from './fakeVoice.ts'
+import { CALL_END_NOTE, CALL_START_NOTE } from '@shared/voiceCallMarks'
 
 type Msg = { role: string; content?: unknown; tool_calls?: unknown[]; tool_call_id?: string }
 
@@ -41,6 +42,11 @@ export interface FakeLlm {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const withoutCallNote = (t: string): string => {
+  for (const n of [CALL_START_NOTE, CALL_END_NOTE])
+    if (t.startsWith(n)) return t.slice(n.length).trim()
+  return t
+}
 
 const textOf = (c: unknown): string =>
   typeof c === 'string'
@@ -135,7 +141,9 @@ export function startFakeLlm(
     const msgs = (body.messages ?? []) as Msg[]
     const last = msgs[msgs.length - 1]
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
-    const text = textOf(lastUser?.content).trim()
+    // a nota dos marcadores da chamada (no começo da 1ª fala da chamada / da 1ª mensagem depois
+    // dela) não é o comando: o texto do usuário vem depois dela
+    const text = withoutCallNote(textOf(lastUser?.content).trim())
     const model = String(body.model ?? 'fake/agent')
     const system =
       textOf(msgs.find((m) => m.role === 'system')?.content) +

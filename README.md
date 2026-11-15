@@ -507,8 +507,13 @@ neste celular — com a semântica do desktop, cujo código é **vendorado**:
 - **Runner** (`src/agent/runner.ts`/`request.ts`): overrides da chamada no turno
   (`applyVoiceCallChat` — modelo/params/raciocínio, tools, prompt), `end_call` (sem aprovação,
   encerra o turno), `meta.voice` nas respostas, `appendDisplayMessage` (marcadores — no registro com
-  a codificação do §4.3.8, já feita pelo `repo.ts`) e `amendVoiceTurn`. `host.local('send')` aceita
-  `voice` (ditado/fala). `HostService.holdWindow` mantém a janela aberta durante a chamada.
+  a codificação do §4.3.8, já feita pelo `repo.ts`), `amendVoiceTurn` e `resumeVoiceTurn` (turno
+  continuado: a fala que passou do limiar do barge-in em tempo com voz — `speechSustained` mandado
+  pela captura de `src/voice/call.ts` — para o agente; com texto vira mensagem nova, ruído retoma o
+  turno). Na request (`sentMessages`), os marcadores da chamada deixam a nota fixa no começo da
+  mensagem seguinte do usuário e as respostas da chamada vão sem as tags de voz fora de um turno de
+  chamada com elas valendo (= desktop). `host.local('send')` aceita `voice` (ditado/fala).
+  `HostService.holdWindow` mantém a janela aberta durante a chamada.
 
 **Áudio (expo-audio 58).** O `AudioStream` dá o PCM do microfone em tempo real (float32, 16 kHz
 pedidos — o emulador e os aparelhos testados entregam 16 kHz; outra taxa é reamostrada) e o

@@ -26,6 +26,8 @@
 import { DEFAULT_APP_SIGNATURE, resolveAppSignatureHeaders } from '@shared/appSignatures'
 import { activeHistory, isDisplayOnly } from '@shared/context'
 import { withOpenFiles } from '@shared/openFile'
+import { withCallNotes } from '@shared/voiceCallMarks'
+import { withoutCallAudioTags } from '@shared/audioTags'
 import { planTools, withCompactPrompt, type ToolsPlan } from '@shared/compactTools'
 import {
   TOOL_SEARCH_MODE_LABEL,
@@ -445,9 +447,21 @@ export function toolsPlan(
  * selecionado (1.13.0, `meta.openFile` → @shared/openFile) aplicado na CÓPIA de cada mensagem do
  * usuário — vale para todo builder que passa por aqui (turno, subagente, chamada de voz,
  * compactação, busca nativa, telas da request) = desktop `sentMessages`. O histórico salvo não muda.
+ * Os marcadores da chamada deixam a nota deles na mensagem seguinte do usuário (`withCallNotes`); as
+ * tags de voz das respostas da chamada só ficam num turno de chamada com elas valendo
+ * (`keepCallTags` — `withoutCallAudioTags`; SYNC §4.3.6/§4.3.8).
  */
-const sentMessages = (history: StoredMessage[]): StoredMessage[] =>
-  withOpenFiles(activeHistory(history).filter((m) => !isDisplayOnly(m.meta)))
+const sentMessages = (history: StoredMessage[], keepCallTags = false): StoredMessage[] => {
+  const sent = withCallNotes(activeHistory(history)).filter((m) => !isDisplayOnly(m.meta))
+  return withOpenFiles(keepCallTags ? sent : withoutCallAudioTags(sent))
+}
+
+/** Turno de chamada de voz com as tags de voz valendo (pedidas E a voz as interpreta)? */
+function callTagsActive(chat: Chat, session: Pick<Session, 'depth'> & { id?: string }): boolean {
+  if (!session.id) return false
+  const call = voiceCallContextFor(chat, { id: session.id, depth: session.depth })
+  return !!(call?.audioTags && call.audioTagsActive)
+}
 
 /**
  * Modo de envio das tools para esta sessão/provedor/modelo (@shared/toolSearch →
@@ -553,9 +567,10 @@ export function sentHistory(
   history: StoredMessage[],
   kind: ProviderKind,
   keepNative: boolean,
-  noReplay?: ReadonlySet<string>
+  noReplay?: ReadonlySet<string>,
+  keepCallTags = false
 ): ApiMessage[] {
-  const stored = sentMessages(history).map((m) =>
+  const stored = sentMessages(history, keepCallTags).map((m) =>
     noReplay?.has(m.id) && m.message.role === 'assistant' && m.message.native
       ? { ...m, message: { ...m.message, native: undefined } }
       : m
@@ -752,7 +767,7 @@ export function buildRequest(
   // só às tools que ESTE aparelho manda) e as adiadas já usadas sem a descoberta → carregadas
   const nd = nativeDeferral(
     plan,
-    sentHistory(history, kind, native, opts.noReplay),
+    sentHistory(history, kind, native, opts.noReplay, callTagsActive(chat, session)),
     opts.replay === false ? null : { providerId: provider.id, model: session.model }
   )
   const hist = nd.messages

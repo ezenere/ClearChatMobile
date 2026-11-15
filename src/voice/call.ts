@@ -104,6 +104,8 @@ export interface CallDeps {
     bus: { on(fn: (e: AgentEvent) => void): () => void }
     busyChats(): Set<string>
     amendVoiceTurn(sessionId: string, amend: VoiceCallAmend): Promise<unknown>
+    /** Retoma o turno parado pela fala que virou ruído (opcional — testes antigos não têm). */
+    resumeVoiceTurn?(sessionId: string): boolean
     appendDisplayMessage(sessionId: string, content: string, meta: StoredMessage['meta']): unknown
   }
   /** Envia o turno como mensagem do usuário (mesmo caminho do composer local). */
@@ -245,6 +247,13 @@ export class VoiceCallController {
   private voiced = new VoicedSpan()
   /** Fala do usuário durante a reprodução: ducking → descartada (curta) × barge-in (insistiu). */
   private hold = new PlaybackDuck(DEFAULT_BARGE_IN)
+  /**
+   * Fala aberta com `speechBegin` (nada da resposta ouvido) ainda não avisada como sustentada: no
+   * limiar do barge-in em tempo com voz o manager para o agente que ainda trabalha (turno
+   * continuado — = desktop `useVoiceCall`). Uma vez por fala.
+   */
+  private sustainPending = false
+  private sustainMs = DEFAULT_BARGE_IN.voicedMs
   /** Frases da resposta atual que começaram a tocar (barge-in: o histórico fica só com elas). */
   private started = new Set<string>()
   private askedSeq = -1
@@ -333,6 +342,8 @@ export class VoiceCallController {
       amendTurn: async (sessionId, amend) => {
         await this.d.runner.amendVoiceTurn(sessionId, amend)
       },
+      // a fala que parou o turno era ruído: o mesmo turno volta a rodar do histórico ajustado
+      resumeTurn: (sessionId) => this.d.runner.resumeVoiceTurn?.(sessionId) ?? false,
       appendMarker: (sessionId, content, meta) => {
         this.d.runner.appendDisplayMessage(sessionId, content, meta)
       },
@@ -784,6 +795,8 @@ export class VoiceCallController {
     this.gate = new AdaptiveTurnGate(timing, SPEECH)
     // limiares do ducking/barge-in (`voiceCallDefaults.turn`, resolvidos no início da chamada)
     this.hold = new PlaybackDuck(timing.bargeIn ?? DEFAULT_BARGE_IN)
+    this.sustainMs = (timing.bargeIn ?? DEFAULT_BARGE_IN).voicedMs
+    this.sustainPending = false
     this.voiced = new VoicedSpan()
     this.speaking = false
     this.preroll = []
@@ -968,8 +981,13 @@ export class VoiceCallController {
     // fim fica de fora — o span termina no último quadro com voz)
     if (ev === 'start') this.voiced.reset()
     if (ev === 'start' || this.speaking) this.voiced.push(rms, FRAME_MS, SPEECH)
+    if (this.sustainPending && this.speaking && this.voiced.voicedMs >= this.sustainMs) {
+      this.sustainPending = false
+      this.manager.speechSustained()
+    }
     if (ev === 'resume') this.askedSeq = -1 // a especulação ficou velha (a fala continuou)
     if (ev === 'start') {
+      this.sustainPending = false
       const queue = this.queue
       const cur = queue?.current ?? null
       const sentencePlaying = !!cur && (cur.kind ?? 'sentence') === 'sentence'
@@ -986,6 +1004,7 @@ export class VoiceCallController {
         const dropped = queue ? [...(cur ? [cur.id] : []), ...queue.queuedIds] : []
         if (dropped.length) queue?.cancel(FADE_MS)
         this.manager.speechBegin({ dropped })
+        this.sustainPending = true
       }
       // fala nova: a parcial/especulação da fala anterior não vale mais
       this.askedSeq = -1
