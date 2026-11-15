@@ -23,6 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   detectViewerKind,
   VIEWER_IMAGE_MIMES,
+  VIEWER_VIDEO_MIMES,
   viewerTypeLabel,
   fileExtOf
 } from '@shared/fileViewer'
@@ -187,7 +188,10 @@ export default function HostFile() {
         mimeType:
           info.kind === 'pdf'
             ? 'application/pdf'
-            : (VIEWER_IMAGE_MIMES[fileExtOf(name)] ?? 'application/octet-stream'),
+            : (VIEWER_IMAGE_MIMES[fileExtOf(name)] ??
+              // vídeo: o compartilhamento oferece o player do celular
+              VIEWER_VIDEO_MIMES[fileExtOf(name)] ??
+              'application/octet-stream'),
         dialogTitle: name
       })
     } catch (e) {
@@ -304,7 +308,13 @@ export default function HostFile() {
       ) : (
         <View style={st.center} testID="file-binary">
           <Ionicons
-            name={info.kind === 'pdf' ? 'document-text-outline' : 'document-outline'}
+            name={
+              info.kind === 'pdf'
+                ? 'document-text-outline'
+                : info.kind === 'video'
+                  ? 'videocam-outline'
+                  : 'document-outline'
+            }
             size={40}
             color={colors.subtle}
           />
