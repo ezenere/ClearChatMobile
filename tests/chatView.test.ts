@@ -153,4 +153,35 @@ describe('modelo da conversa', () => {
     const hidden = buildSessionView(chat(ms), mainSession(chat(ms))!, null, false)
     expect(hidden.rows.map((r) => r.key)).toEqual(['compaction-divider', 'k', 'u2'])
   })
+
+  it('agendamento (1.15.0): disparo e aviso de cancelamento viram card (não balão de usuário)', () => {
+    const ms = [
+      msg('u1', 1, 'user'),
+      msg('f1', 2, 'user', {
+        meta: {
+          kind: 'schedule',
+          synthetic: true,
+          schedule: { event: 'fire', id: 'sch-aaaaa', title: 'Build', run: 1, nextAt: null }
+        }
+      }),
+      msg('n1', 3, 'user', {
+        meta: {
+          kind: 'schedule',
+          synthetic: true,
+          schedule: {
+            event: 'canceled',
+            reason: 'app-closed',
+            items: [{ id: 'sch-bbbbb', title: 'x' }]
+          }
+        }
+      })
+    ]
+    const v = buildSessionView(chat(ms), mainSession(chat(ms))!, null, true)
+    const types = v.rows.flatMap((r) => (r.kind === 'message' ? [[r.key, r.type]] : []))
+    expect(types).toEqual([
+      ['u1', 'user'],
+      ['f1', 'card'],
+      ['n1', 'card']
+    ])
+  })
 })

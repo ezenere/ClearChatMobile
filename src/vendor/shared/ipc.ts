@@ -182,6 +182,10 @@ export const IPC = {
     stop: 'processes:stop',
     logs: 'processes:logs'
   },
+  schedules: {
+    list: 'schedules:list',
+    stop: 'schedules:stop'
+  },
   approvals: {
     getSettings: 'approvals:getSettings',
     updateSettings: 'approvals:updateSettings'
@@ -1363,6 +1367,14 @@ export interface ClearApi {
     /** SIGTERM no grupo; SIGKILL após ~3 s. */
     stop(chatId: string, id: string): Promise<void>
     logs(chatId: string, id: string, tail?: number): Promise<ProcessLogsResult>
+  }
+  /**
+   * Agendamentos do chat (tool `schedule`): ativos + encerrados recentes. Num chat executado em
+   * outro aparelho, a lista vem do host (stream) e Parar vira o comando `schedule.stop`.
+   */
+  schedules: {
+    list(chatId: string): Promise<import('./schedule').ScheduleInfo[]>
+    stop(chatId: string, id: string): Promise<void>
   }
   /** Aprovações: modos globais por item + listas globais (settings approvalModes / approvalLists). */
   approvals: {

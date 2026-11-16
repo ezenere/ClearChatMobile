@@ -92,6 +92,8 @@ export function rowType(m: StoredMessage, depth: number): RowType {
   if (m.meta.kind === 'error') return 'error'
   if (m.meta.kind === 'voice-call') return 'marker'
   if (role === 'user' && m.meta.kind === 'subagent-callback') return 'card'
+  // agendamento (1.15.0): disparo / aviso de cancelamento (o celular não executa, só mostra)
+  if (role === 'user' && m.meta.kind === 'schedule') return 'card'
   if (role === 'assistant') return 'assistant'
   if (m.meta.synthetic && role !== 'user') return 'synthetic'
   if (role === 'user') return m.meta.synthetic && !isUserish(m, depth) ? 'synthetic' : 'user'

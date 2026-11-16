@@ -708,6 +708,49 @@ function CallbackCard({ msg }: { msg: StoredMessage }) {
   )
 }
 
+/**
+ * Agendamento (1.15.0, roda no computador que executa o chat): disparo — título, execução e o texto
+ * (lembrete + saída da tool) recolhido em 2 linhas — ou aviso de cancelamento com os ids.
+ */
+function ScheduleCard({ msg }: { msg: StoredMessage }) {
+  const [open, setOpen] = useState(false)
+  const sm = msg.meta.schedule
+  const text = msg.message.role === 'user' ? contentText(msg.message.content) : ''
+  const nl = text.indexOf('\n')
+  const body = nl === -1 ? '' : text.slice(nl + 1)
+  const canceled = sm?.event === 'canceled'
+  const failed = sm?.event === 'fire' && !!sm.tool && sm.tool.status !== 'ok'
+  const title = canceled
+    ? `${sm.items.length === 1 ? 'Agendamento cancelado' : 'Agendamentos cancelados'} — ${sm.items.map((i) => i.id).join(', ')}`
+    : sm?.event === 'fire'
+      ? `Agendamento · ${sm.title}${sm.everyMs || sm.run > 1 ? ` · execução ${sm.run}${sm.times ? ` de ${sm.times}` : ''}` : ''}`
+      : (nl === -1 ? text : text.slice(0, nl)).replace(/^\[|\]$/g, '')
+  const shown = canceled ? (nl === -1 ? text : text).replace(/^\[|\]$/g, '') : body
+  return (
+    <View style={st.callback} testID={canceled ? 'schedule-notice' : 'schedule-fire'}>
+      <Pressable style={st.callbackHead} onPress={() => setOpen((o) => !o)}>
+        <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={13} color={colors.faint} />
+        <Ionicons
+          name={canceled ? 'alarm-outline' : 'alarm'}
+          size={14}
+          color={canceled ? colors.warning : failed ? colors.danger : colors.accentStrong}
+        />
+        <Text style={st.callbackTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <MsgTime ts={msg.createdAt} />
+      </Pressable>
+      {shown ? (
+        <View style={st.callbackBody}>
+          <Text style={st.callbackPreview} numberOfLines={open ? undefined : 2}>
+            {shown}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
 function ExtractionCard({ msg }: { msg: StoredMessage }) {
   const [open, setOpen] = useState(false)
   const r = extractionOf(msg.meta)
@@ -928,6 +971,7 @@ function MessageBody({ msg, old }: { msg: StoredMessage; old: boolean }) {
   if (kind === 'error') return <ErrorMessage msg={msg} />
   if (kind === 'voice-call') return <CallMarker msg={msg} />
   if (role === 'user' && kind === 'subagent-callback') return <CallbackCard msg={msg} />
+  if (role === 'user' && kind === 'schedule') return <ScheduleCard msg={msg} />
   if (
     role === 'user' &&
     (kind === 'inter-chat' || kind === 'parent-message' || isSiblingKind(kind))
