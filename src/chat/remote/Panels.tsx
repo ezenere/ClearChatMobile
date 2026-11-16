@@ -42,7 +42,7 @@ import { toolSummary } from '@/chat/toolSummary'
 import { toolLabel } from '@/agent/toolLabels'
 import { locationPrefs } from '@/location/native'
 import { useLocationPrefs } from '@/location/react'
-import { isLocationTool, locationApprovalText } from '@/location/service'
+import { locationApprovalText, usesLocationApproval } from '@/location/service'
 import { sessionLabel } from '@/chat/viewModel'
 import { useAttachment } from '@/data/react'
 import type { IconName } from '@/ui/Button'
@@ -263,7 +263,10 @@ export function ApprovalPanel({
           who={fromSub ? 'o subagente' : 'o agente'}
           onDecide={onDecide}
         />
-      ) : isLocationTool(cur.toolName) ? (
+      ) : usesLocationApproval(
+          cur.toolName,
+          cur.args && typeof cur.args === 'object' ? (cur.args as Record<string, unknown>) : {}
+        ) ? (
         <LocationPrompt
           key={cur.id}
           request={cur}

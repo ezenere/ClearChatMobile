@@ -17,6 +17,7 @@ import {
 } from '@shared/deviceTools'
 import type { ToolDefinition } from '@shared/tools'
 import type { ToolName } from '@shared/types'
+import { weatherUsesDevicePosition, type DevicePoint } from '@shared/weather'
 import {
   fail,
   ok,
@@ -135,12 +136,24 @@ export function locationToolDefinition(
   )
 }
 
-/** nearby_places usa a posição do aparelho (sem `near` nem coordenadas)? */
+/**
+ * A chamada usa a posição do aparelho? get_location sempre; nearby_places sem `near` nem coordenadas;
+ * `weather` (protocolo 1.16.0, @shared/weather — roda em qualquer aparelho) sem `place` nem coordenadas.
+ */
 export function usesDeviceLocation(name: string, args: Record<string, unknown>): boolean {
   if (name === 'get_location') return true
+  if (name === 'weather') return weatherUsesDevicePosition(args)
   if (name !== 'nearby_places') return false
   const near = typeof args.near === 'string' && args.near.trim() !== ''
   return !near && args.latitude == null && args.longitude == null
+}
+
+/**
+ * A aprovação desta chamada é a de localização do aparelho (não os modos sincronizados)? As tools de
+ * localização sempre; a `weather` só quando usa a posição do aparelho.
+ */
+export function usesLocationApproval(name: string, args: Record<string, unknown>): boolean {
+  return isLocationTool(name) || (name === 'weather' && usesDeviceLocation(name, args))
 }
 
 /** Texto do card de aprovação (pt-BR): o que vai para quem. */
@@ -154,6 +167,11 @@ export function locationApprovalText(
 ): { title: string; detail: string } {
   const which =
     s.precision === 'exact' ? 'Sua localização exata' : 'Sua localização aproximada (~1 km)'
+  if (name === 'weather')
+    return {
+      title: `Permitir que ${who} use sua localização para ver a previsão do tempo?`,
+      detail: `${which} vai para o modelo e para o Open-Meteo (previsão do tempo).`
+    }
   if (name === 'nearby_places') {
     const what =
       typeof args.what === 'string' && args.what.trim() ? ` (busca: “${args.what.trim()}”)` : ''
@@ -294,6 +312,40 @@ export class LocationService {
 
   definition(name: string): ToolDefinition | undefined {
     return isLocationTool(name) ? locationToolDefinition(name, this.d.settings()) : undefined
+  }
+
+  /**
+   * Posição atual para a tool `weather` (sem lugar): permissão → precisão → posição, com os mesmos
+   * erros e a mesma precisão de get_location (sem geocodificador: o nome do lugar não é preciso aqui).
+   */
+  async devicePoint(ctx: ToolContext): Promise<DevicePoint> {
+    const cur = await this.current(ctx)
+    const acc = cur.accuracyM != null ? ` (± ${fmtDistance(cur.accuracyM)})` : ''
+    return {
+      lat: cur.point.lat,
+      lon: cur.point.lon,
+      label:
+        cur.precision === 'approximate'
+          ? 'sua localização atual, aproximada (~1 km)'
+          : `sua localização atual${acc}`,
+      notes: cur.notes
+    }
+  }
+
+  /** Lugar pelo nome no OpenStreetMap (reserva da tool `weather` quando o Open-Meteo não acha). */
+  async searchPlace(
+    query: string,
+    signal: AbortSignal
+  ): Promise<{ lat: number; lon: number; label: string; source: string } | null> {
+    const hit = await this.d.geocoder.search(query, null, signal)
+    return hit
+      ? {
+          lat: hit.lat,
+          lon: hit.lon,
+          label: hit.label,
+          source: `OpenStreetMap (${hit.source}), ${OSM_CREDIT}`
+        }
+      : null
   }
 
   /** Pede o card de aprovação? (só quando a posição do aparelho é usada e o modo é "Perguntar") */

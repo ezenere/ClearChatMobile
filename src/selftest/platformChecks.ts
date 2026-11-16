@@ -8,6 +8,7 @@ import { gcmBackend } from '@/platform/primitives'
 import * as nobleOnly from '@vendor/site/crypto/primitives'
 import { normalizeBaseUrl } from '@vendor/desktop/sync/http'
 import { deviceTimeZone, formatDateTime, runDatetimeTool } from '@shared/datetime'
+import { runWeatherTool, type WeatherFetch } from '@shared/weather'
 import { deepEq, eq, ok, rejects, throws } from './assert'
 import type { VectorCase } from './vectors'
 
@@ -179,6 +180,69 @@ export function platformCases(): VectorCase[] {
       if (aad.length)
         await rejects(nativeGcm.decrypt(key, nonce, cc.randomBytes(aad.length), ref), 'AAD trocada')
     }
+  })
+
+  // tool `weather` (protocolo 1.16.0, @shared/weather) sem rede: AbortController/sinal, `normalize`
+  // (escolha do lugar sem acento), datas por Date.UTC e números pt-BR — a saída tem de ser a do desktop
+  add('weather sem rede: lugar aproximado, texto pt-BR, sinal de cancelamento', async () => {
+    const geo = {
+      results: [
+        {
+          name: 'Riobamba',
+          latitude: -1.66,
+          longitude: -78.65,
+          country: 'Equador',
+          population: 264048
+        },
+        {
+          name: 'Rio de Janeiro',
+          latitude: -22.9064,
+          longitude: -43.1822,
+          country: 'Brasil',
+          population: 6747815
+        }
+      ]
+    }
+    const fc = {
+      latitude: -22.9,
+      longitude: -43.18,
+      utc_offset_seconds: -10800,
+      timezone: 'America/Sao_Paulo',
+      elevation: 12,
+      current: { time: '2026-11-16T14:00', temperature_2m: 30.25, weather_code: 0, is_day: 1 },
+      daily: {
+        time: ['2026-11-16', '2026-11-17'],
+        temperature_2m_min: [22.4, -0.04],
+        temperature_2m_max: [31, 29.96],
+        weather_code: [95, 2]
+      }
+    }
+    const fetchFake: WeatherFetch = async (url) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(url.includes('geocoding') ? geo : fc)
+    })
+    const r = await runWeatherTool(
+      { place: 'Rio', days: 2 },
+      { fetch: fetchFake, signal: new AbortController().signal }
+    )
+    eq(r.status, 'ok', r.content)
+    const lines = r.content.split('\n')
+    eq(
+      lines[0],
+      'Tempo em Rio de Janeiro (Brasil) · -22.9064, -43.1822 · 12 m — horários locais de lá: America/Sao_Paulo (UTC-03:00)',
+      'cabeçalho'
+    )
+    eq(lines[1], 'Agora (14:00): 30,3 °C · céu limpo', 'agora')
+    eq(lines[3], '- hoje, seg 16/11: 22,4 a 31 °C · trovoada', 'hoje')
+    eq(lines[4], '- amanhã, ter 17/11: 0 a 30 °C · parcialmente nublado', 'amanhã')
+    eq('Ríó'.normalize('NFD').replace(/[\u0300-\u036f]/g, ''), 'Rio', 'normalize NFD')
+    const ac = new AbortController()
+    ac.abort()
+    await rejects(
+      runWeatherTool({ latitude: 1, longitude: 2 }, { fetch: fetchFake, signal: ac.signal }),
+      'cancelado'
+    )
   })
 
   return cases

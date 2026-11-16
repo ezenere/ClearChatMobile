@@ -3,6 +3,7 @@
 import { isMemoryTool, memoryToolSummary } from '@vendor/renderer/memory'
 import { isSkillTool, skillToolSummary } from '@vendor/renderer/skills'
 import type { IconName } from '@/ui/Button'
+import { weatherToolSummary } from '@shared/weather'
 
 const shortId = (id: string): string => (id.length > 12 ? `${id.slice(0, 8)}…` : id)
 
@@ -134,6 +135,9 @@ export function toolSummary(name: string, args: Record<string, unknown> | null):
     // tools compactadas e datetime (protocolo 1.11.0)
     case 'datetime':
       return pick('format')
+    // previsão do tempo (protocolo 1.16.0)
+    case 'weather':
+      return weatherToolSummary(args)
     case 'tool_search':
     case 'search_tool': // nome até 1.11.0 (chamadas antigas no histórico)
       return Array.isArray(args.names)
@@ -195,6 +199,7 @@ const ICONS: Record<string, IconName> = {
   get_location: 'location-outline',
   nearby_places: 'map-outline',
   datetime: 'calendar-outline',
+  weather: 'partly-sunny-outline',
   tool_search: 'book-outline',
   search_tool: 'book-outline'
 }

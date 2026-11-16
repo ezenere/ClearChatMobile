@@ -516,6 +516,9 @@ export function startFakeLlm(
     const hasEndCall = tools.some((t) => (t.function?.name ?? t.name) === 'end_call')
     if (hasEndCall && /tchau|desligar/i.test(text) && !toolResult)
       return toolCall('end_call', { reason: 'o usuário se despediu' }, 'Até mais, tchau! ')
+    // previsão do tempo (1.16.0, portátil): /weather <args JSON>
+    if (text.startsWith('/weather'))
+      return toolCall('weather', JSON.parse(text.slice(8).trim() || '{}'), 'Vou ver a previsão. ')
     // localização (tools só do celular): /where · /near <o quê> [raio] · /near-at <lugar> | <o quê>
     if (text.startsWith('/where')) return toolCall('get_location', {}, 'Vou ver onde você está. ')
     if (text.startsWith('/near-at')) {

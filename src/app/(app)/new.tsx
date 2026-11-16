@@ -57,7 +57,8 @@ const TOOL_HELP: Partial<Record<ToolName, string>> = {
   browse_url: 'Abre e lê páginas (sem executar JavaScript).',
   list_models: 'Lista os modelos dos seus provedores.',
   ask_user: 'Faz perguntas de múltipla escolha a você.',
-  datetime: 'Data e hora do celular, no fuso dele.'
+  datetime: 'Data e hora do celular, no fuso dele.',
+  weather: 'Previsão do tempo (Open-Meteo), num lugar ou onde você está.'
 }
 
 export default function NewChatScreen() {

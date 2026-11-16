@@ -129,6 +129,7 @@ const PHONE_SENT: string[] = [
   'message_subagent',
   'ask_user',
   'datetime',
+  'weather',
   'get_location',
   'nearby_places'
 ]
@@ -145,6 +146,9 @@ describe('plano das tools do celular (request)', () => {
     expect(APP_TOOL_NAMES).toContain('datetime')
     expect(DEFAULT_CHAT_CONFIG('').enabledTools).toContain('datetime')
     expect(MOBILE_TOOLS).toContain('datetime')
+    // previsão do tempo (1.16.0): também portátil e no padrão do app
+    expect(MOBILE_TOOLS).toContain('weather')
+    expect(DEFAULT_CHAT_CONFIG('').enabledTools).toContain('weather')
     expect(DEFAULT_CHAT_CONFIG('').toolsCompact).toBe(true)
     expect(DEFAULT_CHAT_CONFIG('').toolsFull).toEqual([])
     expect(TOOL_LABELS.datetime).toBe('Data e hora')

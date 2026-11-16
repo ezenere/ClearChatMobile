@@ -60,7 +60,8 @@ const TOOL_HELP: Partial<Record<ToolName, string>> = {
   delegate_task: 'Cria subagentes para tarefas paralelas.',
   send_to_chat: 'Manda mensagens a outros chats.',
   read_history: 'Lê o histórico completo (inclusive o compactado).',
-  datetime: 'Data e hora do celular, no fuso dele.'
+  datetime: 'Data e hora do celular, no fuso dele.',
+  weather: 'Previsão do tempo (Open-Meteo), num lugar ou onde você está.'
 }
 
 function loadDefaults() {

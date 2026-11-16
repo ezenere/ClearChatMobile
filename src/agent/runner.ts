@@ -101,6 +101,7 @@ import {
   type ToolSearchCaps
 } from '@shared/toolSearch'
 import { runDatetimeTool } from '@shared/datetime'
+import { runWeatherTool } from '@shared/weather'
 import type {
   AgentEvent,
   ApiMessage,
@@ -213,7 +214,7 @@ import {
   type ToolContext
 } from './tools/util'
 import { browseUrl, webSearch } from './tools/web'
-import { isLocationTool, type LocationService } from '@/location/service'
+import { isLocationTool, usesLocationApproval, type LocationService } from '@/location/service'
 
 export const CANCELLED_TEXT = '[Interrompido pelo usuário antes de concluir]'
 export const DENIED_TEXT = 'O usuário negou a execução desta ferramenta.'
@@ -1497,12 +1498,13 @@ export class Runner {
     if (name === 'end_call') return done({ content: END_CALL_RESULT, status: 'ok' })
     const settings = this.approvalSettings()
     // localização: aprovação do APARELHO (Perguntar/Sempre/Nunca — Configurações → Localização), não
-    // os modos sincronizados; só pergunta quando a posição do aparelho é usada
-    const loc = isLocationTool(name) ? this.d.location : undefined
+    // os modos sincronizados; só pergunta quando a posição do aparelho é usada (também a `weather`
+    // sem lugar, 1.16.0)
+    const loc = isLocationTool(name) || name === 'weather' ? this.d.location : undefined
     let route: ReturnType<typeof approvalRoute> =
       name === 'ask_user'
         ? { kind: 'run' as const }
-        : isLocationTool(name)
+        : usesLocationApproval(name, args)
           ? loc?.needsApproval(name, args)
             ? { kind: 'user' as const }
             : { kind: 'run' as const }
@@ -1737,9 +1739,25 @@ export class Runner {
                     : name === 'datetime'
                       ? // data/hora DESTE aparelho, no fuso dele (1.11.0; sem aprovação)
                         async (a: Record<string, unknown>) => runDatetimeTool(a)
-                      : loc && isLocationTool(name)
-                        ? (a: Record<string, unknown>, c: ToolContext) => loc.run(name, a, c)
-                        : null
+                      : name === 'weather'
+                        ? // previsão do tempo (1.16.0): sem lugar, a posição deste celular (a
+                          // aprovação de localização já passou acima); o OSM é a reserva do nome
+                          (a: Record<string, unknown>, c: ToolContext) =>
+                            runWeatherTool(a, {
+                              fetch: (url, init) => fetch(url, init),
+                              signal: c.signal,
+                              onOutput: c.onOutput,
+                              ...(loc
+                                ? {
+                                    devicePosition: () => loc.devicePoint(c),
+                                    fallbackGeocoder: (q: string, sig: AbortSignal) =>
+                                      loc.searchPlace(q, sig)
+                                  }
+                                : {})
+                            })
+                        : loc && isLocationTool(name)
+                          ? (a: Record<string, unknown>, c: ToolContext) => loc.run(name, a, c)
+                          : null
       if (!impl)
         return done({
           content: `Erro: ferramenta "${name}" indisponível no celular.`,

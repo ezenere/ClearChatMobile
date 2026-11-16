@@ -133,6 +133,9 @@ export const MOBILE_TOOLS: readonly ToolName[] = [
   'read_history',
   // data e hora do aparelho (protocolo 1.11.0; portátil, sem aprovação — @shared/datetime)
   'datetime',
+  // previsão do tempo (protocolo 1.16.0; portátil, sem aprovação — @shared/weather): sem lugar, usa a
+  // posição do celular (com a aprovação de localização dele)
+  'weather',
   // só no celular (src/location; nomes em @shared/deviceTools): o desktop as preserva nas listas
   // e as mostra esmaecidas, mas não as executa
   ...LOCATION_TOOLS
