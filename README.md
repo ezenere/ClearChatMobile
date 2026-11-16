@@ -1175,7 +1175,13 @@ texto em pt-BR). Problemas prováveis e onde mexer:
   `public_header_files` do podspec, e rode `pod install` de novo;
 - áudio: a sessão é `playAndRecord` com alto-falante (`ensureAudioMode` em
   `src/voice/nativeAudio.ts`), sem o modo de voz do iOS — ou seja, sem cancelamento de eco, como no
-  Android: mantenha "Interromper falando" desligado sem fone;
+  Android: mantenha "Interromper falando" desligado sem fone. O `expo-audio` 58.0.11 vem com
+  `patches/expo-audio+58.0.11.patch` (`patch-package` no `postinstall`): o `AudioStream` abria o
+  microfone em `.record` (desligava a reprodução — a chamada ficava muda) e a sessão era desativada
+  no fim de cada frase do agente com o microfone aberto (parava de ouvir). O patch abre em
+  `playAndRecord` + `.measurement` (sem ganho automático: com ele o ruído passa dos limiares de fala
+  e o turno nunca fecha) e conta os streams como sessão em uso. Ao atualizar o `expo-audio`, refaça o
+  patch (`npx patch-package expo-audio`) ou confira se a versão nova já corrigiu;
 - `UIBackgroundModes` fica vazio de propósito (chamada e host só em primeiro plano);
 - localização: Configurações → Localização → "Permitir agora" (diálogo "durante o uso" em pt-BR);
   com "Exata" e a "Localização Precisa" desligada nos Ajustes, o pedido deve mostrar o aviso de

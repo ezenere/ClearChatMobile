@@ -1,0 +1,69 @@
+diff --git a/node_modules/expo-audio/ios/AudioModule.swift b/node_modules/expo-audio/ios/AudioModule.swift
+index 42ce9e8..635b20f 100644
+--- a/node_modules/expo-audio/ios/AudioModule.swift
++++ b/node_modules/expo-audio/ios/AudioModule.swift
+@@ -19,6 +19,10 @@ public class AudioModule: Module {
+   private var allowsBackgroundRecording = false
+   private var sessionOptions: AVAudioSession.CategoryOptions = []
+   private var lastConfiguredMode: AudioMode?
++  // ClearChat: AudioStreams capturando (só no sessionQueue). Sem isto, o fim de um player desativa
++  // a sessão (deactivateSession → isSessionInUse ignorava os streams) e o AVAudioEngine do microfone
++  // para em silêncio — a chamada de voz deixava de ouvir durante e depois da fala do agente.
++  private var activeStreamIds = Set<String>()
+ 
+   public func definition() -> ModuleDefinition {
+     Name("ExpoAudio")
+@@ -579,11 +583,19 @@ public class AudioModule: Module {
+       AsyncFunction("start") { (stream: AudioStream) in
+         try checkPermissions()
+         try stream.start()
++        let streamId = stream.id
++        self.sessionQueue.async { [weak self] in
++          self?.activeStreamIds.insert(streamId)
++        }
+         self.recordSessionActive(true)
+       }
+ 
+       Function("stop") { (stream: AudioStream) in
+         stream.stop()
++        let streamId = stream.id
++        self.sessionQueue.async { [weak self] in
++          self?.activeStreamIds.remove(streamId)
++        }
+         self.deactivateSession()
+       }
+ 
+@@ -991,6 +1003,9 @@ public class AudioModule: Module {
+   }
+ 
+   private var isSessionInUse: Bool {
++    if !activeStreamIds.isEmpty {
++      return true
++    }
+     if registry.allPlayables.contains(where: { $0.isPlaying }) {
+       return true
+     }
+diff --git a/node_modules/expo-audio/ios/AudioStream.swift b/node_modules/expo-audio/ios/AudioStream.swift
+index 1534fe5..7e1c9a7 100644
+--- a/node_modules/expo-audio/ios/AudioStream.swift
++++ b/node_modules/expo-audio/ios/AudioStream.swift
+@@ -34,7 +34,18 @@ class AudioStream: SharedObject {
+     guard !isStreaming else { return }
+ 
+     let session = AVAudioSession.sharedInstance()
+-    try session.setCategory(.record, mode: .measurement)
++    // ClearChat: `.record` desliga toda a reprodução no iOS (a chamada de voz toca a resposta com o
++    // microfone aberto) e o stop() não restaura a categoria. Usa as opções do
++    // setAudioModeAsync({ allowsRecording, playsInSilentMode, interruptionMode: 'duckOthers' }), mas
++    // mantém o modo `.measurement`: sem o ganho automático do `.default`, que sobe o ruído de fundo
++    // acima dos limiares fixos de fala/silêncio (−45 dBFS) e a fala nunca termina.
++    var categoryOptions: AVAudioSession.CategoryOptions = [.duckOthers, .defaultToSpeaker]
++#if compiler(>=6.2) // Xcode 26
++    categoryOptions.insert(.allowBluetoothHFP)
++#else
++    categoryOptions.insert(.allowBluetooth)
++#endif
++    try session.setCategory(.playAndRecord, mode: .measurement, options: categoryOptions)
+     try session.setPreferredSampleRate(requestedSampleRate)
+     try session.setActive(true)
+ 
