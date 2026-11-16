@@ -297,6 +297,31 @@ describe('SettingsService (servidor falso)', () => {
     expect(s.engines().find((e) => e.id === 'exa')!.enabled).toBe(false)
   })
 
+  it('tempo e mapas (1.16.0): provedor e chave do Google sobem como settings; sem chave volta ao Open-Meteo', async () => {
+    expect(s.maps()).toEqual({
+      weatherProvider: 'open-meteo',
+      google: { hasKey: false, keyMask: null }
+    })
+    expect(() => s.setWeatherProvider('google')).toThrow(/chave do Google Maps Platform/)
+    expect(() => s.setGoogleMapsKey('a b')).toThrow(/espaços/)
+    s.setGoogleMapsKey('  AIzaSyFAKE0123456789abcdef  ')
+    s.setWeatherProvider('google')
+    expect(s.maps().weatherProvider).toBe('google')
+    expect(s.maps().google.hasKey).toBe(true)
+    expect(s.maps().google.keyMask).not.toContain('FAKE0123')
+    expect(s.googleMapsKey()).toBe('AIzaSyFAKE0123456789abcdef')
+    await flushed()
+    expect((await serverPlain('setting', 'googleMapsApiKey'))!.value).toBe(
+      'AIzaSyFAKE0123456789abcdef'
+    )
+    expect((await serverPlain('setting', 'weatherProvider'))!.value).toBe('google')
+    s.setGoogleMapsKey(null)
+    await flushed()
+    expect((await serverPlain('setting', 'googleMapsApiKey'))!.value).toBeNull()
+    expect((await serverPlain('setting', 'weatherProvider'))!.value).toBe('open-meteo')
+    expect(s.maps().weatherProvider).toBe('open-meteo')
+  })
+
   it('memórias à mão: coleção + memória sobem; editar; apagar a coleção leva as memórias', async () => {
     const col = s.createCollection({ category: 'people', name: 'Família', description: 'gente' })
     const m = s.createMemory({ collectionId: col.id, title: 'Rex', summary: 'o cachorro' })

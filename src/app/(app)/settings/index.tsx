@@ -1,5 +1,5 @@
 // Configurações (aberta pela lista de chats): a conta no topo e os mesmos grupos do desktop —
-// Geral (Novos chats, Personas, Voz), Agente (Aprovações, Memórias, Pesquisa na web) e Conexões
+// Geral (Novos chats, Personas, Voz), Agente (Aprovações, Memórias, Pesquisa na web, Tempo e mapas) e Conexões
 // (Provedores, Dispositivos, Conta). Tudo sincroniza com os outros dispositivos, menos o que é do
 // aparelho (§4.4). Sem conta: tudo fica só aqui, sem Dispositivos/Conta, e "Entrar numa conta" no topo.
 import { useRouter, type Href } from 'expo-router'
@@ -7,6 +7,7 @@ import { StyleSheet, Text, View } from 'react-native'
 import { MEMORY_CATEGORIES } from '@shared/memory'
 import { providerKind } from '@shared/providerKinds'
 import { ENGINE_META } from '@shared/webSearchSettings'
+import { WEATHER_PROVIDER_META } from '@shared/mapsSettings'
 import { readVoiceSettings } from '@/voice/endpoints'
 import { KIND_SHORT } from '@/settings/records'
 import { useSession } from '@/account/react'
@@ -62,6 +63,10 @@ function summary() {
     web: engines.length
       ? engines.map((e) => ENGINE_META[e.id].label).join(' → ')
       : 'Nenhum buscador habilitado',
+    maps: (() => {
+      const m = settings.maps()
+      return `Previsão: ${WEATHER_PROVIDER_META[m.weatherProvider].label}${m.google.hasKey ? ' · chave do Google salva' : ''}`
+    })(),
     defaults: def?.model ? `Modelo padrão: ${def.model}` : 'Modelo padrão não definido',
     voice: (() => {
       const v = readVoiceSettings((id) => settings.setting(id))
@@ -176,6 +181,7 @@ export default function SettingsHome() {
         )}
         {item('/settings/memory', 'library-outline', 'Memórias', sum.memory, 'settings-memory')}
         {item('/settings/web', 'globe-outline', 'Pesquisa na web', sum.web, 'settings-web')}
+        {item('/settings/maps', 'partly-sunny-outline', 'Tempo e mapas', sum.maps, 'settings-maps')}
         {item(
           '/settings/location',
           'location-outline',

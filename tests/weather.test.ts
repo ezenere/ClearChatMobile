@@ -71,11 +71,40 @@ const GEO = {
 }
 
 let meteoCalls: string[] = []
+let googleCalls: Record<string, unknown>[] = []
 const realFetch = globalThis.fetch
 beforeEach(() => {
   meteoCalls = []
+  googleCalls = []
   vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+    if (url.startsWith('https://mapstools.googleapis.com/')) {
+      googleCalls.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      const body = JSON.parse(String(init?.body ?? '{}')) as { date?: unknown }
+      return new Response(
+        JSON.stringify(
+          body.date
+            ? {
+                weather: {
+                  maxTemperature: { degrees: 27 },
+                  minTemperature: { degrees: 18 },
+                  weatherCondition: { description: { text: 'Ensolarado' } }
+                },
+                timeZone: 'America/Sao_Paulo'
+              }
+            : {
+                weather: {
+                  temperature: { degrees: 25 },
+                  weatherCondition: { description: { text: 'Ensolarado' } },
+                  attribution: { title: 'Weather for São Paulo - Google', url: 'https://g.co/x' },
+                  dateTime: '2026-11-16T17:00:00Z'
+                },
+                timeZone: 'America/Sao_Paulo'
+              }
+        ),
+        { status: 200 }
+      )
+    }
     if (!url.includes('open-meteo.com')) return realFetch(input, init)
     meteoCalls.push(url)
     const body = url.includes('geocoding-api') ? (url.includes('Curitiba') ? GEO : {}) : FORECAST
@@ -212,6 +241,28 @@ describe('runner: weather num chat deste celular', () => {
     expect(String(tool(sid).message.content)).toMatch(/^Tempo em Curitiba \(Paraná, Brasil\)/)
     expect(current.device.positions).toEqual([])
     expect(meteoCalls[0]).toContain('geocoding-api.open-meteo.com')
+  })
+
+  it('Google escolhido em Tempo e mapas (settings sincronizados): a tool usa o Google com a chave', async () => {
+    await mk()
+    // o PC escolheu o Google (settings sincronizados) e o celular recebe pelo sync
+    await h.desk.put('setting', 'googleMapsApiKey', null, { sv: 1, value: 'AIza-chave-de-teste' })
+    await h.desk.put('setting', 'weatherProvider', null, { sv: 1, value: 'google' })
+    await h.engine.sync()
+    const { sid } = newChat(['weather'])
+    await h.stack.runner.send(sid, '/weather {"place": "São Paulo", "days": 1}')
+    await idle(sid)
+    expect(tool(sid).meta.toolStatus).toBe('ok')
+    const out = String(tool(sid).message.content)
+    expect(out).toContain('Agora (14:00): 25 °C · Ensolarado')
+    expect(out).toContain('- hoje, seg 16/11: 18 a 27 °C · Ensolarado')
+    expect(out).toContain('cite logo depois: [Weather for São Paulo - Google](https://g.co/x)')
+    expect(googleCalls).toHaveLength(2)
+    expect(googleCalls[0]).toMatchObject({
+      location: { address: 'São Paulo' },
+      languageCode: 'pt-BR'
+    })
+    expect(meteoCalls).toEqual([])
   })
 
   it('"Nunca": sem lugar vira erro legível (o turno segue); lugar desconhecido → reserva do OSM', async () => {

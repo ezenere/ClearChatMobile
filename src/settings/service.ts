@@ -22,6 +22,15 @@ import {
   type SearchEngineId
 } from '@shared/webSearchSettings'
 import type { Preset, Provider } from '@shared/types'
+import {
+  checkMapsKey,
+  GOOGLE_MAPS_KEY_SETTING,
+  mapsSettingsState,
+  WEATHER_PROVIDER_META,
+  WEATHER_PROVIDER_SETTING,
+  type MapsSettingsState,
+  type WeatherProviderId
+} from '@shared/mapsSettings'
 import { UserError } from '@/account/errors'
 import type { LwwWriter } from '@/data/lww'
 import type { LocalStore } from '@/data/store'
@@ -246,6 +255,38 @@ export class SettingsService {
 
   setSearchInterval(seconds: number): void {
     this.setSetting(SEARCH_INTERVAL_SETTING, normalizeSearchInterval(seconds))
+  }
+
+  // ---------------- tempo e mapas (1.16.0; = mapsConfig.ts do desktop) ----------------
+
+  maps(): MapsSettingsState {
+    return mapsSettingsState(
+      this.setting(WEATHER_PROVIDER_SETTING),
+      this.setting(GOOGLE_MAPS_KEY_SETTING)
+    )
+  }
+
+  /** Provedor da previsão do tempo; Google sem chave salva → erro legível. */
+  setWeatherProvider(id: WeatherProviderId): void {
+    if (!(id in WEATHER_PROVIDER_META)) throw new UserError('Provedor desconhecido.')
+    if (WEATHER_PROVIDER_META[id].needsKey && !this.maps().google.hasKey)
+      throw new UserError('Informe a chave do Google Maps Platform para usar o Google.')
+    this.setSetting(WEATHER_PROVIDER_SETTING, id)
+  }
+
+  /** Salva (ou, vazia, remove) a chave do Google Maps; sem chave a previsão volta ao Open-Meteo. */
+  setGoogleMapsKey(key: string | null): void {
+    const c = checkMapsKey(key)
+    if (!c.ok) throw new UserError(c.error)
+    this.setSetting(GOOGLE_MAPS_KEY_SETTING, c.key)
+    if (!c.key && this.setting(WEATHER_PROVIDER_SETTING) === 'google')
+      this.setSetting(WEATHER_PROVIDER_SETTING, 'open-meteo')
+  }
+
+  /** Chave em claro (botão mostrar, numa tela com FLAG_SECURE). */
+  googleMapsKey(): string | null {
+    const k = this.setting(GOOGLE_MAPS_KEY_SETTING)
+    return typeof k === 'string' && k.trim() ? k.trim() : null
   }
 
   // ---------------- memórias ----------------

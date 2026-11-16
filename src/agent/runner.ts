@@ -102,6 +102,13 @@ import {
 } from '@shared/toolSearch'
 import { runDatetimeTool } from '@shared/datetime'
 import { runWeatherTool } from '@shared/weather'
+import { googleWeatherProvider } from '@shared/googleWeather'
+import {
+  GOOGLE_MAPS_KEY_SETTING,
+  normalizeMapsKey,
+  normalizeWeatherProvider,
+  WEATHER_PROVIDER_SETTING
+} from '@shared/mapsSettings'
 import type {
   AgentEvent,
   ApiMessage,
@@ -1747,6 +1754,7 @@ export class Runner {
                               fetch: (url, init) => fetch(url, init),
                               signal: c.signal,
                               onOutput: c.onOutput,
+                              ...this.weatherProvider(),
                               ...(loc
                                 ? {
                                     devicePosition: () => loc.devicePoint(c),
@@ -1773,6 +1781,15 @@ export class Runner {
       out.cancel()
       this.emit({ type: 'tool-running', sessionId: session.id, toolCallId, running: false })
     }
+  }
+
+  /** Provedor da tool `weather` (Configurações → Tempo e mapas; sincronizado): o Google com a chave. */
+  private weatherProvider(): { provider?: ReturnType<typeof googleWeatherProvider> } {
+    const key = normalizeMapsKey(this.d.setting(GOOGLE_MAPS_KEY_SETTING))
+    return key &&
+      normalizeWeatherProvider(this.d.setting(WEATHER_PROVIDER_SETTING), true) === 'google'
+      ? { provider: googleWeatherProvider(key) }
+      : {}
   }
 
   private async runAskUser(

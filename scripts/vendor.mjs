@@ -101,6 +101,9 @@ const GROUPS = {
       // completa, textos do app mostrados na UI) e a tool datetime (strftime no fuso do aparelho)
       'compactTools.ts',
       'datetime.ts',
+      // tempo e mapas (1.16.0): provedor da previsão e o Google (a tool `weather` vem por tools.ts)
+      'mapsSettings.ts',
+      'googleWeather.ts',
       // 1.12.0: busca nativa de ferramentas (modo por request, array tools da Messages API,
       // `native` gravação/reenvio/filtro, carregadas à força, toolSearchCaps, textos da UI)
       'toolSearch.ts',
