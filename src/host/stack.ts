@@ -1,6 +1,12 @@
 // Monta o host no celular (repo + outbox + runner + HostService) sobre o cache e a conta — o mesmo
 // código no aparelho (native.ts) e nos testes de integração (Node). Sem React Native.
 import {
+  GOOGLE_MAPS_KEY_SETTING,
+  normalizeMapsKey,
+  normalizePlacesProvider,
+  PLACES_PROVIDER_SETTING
+} from '@shared/mapsSettings'
+import {
   APPROVAL_LISTS_SETTING,
   normalizeApprovalLists,
   validateListEntry
@@ -236,6 +242,14 @@ export function createHostStack(d: HostStackDeps): HostStack {
     }
   })
   const location = d.location
+  // lugares pelo Google (Configurações → Tempo e mapas, 1.17.0; settings sincronizados)
+  location?.setPlacesSource(() => {
+    const key = normalizeMapsKey(d.store.setting(GOOGLE_MAPS_KEY_SETTING))
+    return key &&
+      normalizePlacesProvider(d.store.setting(PLACES_PROVIDER_SETTING), true) === 'google'
+      ? { key }
+      : null
+  })
   setLocationSource(
     location ? { tools: () => location.tools(), definition: (n) => location.definition(n) } : null
   )

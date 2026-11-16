@@ -104,6 +104,8 @@ const GROUPS = {
       // tempo e mapas (1.16.0): provedor da previsão e o Google (a tool `weather` vem por tools.ts)
       'mapsSettings.ts',
       'googleWeather.ts',
+      // lugares pelo Google (1.17.0): o provedor Google do nearby_places (src/location)
+      'googlePlaces.ts',
       // 1.12.0: busca nativa de ferramentas (modo por request, array tools da Messages API,
       // `native` gravação/reenvio/filtro, carregadas à força, toolSearchCaps, textos da UI)
       'toolSearch.ts',

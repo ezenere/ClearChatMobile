@@ -6,7 +6,12 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { testGoogleWeatherKey } from '@shared/googleWeather'
-import { WEATHER_PROVIDER_META, type WeatherProviderId } from '@shared/mapsSettings'
+import {
+  PLACES_PROVIDER_META,
+  WEATHER_PROVIDER_META,
+  type PlacesProviderId,
+  type WeatherProviderId
+} from '@shared/mapsSettings'
 import { describeError } from '@/account/errors'
 import { readAt, settings, useSettingsVersion } from '@/settings/react'
 import { Segmented, SettingsScreen } from '@/settings/ui'
@@ -27,6 +32,14 @@ export default function MapsSettings() {
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null)
 
+  const choosePlaces = (id: PlacesProviderId) => {
+    try {
+      settings.setPlacesProvider(id)
+      setError(null)
+    } catch (e) {
+      setError(describeError(e))
+    }
+  }
   const choose = (id: WeatherProviderId) => {
     try {
       settings.setWeatherProvider(id)
@@ -58,7 +71,7 @@ export default function MapsSettings() {
     <SettingsScreen
       title="Tempo e mapas"
       testID="screen-maps"
-      help="Fonte da previsão do tempo (tool weather). O Google responde agora, até 10 dias e até 24 horas por vez; dias anteriores, mais de 10 dias e qualquer falha dele vão ao Open-Meteo naquela chamada, com o motivo no resultado. Vale para todos os seus dispositivos."
+      help="Fontes da previsão do tempo (tool weather) e dos lugares próximos (nearby_places). O Google responde agora, até 10 dias e até 24 horas por vez; dias anteriores, mais de 10 dias e qualquer falha dele vão ao Open-Meteo naquela chamada, com o motivo no resultado. Vale para todos os seus dispositivos."
     >
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <Card>
@@ -73,6 +86,20 @@ export default function MapsSettings() {
           testID="weather-provider"
         />
         <Text style={s.hint}>{WEATHER_PROVIDER_META[st.weatherProvider].description}</Text>
+      </Card>
+
+      <Card>
+        <Text style={s.label}>Lugares próximos</Text>
+        <Segmented
+          options={[
+            { value: 'osm', label: 'OpenStreetMap' },
+            { value: 'google', label: 'Google Maps', disabled: !st.google.hasKey }
+          ]}
+          value={st.placesProvider}
+          onChange={choosePlaces}
+          testID="places-provider"
+        />
+        <Text style={s.hint}>{PLACES_PROVIDER_META[st.placesProvider].description}</Text>
       </Card>
 
       <Card>
@@ -116,8 +143,9 @@ export default function MapsSettings() {
         ) : null}
         <Text style={s.hint}>
           Chave do Google Cloud com o Maps Experience agent tools ativado. 10 mil chamadas grátis
-          por mês; a previsão usa uma por momento (agora + 1 por dia + 1 por hora). Os termos do
-          Google pedem citar a fonte (o resultado traz o link).
+          por mês; a previsão usa uma por momento (agora + 1 por dia + 1 por hora) e cada busca de
+          lugares, uma (até 5 lugares; de 6 a 10 é a faixa Pro). Os termos do Google pedem citar a
+          fonte (o resultado traz os links).
         </Text>
       </Card>
     </SettingsScreen>

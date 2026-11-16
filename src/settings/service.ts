@@ -26,9 +26,12 @@ import {
   checkMapsKey,
   GOOGLE_MAPS_KEY_SETTING,
   mapsSettingsState,
+  PLACES_PROVIDER_META,
+  PLACES_PROVIDER_SETTING,
   WEATHER_PROVIDER_META,
   WEATHER_PROVIDER_SETTING,
   type MapsSettingsState,
+  type PlacesProviderId,
   type WeatherProviderId
 } from '@shared/mapsSettings'
 import { UserError } from '@/account/errors'
@@ -262,7 +265,8 @@ export class SettingsService {
   maps(): MapsSettingsState {
     return mapsSettingsState(
       this.setting(WEATHER_PROVIDER_SETTING),
-      this.setting(GOOGLE_MAPS_KEY_SETTING)
+      this.setting(GOOGLE_MAPS_KEY_SETTING),
+      this.setting(PLACES_PROVIDER_SETTING)
     )
   }
 
@@ -274,13 +278,23 @@ export class SettingsService {
     this.setSetting(WEATHER_PROVIDER_SETTING, id)
   }
 
-  /** Salva (ou, vazia, remove) a chave do Google Maps; sem chave a previsão volta ao Open-Meteo. */
+  /** Provedor dos lugares próximos (1.17.0); Google sem chave salva → erro legível. */
+  setPlacesProvider(id: PlacesProviderId): void {
+    if (!(id in PLACES_PROVIDER_META)) throw new UserError('Provedor desconhecido.')
+    if (PLACES_PROVIDER_META[id].needsKey && !this.maps().google.hasKey)
+      throw new UserError('Informe a chave do Google Maps Platform para usar o Google Maps.')
+    this.setSetting(PLACES_PROVIDER_SETTING, id)
+  }
+
+  /** Salva (ou, vazia, remove) a chave do Google Maps; sem chave os provedores voltam aos padrões. */
   setGoogleMapsKey(key: string | null): void {
     const c = checkMapsKey(key)
     if (!c.ok) throw new UserError(c.error)
     this.setSetting(GOOGLE_MAPS_KEY_SETTING, c.key)
     if (!c.key && this.setting(WEATHER_PROVIDER_SETTING) === 'google')
       this.setSetting(WEATHER_PROVIDER_SETTING, 'open-meteo')
+    if (!c.key && this.setting(PLACES_PROVIDER_SETTING) === 'google')
+      this.setSetting(PLACES_PROVIDER_SETTING, 'osm')
   }
 
   /** Chave em claro (botão mostrar, numa tela com FLAG_SECURE). */

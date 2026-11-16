@@ -40,7 +40,8 @@ import type {
 import { formatCost, formatDuration } from '@/chat/format'
 import { toolSummary } from '@/chat/toolSummary'
 import { toolLabel } from '@/agent/toolLabels'
-import { locationPrefs } from '@/location/native'
+import { location, locationPrefs } from '@/location/native'
+import { settings } from '@/settings/react'
 import { useLocationPrefs } from '@/location/react'
 import { locationApprovalText, usesLocationApproval } from '@/location/service'
 import { sessionLabel } from '@/chat/viewModel'
@@ -415,7 +416,8 @@ function LocationPrompt({
     args,
     prefs,
     who,
-    Platform.OS === 'ios' ? 'Apple' : 'Google'
+    Platform.OS === 'ios' ? 'Apple' : 'Google',
+    { weather: settings.maps().weatherProvider, places: location.placesVia() }
   )
   const sum = toolSummary(request.toolName, args)
   const decide = async (d: 'allow' | 'deny' | 'always') => {

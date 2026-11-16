@@ -7,7 +7,7 @@ import { StyleSheet, Text, View } from 'react-native'
 import { MEMORY_CATEGORIES } from '@shared/memory'
 import { providerKind } from '@shared/providerKinds'
 import { ENGINE_META } from '@shared/webSearchSettings'
-import { WEATHER_PROVIDER_META } from '@shared/mapsSettings'
+import { PLACES_PROVIDER_META, WEATHER_PROVIDER_META } from '@shared/mapsSettings'
 import { readVoiceSettings } from '@/voice/endpoints'
 import { KIND_SHORT } from '@/settings/records'
 import { useSession } from '@/account/react'
@@ -65,7 +65,7 @@ function summary() {
       : 'Nenhum buscador habilitado',
     maps: (() => {
       const m = settings.maps()
-      return `Previsão: ${WEATHER_PROVIDER_META[m.weatherProvider].label}${m.google.hasKey ? ' · chave do Google salva' : ''}`
+      return `Previsão: ${WEATHER_PROVIDER_META[m.weatherProvider].label} · Lugares: ${PLACES_PROVIDER_META[m.placesProvider].label}`
     })(),
     defaults: def?.model ? `Modelo padrão: ${def.model}` : 'Modelo padrão não definido',
     voice: (() => {

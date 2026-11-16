@@ -18,6 +18,8 @@ import {
 import type { ToolDefinition } from '@shared/tools'
 import type { ToolName } from '@shared/types'
 import { weatherUsesDevicePosition, type DevicePoint } from '@shared/weather'
+import { formatGooglePlaces, GOOGLE_PLACES_LIMITS, searchGooglePlaces } from '@shared/googlePlaces'
+import type { MapsToolsFetch } from '@shared/googleMapsTools'
 import {
   fail,
   ok,
@@ -83,10 +85,14 @@ const def = (
     }
   }) as unknown as ToolDefinition
 
-/** Definições (o texto muda com a precisão e com a localização desligada). */
+/** Provedor dos lugares (Configurações → Tempo e mapas, sincronizado; desde 1.17.0). */
+export type PlacesVia = 'osm' | 'google'
+
+/** Definições (o texto muda com a precisão, com a localização desligada e com o provedor). */
 export function locationToolDefinition(
   name: LocationToolName,
-  s: LocationSettings
+  s: LocationSettings,
+  places: PlacesVia = 'osm'
 ): ToolDefinition {
   const approx = s.precision === 'approximate'
   const precisionText = approx
@@ -99,6 +105,42 @@ export function locationToolDefinition(
       {}
     )
   const off = s.approval === 'never'
+  if (places === 'google')
+    return def(
+      'nearby_places',
+      `Busca lugares por perto no Google Maps: restaurantes, cafés, padarias, bares, farmácias, mercados, postos, hospitais, clínicas, bancos, hotéis, parques, museus, academias, lojas… ${
+        off
+          ? 'A localização do aparelho está DESATIVADA pelo usuário: informe sempre `near` (nome do lugar/endereço) ou `latitude` + `longitude`.'
+          : 'Centro: a localização atual do usuário (padrão, pode pedir aprovação), ou `near` (nome do lugar/endereço — vai no texto da busca), ou `latitude` + `longitude`.'
+      } ${approx && !off ? 'Com a localização aproximada do usuário (~1 km), as distâncias também são aproximadas. ' : ''}Retorna um resumo do Google Maps (nota ★, número de avaliações e o que se destaca em cada lugar) e a lista com a distância e os links do Google Maps (o lugar e como chegar). Ao responder, cite cada lugar com o link do Google Maps dele logo depois do que disser sobre ele ([nome](link)) — exigência do Google. Para horários exatos ou detalhes, use web_search (se disponível) ou mande o usuário ao link.`,
+      {
+        what: {
+          type: 'string',
+          description:
+            'O que procurar, em texto livre: "pizzaria", "café com wi-fi", "farmácia 24 horas", "restaurante japonês", "Starbucks"…'
+        },
+        cuisine: {
+          type: 'string',
+          description: 'Culinária, opcional (ex.: "japonesa", "pizza", "vegetariana", "árabe").'
+        },
+        radius_m: {
+          type: 'number',
+          description: `Raio preferido em metros (padrão ${DEFAULT_RADIUS_M}, máximo ${MAX_RADIUS_M}; o Google prioriza, mas pode trazer mais longe).`
+        },
+        limit: {
+          type: 'number',
+          description: `Máximo de lugares (padrão ${GOOGLE_PLACES_LIMITS.defaultLimit}, máximo ${GOOGLE_PLACES_LIMITS.maxLimit}; acima de ${GOOGLE_PLACES_LIMITS.defaultLimit} a busca custa mais — peça mais só se o usuário quiser).`
+        },
+        near: {
+          type: 'string',
+          description:
+            'Centro da busca por nome/endereço (ex.: "Avenida Paulista, São Paulo"). Omita para usar a localização atual.'
+        },
+        latitude: { type: 'number', description: 'Centro da busca (com longitude).' },
+        longitude: { type: 'number', description: 'Centro da busca (com latitude).' }
+      },
+      ['what']
+    )
   return def(
     'nearby_places',
     `Busca lugares por perto no OpenStreetMap (Overpass): restaurantes, cafés, padarias, bares, farmácias, mercados, postos, hospitais, clínicas, bancos, caixas eletrônicos, hotéis, parques, museus, academias, estações… ${
@@ -163,21 +205,23 @@ export function locationApprovalText(
   s: Pick<LocationSettings, 'precision'>,
   who = 'o agente',
   /** Dono do geocodificador do sistema ("Google" no Android, "Apple" no iOS). */
-  geocoder = 'Google/Apple'
+  geocoder = 'Google/Apple',
+  /** Provedores escolhidos em Configurações → Tempo e mapas (para dizer quem recebe a posição). */
+  via: { weather?: 'open-meteo' | 'google'; places?: PlacesVia } = {}
 ): { title: string; detail: string } {
   const which =
     s.precision === 'exact' ? 'Sua localização exata' : 'Sua localização aproximada (~1 km)'
   if (name === 'weather')
     return {
       title: `Permitir que ${who} use sua localização para ver a previsão do tempo?`,
-      detail: `${which} vai para o modelo e para o Open-Meteo (previsão do tempo).`
+      detail: `${which} vai para o modelo e para ${via.weather === 'google' ? 'o Google' : 'o Open-Meteo'} (previsão do tempo).`
     }
   if (name === 'nearby_places') {
     const what =
       typeof args.what === 'string' && args.what.trim() ? ` (busca: “${args.what.trim()}”)` : ''
     return {
       title: `Permitir que ${who} use sua localização para buscar lugares por perto?`,
-      detail: `${which} vai para o modelo e para o OpenStreetMap${what}.`
+      detail: `${which} vai para o modelo e para ${via.places === 'google' ? 'o Google Maps' : 'o OpenStreetMap'}${what}.`
     }
   }
   return {
@@ -224,6 +268,8 @@ export interface LocationServiceDeps {
   /** Teto da leitura da posição (padrão 25 s) e do geocodificador do sistema (padrão 8 s). */
   positionTimeoutMs?: number
   geocodeTimeoutMs?: number
+  /** Rede do Google Maps (padrão: o fetch global). */
+  mapsFetch?: MapsToolsFetch
 }
 
 export const MSG = {
@@ -295,8 +341,21 @@ export class LocationService {
   private upgradeAsked = false
   private readonly now: () => number
 
+  /** Provedor dos lugares (registrado pelo host com os settings sincronizados): Google com a chave. */
+  private placesSource: () => { key: string } | null = () => null
+
   constructor(private readonly d: LocationServiceDeps) {
     this.now = d.now ?? Date.now
+  }
+
+  /** Registra de onde vem o provedor dos lugares (Configurações → Tempo e mapas). */
+  setPlacesSource(fn: (() => { key: string } | null) | null): void {
+    this.placesSource = fn ?? (() => null)
+  }
+
+  /** Provedor dos lugares agora ('google' só com a chave). */
+  placesVia(): PlacesVia {
+    return this.placesSource() ? 'google' : 'osm'
   }
 
   settings(): LocationSettings {
@@ -311,7 +370,9 @@ export class LocationService {
   }
 
   definition(name: string): ToolDefinition | undefined {
-    return isLocationTool(name) ? locationToolDefinition(name, this.d.settings()) : undefined
+    return isLocationTool(name)
+      ? locationToolDefinition(name, this.d.settings(), this.placesVia())
+      : undefined
   }
 
   /**
@@ -477,8 +538,8 @@ export class LocationService {
     const lat = optNumber(args, 'latitude')
     const lon = optNumber(args, 'longitude')
 
-    let center: LatLon
-    let centerText: string
+    let center: LatLon | null = null
+    let centerText = ''
     const notes: string[] = []
     let approxCenter = false
     if (lat != null || lon != null) {
@@ -486,16 +547,7 @@ export class LocationService {
         return fail('Erro: informe latitude (−90 a 90) e longitude (−180 a 180) juntas.')
       center = { lat: lat!, lon: lon! }
       centerText = `${lat}, ${lon}`
-    } else if (near) {
-      ctx.onOutput?.(`Procurando “${near}” no OpenStreetMap…`)
-      const hit = await this.d.geocoder.search(near, null, ctx.signal)
-      if (!hit)
-        return fail(
-          `Erro: não encontrei “${near}” no OpenStreetMap. Tente um endereço mais completo (rua, bairro, cidade) ou coordenadas.`
-        )
-      center = { lat: hit.lat, lon: hit.lon }
-      centerText = `${hit.label} (${hit.source})`
-    } else {
+    } else if (!near) {
       const cur = await this.current(ctx)
       center = cur.point
       approxCenter = cur.precision === 'approximate'
@@ -503,6 +555,46 @@ export class LocationService {
         ? `sua localização atual, aproximada (${fmtCoord(center.lat, 'approximate')}, ${fmtCoord(center.lon, 'approximate')}; ± ${fmtDistance(cur.accuracyM ?? APPROX_ACCURACY_M)} — as distâncias também são aproximadas)`
         : `sua localização atual (${fmtCoord(center.lat, 'exact')}, ${fmtCoord(center.lon, 'exact')}${cur.accuracyM != null ? `; ± ${fmtDistance(cur.accuracyM)}` : ''})`
       notes.push(...cur.notes)
+    }
+
+    // Google Maps (Configurações → Tempo e mapas, 1.17.0): `near` vai no texto da busca; qualquer
+    // falha dele → OpenStreetMap, com o motivo
+    const google = this.placesSource()
+    if (google) {
+      const limitArg = optNumber(args, 'limit')
+      const q = {
+        what,
+        cuisine: cuisine ?? null,
+        near: center ? null : (near ?? null),
+        center,
+        radiusM: radius,
+        limit:
+          limitArg != null
+            ? Math.min(GOOGLE_PLACES_LIMITS.maxLimit, Math.max(1, Math.round(limitArg)))
+            : GOOGLE_PLACES_LIMITS.defaultLimit
+      }
+      try {
+        ctx.onOutput?.('Buscando no Google Maps…')
+        const r = await searchGooglePlaces(google.key, q, {
+          fetch: this.d.mapsFetch ?? ((u, i) => fetch(u, i)),
+          signal: ctx.signal
+        })
+        return ok(formatGooglePlaces(r, q, center ? centerText : near!, notes))
+      } catch (e) {
+        if (ctx.signal.aborted || (e as Error).name === 'AbortError') throw e
+        notes.push(`o Google Maps falhou (${(e as Error).message}) — usei o OpenStreetMap.`)
+      }
+    }
+
+    if (!center) {
+      ctx.onOutput?.(`Procurando “${near}” no OpenStreetMap…`)
+      const hit = await this.d.geocoder.search(near!, null, ctx.signal)
+      if (!hit)
+        return fail(
+          `Erro: não encontrei “${near}” no OpenStreetMap. Tente um endereço mais completo (rua, bairro, cidade) ou coordenadas.`
+        )
+      center = { lat: hit.lat, lon: hit.lon }
+      centerText = `${hit.label} (${hit.source})`
     }
 
     const rq = resolveQuery(what, cuisine)

@@ -300,6 +300,7 @@ describe('SettingsService (servidor falso)', () => {
   it('tempo e mapas (1.16.0): provedor e chave do Google sobem como settings; sem chave volta ao Open-Meteo', async () => {
     expect(s.maps()).toEqual({
       weatherProvider: 'open-meteo',
+      placesProvider: 'osm',
       google: { hasKey: false, keyMask: null }
     })
     expect(() => s.setWeatherProvider('google')).toThrow(/chave do Google Maps Platform/)
@@ -315,8 +316,15 @@ describe('SettingsService (servidor falso)', () => {
       'AIzaSyFAKE0123456789abcdef'
     )
     expect((await serverPlain('setting', 'weatherProvider'))!.value).toBe('google')
+    // lugares próximos (1.17.0)
+    s.setPlacesProvider('google')
+    expect(s.maps().placesProvider).toBe('google')
+    await flushed()
+    expect((await serverPlain('setting', 'placesProvider'))!.value).toBe('google')
     s.setGoogleMapsKey(null)
     await flushed()
+    expect((await serverPlain('setting', 'placesProvider'))!.value).toBe('osm')
+    expect(() => s.setPlacesProvider('google')).toThrow(/chave do Google Maps Platform/)
     expect((await serverPlain('setting', 'googleMapsApiKey'))!.value).toBeNull()
     expect((await serverPlain('setting', 'weatherProvider'))!.value).toBe('open-meteo')
     expect(s.maps().weatherProvider).toBe('open-meteo')
