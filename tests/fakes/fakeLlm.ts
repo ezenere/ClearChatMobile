@@ -8,6 +8,7 @@
 //   fase 4b: "/remember <título>: <fato>" → memory_write (perfil);  "/recall <q>" → memory_search;
 //   "/whoami" → responde com os títulos do índice <memory> do system prompt;
 //   "/delegate <tarefa>" → delegate_task;  "/delegate-bg <tarefa>" → em segundo plano;
+//   "/delegate-low <tarefa>" → delegate_task com reasoning_effort "low";
 //   "/wait" → wait_subagents;  "/subs" → check_subagents;  "/sleep <ms> <texto>" → espera e responde;
 //   "/tell <chat_id> <msg>" → send_to_chat;  "/ask-chat <chat_id> <msg>" → com wait_for_reply;
 //   "/chats" → list_chats;  "/info" → get_chat_info;  "/history <q>" → read_history (todos os chats);
@@ -488,6 +489,13 @@ export function startFakeLlm(
         task: text.slice(12).trim() || 'tarefa',
         title: 'Ajudante em segundo plano',
         background: true
+      })
+    // esforço próprio do subagente (protocolo 1.18.0)
+    if (text.startsWith('/delegate-low'))
+      return toolCall('delegate_task', {
+        task: text.slice(13).trim() || 'tarefa',
+        title: 'Ajudante leve',
+        reasoning_effort: 'low'
       })
     if (text.startsWith('/delegate'))
       return toolCall('delegate_task', {

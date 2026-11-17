@@ -79,6 +79,7 @@ import {
 import { expandAttachments, hoistToolMedia, type AttachmentReader } from './attachments'
 import { LOCATION_TOOLS } from '@/location/service'
 import { cachedModelInfo } from './providers'
+import { subagentParams } from '@shared/delegate'
 
 export interface BuiltRequest {
   url: string
@@ -802,7 +803,8 @@ export function buildRequest(
   )
   const adapter = adapterFor(kind)
   const tools = plan.definitions
-  const params = cfg.params ?? {}
+  // subagente: o esforço de raciocínio próprio dele (delegate_task — @shared/delegate) por cima
+  const params = subagentParams(cfg.params, session.depth, history)
   const extra = parseExtraBody(params.extraBody)
   const support = filterParams(params, kind, provider.id, session.model, extra)
   const notes = [...toolSearchNotes(toolSearch, plan.full.length), ...support.notes]

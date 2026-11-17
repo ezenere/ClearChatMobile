@@ -269,6 +269,27 @@ describe('subagentes', () => {
     expect(h.server.records.get(`session|${subs[0].id}`)?.scope).toBe(chatId)
   })
 
+  it('reasoning_effort (1.18.0): só as requests do subagente levam o esforço dele; gravado na tarefa', async () => {
+    const { chatId, sid } = newChat({ enabledTools: ['delegate_task'] })
+    const n0 = h.llm.requests.length
+    await send(chatId, sid, '/delegate-low resuma rápido')
+    await idle(sid)
+    const sub = h.stack.repo.sessions(chatId).find((s) => s.depth === 1)!
+    expect(h.stack.repo.path(sub.id)[0].meta.delegate).toEqual({ reasoningEffort: 'low' })
+    const reqs = h.llm.requests.slice(n0).map((r) => r.body)
+    const lastText = (b: Record<string, unknown>): string =>
+      JSON.stringify((b.messages as unknown[])?.at(-1) ?? '')
+    const subReq = reqs.find(
+      (b) => lastText(b).includes('resuma rápido') && !lastText(b).includes('/delegate')
+    )
+    expect(subReq?.reasoning_effort).toBe('low')
+    expect(reqs.filter((b) => b !== subReq).every((b) => b.reasoning_effort === undefined)).toBe(
+      true
+    )
+    const tool = path(sid).find((m) => m.message.role === 'tool')!
+    expect(tool.meta.subSessionId).toBe(sub.id)
+  })
+
   it('segundo plano: o pai termina, o subagente roda em paralelo e o callback acorda o pai', async () => {
     const { chatId, sid } = newChat({ enabledTools: ['delegate_task'] })
     await send(chatId, sid, '/delegate-bg /sleep 400 pronto')

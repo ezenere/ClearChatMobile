@@ -209,7 +209,9 @@ import {
   toolsPlan,
   voiceCallContextFor,
   type BuildOptions,
-  type BuiltRequest
+  type BuiltRequest,
+  filterParams,
+  parseExtraBody
 } from './request'
 import { resolveAskUserQuestions } from './tools/askUser'
 import {
@@ -224,6 +226,12 @@ import {
 import { browseUrl, webSearch } from './tools/web'
 import { isLocationTool, usesLocationApproval, type LocationService } from '@/location/service'
 import { EARLY_TOOLS, EarlyToolQueue, type EarlyCall } from '@shared/earlyTools'
+import {
+  delegateTaskMeta,
+  effortReport,
+  parseDelegateEffort,
+  REASONING_EFFORTS
+} from '@shared/delegate'
 
 export const CANCELLED_TEXT = '[Interrompido pelo usuário antes de concluir]'
 export const DENIED_TEXT = 'O usuário negou a execução desta ferramenta.'
@@ -2887,6 +2895,13 @@ export class Runner {
     const task = typeof args.task === 'string' ? args.task.trim() : ''
     if (!task) return { content: 'Erro: argumento obrigatório "task" ausente.', status: 'error' }
     const background = args.background === true || args.background === 'true'
+    // esforço de raciocínio só deste subagente (protocolo 1.18.0); inválido → erro legível
+    const effort = parseDelegateEffort(args.reasoning_effort)
+    if (effort === undefined)
+      return {
+        content: `Erro: reasoning_effort inválido — use um destes: ${REASONING_EFFORTS.join(', ')}.`,
+        status: 'error'
+      }
     const target = await this.resolveSubagent(chat, session, args)
     if ('error' in target) return { content: target.error, status: 'error' }
     const { model, providerId } = target
@@ -2907,7 +2922,14 @@ export class Runner {
       status: 'running'
     })
     this.emit({ type: 'session-created', session: child })
-    const taskMsg = this.append(child.id, { role: 'user', content: task }, { synthetic: true })
+    const taskMsg = this.append(
+      child.id,
+      { role: 'user', content: task },
+      {
+        synthetic: true,
+        ...delegateTaskMeta(effort)
+      }
+    )
     // coleta de contexto: a descrição do subagente = a do pai + a tarefa (o juiz dele usa esta)
     this.capture.deriveForSubagent(session, child, task, taskMsg)
 
@@ -2916,7 +2938,7 @@ export class Runner {
       const bst = this.startLoop(child)
       this.attachReport(bst, child, false)
       return {
-        content: `${note}Subagente iniciado em segundo plano (id ${child.id}, ${providerName} · ${model}). Você receberá o resultado automaticamente quando ele terminar.`,
+        content: `${note}Subagente iniciado em segundo plano (id ${child.id}, ${providerName} · ${model}${effort ? ` · esforço ${effort}` : ''}). Você receberá o resultado automaticamente quando ele terminar.`,
         status: 'ok',
         subSessionId: child.id,
         background: true
@@ -3640,7 +3662,27 @@ export class Runner {
         model: session.depth === 0 ? chat.config.model || session.model : session.model,
         providerName: this.providerFor(chat, session)?.name ?? '',
         root: '(nenhum — chat executado no celular)',
-        createdAt: chat.createdAt
+        createdAt: chat.createdAt,
+        reasoning: (() => {
+          // o esforço que vale nesta sessão (o do subagente — delegate_task — ou o do chat) e o
+          // que vai de fato depois do ajuste ao modelo (= desktop)
+          const provider = this.providerFor(chat, session)
+          return effortReport(
+            chat.config.params,
+            session.depth,
+            this.repo.path(session.id),
+            provider
+              ? (p) =>
+                  filterParams(
+                    p,
+                    providerKind(provider),
+                    provider.id,
+                    session.model,
+                    parseExtraBody(p.extraBody)
+                  ).send
+              : undefined
+          )
+        })()
       }),
       list: () =>
         (this.d.listChats?.() ?? []).map((c) => ({

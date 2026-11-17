@@ -56,8 +56,11 @@ export function toolSummary(name: string, args: Record<string, unknown> | null):
         pick('mode') === 'full' && 'página inteira',
         args.links === true && 'links'
       ])
-    case 'delegate_task':
-      return pick('title') || pick('task')
+    case 'delegate_task': {
+      // esforço próprio do subagente (protocolo 1.18.0) junto do título
+      const what = pick('title') || pick('task')
+      return pick('reasoning_effort') ? `${what} · esforço ${pick('reasoning_effort')}` : what
+    }
     case 'search_files': {
       const where = [pick('glob'), pick('path')].filter(Boolean).join(' · ')
       return `/${pick('pattern')}/${where ? `  ${where}` : ''}`
