@@ -1290,6 +1290,8 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
     rejectAll?: boolean
     rejectReplay?: boolean
     noCost?: boolean
+    /** Corta por max_tokens toda resposta (também depois de um tool_result). */
+    cutAlways?: boolean
   } = {}
   let h: Harness
   let pseq = 0
@@ -1350,11 +1352,11 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
         const cost = isOr && !behavior.noCost ? 0.001 : undefined
         if (last?.role === 'assistant')
           return void res.end(sseOf(finalText(body.model, 'RETOMADO', cost)))
-        if (
+        const afterTool =
           last?.role === 'user' &&
           Array.isArray(last.content) &&
           last.content.some((c: any) => c.type === 'tool_result')
-        )
+        if (afterTool && !behavior.cutAlways)
           return void res.end(sseOf(finalText(body.model, 'FIM', cost)))
         const lastText = textOfContent(last?.content)
         if (lastText === 'pausa')
@@ -1387,14 +1389,24 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
           )
         // resposta cortada (max_tokens) ou recusada no meio de um tool_use: com
         // eager_input_streaming o servidor não confere o JSON — o app não pode rodar a tool
-        if (lastText === 'cortada' || lastText === 'cortada-ok' || lastText === 'recusa')
+        if (
+          lastText === 'cortada' ||
+          lastText === 'cortada-ok' ||
+          lastText === 'recusa' ||
+          (afterTool && behavior.cutAlways)
+        )
           return void res.end(
             sseOf([
               { type: 'message_start', message: { model: body.model, usage: {} } },
               {
                 type: 'content_block_start',
                 index: 0,
-                content_block: { type: 'tool_use', id: 'toolu_cut', name: 'datetime', input: {} }
+                content_block: {
+                  type: 'tool_use',
+                  id: afterTool ? `toolu_cut${hits.length}` : 'toolu_cut',
+                  name: 'datetime',
+                  input: {}
+                }
               },
               {
                 type: 'content_block_delta',
@@ -1627,29 +1639,63 @@ describe('(D) runner com provedores falsos (Anthropic /v1/messages, OpenRouter /
     expect(JSON.stringify(hits[n1].body.messages)).not.toContain('server_tool_use')
   })
 
-  it('resposta cortada por max_tokens ou recusada com tool_use → a tool NÃO roda (erro no resultado) e o turno termina', async () => {
-    for (const [text, why] of [
-      ['cortada', /max_tokens/],
-      ['cortada-ok', /max_tokens/],
-      ['recusa', /recusa/]
-    ] as const) {
+  it('resposta recusada com tool_use → a tool NÃO roda (erro no resultado) e o turno termina', async () => {
+    const { sid } = await newChat('anthropic', 'claude-opus-5-5', {
+      toolsFull: ['datetime'] as ToolName[]
+    })
+    const n0 = hits.length
+    const msgs = await turn(sid, 'recusa')
+    expect(hits.length - n0, 'nenhuma request depois (o turno termina)').toBe(1)
+    const tool = msgs.at(-1)!
+    expect(tool.message.role).toBe('tool')
+    expect((tool.message as any).tool_call_id).toBe('toolu_cut')
+    expect(tool.meta.toolStatus).toBe('error')
+    expect(textOfContent(tool.message.content)).toMatch(/não executada: .*recusa/)
+    expect(h.stack.repo.session(sid)!.status).toBe('idle')
+  })
+
+  it('resposta cortada por max_tokens com tool_use → a tool NÃO roda, o erro volta ao modelo e o turno SEGUE', async () => {
+    for (const text of ['cortada', 'cortada-ok']) {
       // um chat por caso (o falso responde "FIM" a qualquer request com tool_result no fim)
       const { sid } = await newChat('anthropic', 'claude-opus-5-5', {
         toolsFull: ['datetime'] as ToolName[]
       })
       const n0 = hits.length
       const msgs = await turn(sid, text)
-      expect(hits.length - n0, `${text}: nenhuma request depois (o turno termina)`).toBe(1)
-      const a = msgs.at(-2)!
-      expect(a.message.role).toBe('assistant')
-      expect((a.message as any).tool_calls[0].id).toBe('toolu_cut')
-      const tool = msgs.at(-1)!
-      expect(tool.message.role, `${text}: o tool_use ganhou resultado`).toBe('tool')
-      expect((tool.message as any).tool_call_id).toBe('toolu_cut')
-      expect(tool.meta.toolStatus).toBe('error')
-      expect(textOfContent(tool.message.content)).toMatch(/não executada/)
-      expect(textOfContent(tool.message.content)).toMatch(why)
+      const reqs = hits.slice(n0)
+      expect(reqs.length, `${text}: o erro foi devolvido ao modelo numa 2ª request`).toBe(2)
+      const sent = reqs[1].body.messages.at(-1).content.find((c: any) => c.type === 'tool_result')
+      expect(sent.tool_use_id).toBe('toolu_cut')
+      expect(textOfContent(sent.content)).toMatch(
+        /não executada: .*max_tokens.*Refaça em partes menores/
+      )
+      const tool = msgs.find((m) => m.message.role === 'tool')!
+      expect(tool.meta.toolStatus, `${text}: a tool não rodou`).toBe('error')
+      expect(msgs.at(-1)!.message.content, `${text}: o modelo respondeu depois do erro`).toBe('FIM')
       expect(h.stack.repo.session(sid)!.status).toBe('idle')
+    }
+  })
+
+  it('3 cortes por max_tokens seguidos → depois do 3º o turno termina (aumente max_tokens)', async () => {
+    behavior = { cutAlways: true }
+    try {
+      const { sid } = await newChat('anthropic', 'claude-opus-5-5', {
+        toolsFull: ['datetime'] as ToolName[]
+      })
+      const n0 = hits.length
+      const msgs = await turn(sid, 'cortada')
+      expect(hits.length - n0, '1ª + 2 repetições').toBe(3)
+      const tools = msgs.filter((m) => m.message.role === 'tool')
+      expect(tools.length).toBe(3)
+      expect(textOfContent(tools[0].message.content)).toMatch(/Refaça em partes menores/)
+      expect(textOfContent(tools[1].message.content)).toMatch(/Refaça em partes menores/)
+      expect(textOfContent(tools[2].message.content)).toMatch(
+        /cortada pelo limite de tokens de saída \(max_tokens\) 3 vezes seguidas.*aumente max_tokens/
+      )
+      expect(msgs.at(-1)!.message.role, 'termina no erro, sem 4ª request').toBe('tool')
+      expect(h.stack.repo.session(sid)!.status).toBe('idle')
+    } finally {
+      behavior = {}
     }
   })
 

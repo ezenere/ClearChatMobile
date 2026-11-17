@@ -228,6 +228,8 @@ export const DENIED_TEXT = 'O usuário negou a execução desta ferramenta.'
 const MAX_DEPTH = 2
 /** Máximo de `pause_turn` seguidos (a busca do servidor pausou o turno) antes de encerrar. */
 const MAX_PAUSE_TURNS = 3
+/** Cortes por max_tokens seguidos que o turno ainda devolve ao modelo (no seguinte, termina). */
+const MAX_LENGTH_CUTS = 2
 
 /**
  * Entrega de send_to_chat (o host decide pelo estado do chat de destino, §8): executado/executável
@@ -370,6 +372,8 @@ type StepResult =
 interface RunState {
   /** Respostas seguidas com `stop_reason: pause_turn` (busca do servidor pausada) — máx. 3. */
   pauseTurns?: number
+  /** Respostas seguidas cortadas por max_tokens no meio de tool calls — MAX_LENGTH_CUTS. */
+  lengthCuts?: number
   sessionId: string
   chatId: string
   depth: number
@@ -1207,13 +1211,19 @@ export class Runner {
 
     // resposta cortada pelo limite de tokens ou interrompida por recusa: as tool calls dela podem ter
     // parado no meio dos argumentos (com `eager_input_streaming` o servidor não os confere) — nenhuma
-    // roda; cada uma ganha o resultado de erro (o histórico continua válido) e o turno termina (sem
-    // repetir: o mesmo limite cortaria de novo) — = desktop
+    // roda; cada uma ganha o resultado de erro (o histórico continua válido). Corte por max_tokens:
+    // o erro volta ao modelo e o turno segue (ele refaz em partes menores — um subagente que parasse
+    // aqui entregaria ao pai só o texto de antes da chamada); MAX_LENGTH_CUTS seguidos → termina.
+    // Recusa: termina. = desktop
     if (calls.length && (acc.finishReason === 'length' || acc.finishReason === 'content_filter')) {
-      const why =
-        acc.finishReason === 'length'
-          ? 'a resposta do modelo foi cortada pelo limite de tokens (max_tokens) antes de terminar — os argumentos podem estar incompletos; aumente max_tokens ou peça de novo'
-          : 'o provedor interrompeu a resposta (recusa) — as chamadas de ferramenta dela não rodam'
+      const cut = acc.finishReason === 'length'
+      const cuts = cut ? (st.lengthCuts ?? 0) + 1 : 0
+      const retry = cut && cuts <= MAX_LENGTH_CUTS
+      const why = !cut
+        ? 'o provedor interrompeu a resposta (recusa) — as chamadas de ferramenta dela não rodam'
+        : retry
+          ? 'a resposta do modelo foi cortada pelo limite de tokens de saída (max_tokens) no meio dos argumentos — nada rodou. Refaça em partes menores (ex.: um arquivo grande em pedaços: crie com o começo e acrescente o resto em chamadas seguintes)'
+          : `a resposta do modelo foi cortada pelo limite de tokens de saída (max_tokens) ${cuts} vezes seguidas — os argumentos podem estar incompletos; aumente max_tokens ou peça de novo`
       for (const c of calls)
         this.append(
           session.id,
@@ -1221,8 +1231,11 @@ export class Runner {
           { toolStatus: 'error', durationMs: 0 }
         )
       st.pauseTurns = 0
+      st.lengthCuts = retry ? cuts : 0
+      if (retry) return { kind: 'continue' }
       return { kind: 'final', text: acc.content }
     }
+    st.lengthCuts = 0
 
     // busca do servidor pausada (`pause_turn`): pede de novo, sem mensagem nova do usuário — o
     // provedor retoma do `server_tool_use` no fim do turno (máx. MAX_PAUSE_TURNS seguidos)
