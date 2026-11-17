@@ -88,6 +88,9 @@ const GROUPS = {
       // de ativação `speechGate`, `heardText` e `audioTags` vêm pelo fecho dos imports)
       'voiceTurn.ts',
       'voicePolicy.ts',
+      // execução antecipada de ferramentas (2026-11-17): as de leitura rodam assim que a chamada
+      // fecha no stream
+      'earlyTools.ts',
       // 1.7.0: textos dos avisos push (trecho sem Markdown, aprovação/pergunta/retry) — os avisos
       // locais dos chats executados no celular usam os mesmos do host do desktop
       'push.ts',

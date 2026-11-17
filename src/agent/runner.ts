@@ -222,6 +222,7 @@ import {
 } from './tools/util'
 import { browseUrl, webSearch } from './tools/web'
 import { isLocationTool, usesLocationApproval, type LocationService } from '@/location/service'
+import { EARLY_TOOLS, EarlyToolQueue, type EarlyCall } from '@shared/earlyTools'
 
 export const CANCELLED_TEXT = '[Interrompido pelo usuário antes de concluir]'
 export const DENIED_TEXT = 'O usuário negou a execução desta ferramenta.'
@@ -1038,6 +1039,37 @@ export class Runner {
     /** Queda da busca nativa nesta chamada (o modo nativo recusado e por quê). */
     let fallback = null as { from: NativeToolSearchMode; reason: string } | null
     let acc: StreamAccumulator = newAccumulator()
+    // execução antecipada (@shared/earlyTools — = desktop): tool só de leitura que roda sem
+    // perguntar começa assim que a chamada fecha no stream, enquanto o modelo continua; o resultado
+    // entra no histórico no fim, na ordem (e o card mostra "pronta" até lá)
+    const newEarly = (): EarlyToolQueue<ToolOutcome> =>
+      new EarlyToolQueue<ToolOutcome>({
+        eligible: (c) => this.earlyEligible(chat, session, c),
+        run: async (c) => {
+          const o = await this.executeTool(session, c.id, c.name, c.arguments, signal)
+          if (!signal.aborted)
+            this.emit({
+              type: 'tool-running',
+              sessionId: session.id,
+              toolCallId: c.id,
+              running: false,
+              early: true
+            })
+          return o
+        }
+      })
+    let early = newEarly()
+    /** Resposta descartada/recusada/cancelada: os resultados antecipados não valem (só leitura). */
+    const dropEarly = (): void => {
+      const old = early
+      if (!old.startedIds.length) return
+      old.discard()
+      early = newEarly()
+      void old.settle().then(() => {
+        for (const id of old.startedIds)
+          this.emit({ type: 'tool-running', sessionId: session.id, toolCallId: id, running: false })
+      })
+    }
     const draft = throttle(
       () => this.emit({ type: 'draft', sessionId: session.id, draft: accToDraft(acc) }),
       this.d.draftMs ?? 40
@@ -1049,6 +1081,7 @@ export class Runner {
       await stream(req, signal, acc, () => {
         markReasoning(acc, Date.now())
         draft.call()
+        early.offer(acc.toolCalls)
       })
     }
     /** Refaz a chamada com outra request (o parcial é descartado — nada foi persistido). */
@@ -1057,6 +1090,7 @@ export class Runner {
       draft.cancel()
       this.emit({ type: 'draft', sessionId: session.id, draft: null })
       req = next
+      dropEarly()
       acc = newAccumulator()
       t0 = Date.now()
       await send()
@@ -1072,6 +1106,7 @@ export class Runner {
             provider,
             fallback ? { modeOverride: 'local' } : {}
           )
+          dropEarly()
           acc = newAccumulator()
           t0 = Date.now()
         }
@@ -1127,6 +1162,7 @@ export class Runner {
       onDiscard: () => {
         draft.cancel()
         this.emit({ type: 'draft', sessionId: session.id, draft: null })
+        dropEarly()
         acc = newAccumulator()
       },
       ask: (e) => this.awaitRetryDecision(st, session, chat, provider, e, signal)
@@ -1138,6 +1174,7 @@ export class Runner {
     if (r.kind !== 'ok') {
       draft.cancel()
       this.emit({ type: 'draft', sessionId: session.id, draft: null })
+      dropEarly()
       if (r.kind === 'error' && r.network)
         return { kind: 'error', error: errMsg(r.error), networkCancelled: true }
       if (r.kind === 'aborted' || signal.aborted) {
@@ -1224,12 +1261,27 @@ export class Runner {
         : retry
           ? 'a resposta do modelo foi cortada pelo limite de tokens de saída (max_tokens) no meio dos argumentos — nada rodou. Refaça em partes menores (ex.: um arquivo grande em pedaços: crie com o começo e acrescente o resto em chamadas seguintes)'
           : `a resposta do modelo foi cortada pelo limite de tokens de saída (max_tokens) ${cuts} vezes seguidas — os argumentos podem estar incompletos; aumente max_tokens ou peça de novo`
-      for (const c of calls)
+      // recusa: nada da resposta vale (as antecipadas, só de leitura, são descartadas); corte: as
+      // chamadas que fecharam e já rodaram antes do corte ficam com o resultado delas
+      if (!cut) dropEarly()
+      for (const c of calls) {
+        const pre = cut ? early.take(c.id) : null
+        if (pre) {
+          this.appendToolOutcome(session, c, await pre)
+          this.emit({
+            type: 'tool-running',
+            sessionId: session.id,
+            toolCallId: c.id,
+            running: false
+          })
+          continue
+        }
         this.append(
           session.id,
           { role: 'tool', tool_call_id: c.id, content: `Erro: não executada: ${why}.` },
           { toolStatus: 'error', durationMs: 0 }
         )
+      }
       st.pauseTurns = 0
       st.lengthCuts = retry ? cuts : 0
       if (retry) return { kind: 'continue' }
@@ -1250,35 +1302,33 @@ export class Runner {
       let hungUp = false
       for (const call of calls) {
         if (signal.aborted) break
-        const o = await this.executeTool(
-          session,
-          call.id,
-          call.function.name,
-          call.function.arguments,
-          signal
-        )
-        const tmeta: MessageMeta = { toolStatus: o.status, durationMs: o.durationMs }
-        if (o.subSessionId) tmeta.subSessionId = o.subSessionId
-        if (o.targetChatId) tmeta.targetChatId = o.targetChatId
-        if (o.background) tmeta.background = true
-        if (o.memoryChanges?.length) tmeta.memoryChanges = o.memoryChanges
-        if (o.smartApprove) tmeta.smartApprove = o.smartApprove
-        if (o.smartOverride) tmeta.smartOverride = true
-        if (o.approval) tmeta.approval = o.approval
-        if (o.askUser) tmeta.askUser = o.askUser
-        if (o.status === 'cancelled') {
-          tmeta.synthetic = true
-          tmeta.kind = 'tool-cancelled'
-        }
-        this.append(
-          session.id,
-          { role: 'tool', tool_call_id: call.id, content: o.parts?.length ? o.parts : o.content },
-          tmeta
-        )
+        // começou durante o stream (só leitura, sem perguntar): o resultado dela, sem rodar de novo
+        const pre = early.take(call.id)
+        const o = pre
+          ? await pre
+          : await this.executeTool(
+              session,
+              call.id,
+              call.function.name,
+              call.function.arguments,
+              signal
+            )
+        this.appendToolOutcome(session, call, o)
+        // o card sai do "pronta" (o resultado está no histórico)
+        if (pre)
+          this.emit({
+            type: 'tool-running',
+            sessionId: session.id,
+            toolCallId: call.id,
+            running: false
+          })
         if (call.function.name === 'end_call' && o.status === 'ok') hungUp = true
         if (o.status === 'cancelled' && signal.aborted) break
       }
-      if (signal.aborted) return { kind: 'aborted', partial: '' }
+      if (signal.aborted) {
+        dropEarly()
+        return { kind: 'aborted', partial: '' }
+      }
       if (hungUp) return { kind: 'final', text: acc.content }
       return { kind: 'continue' }
     }
@@ -1443,6 +1493,49 @@ export class Runner {
       }
       return { record: { ...record, ...(userAllowed.length ? { userAllowed } : {}) } }
     }
+  }
+
+  /** O resultado de uma tool no histórico (logo depois da mensagem do assistente, na ordem). */
+  private appendToolOutcome(session: Session, call: ToolCall, o: ToolOutcome): void {
+    const tmeta: MessageMeta = { toolStatus: o.status, durationMs: o.durationMs }
+    if (o.subSessionId) tmeta.subSessionId = o.subSessionId
+    if (o.targetChatId) tmeta.targetChatId = o.targetChatId
+    if (o.background) tmeta.background = true
+    if (o.memoryChanges?.length) tmeta.memoryChanges = o.memoryChanges
+    if (o.smartApprove) tmeta.smartApprove = o.smartApprove
+    if (o.smartOverride) tmeta.smartOverride = true
+    if (o.approval) tmeta.approval = o.approval
+    if (o.askUser) tmeta.askUser = o.askUser
+    if (o.status === 'cancelled') {
+      tmeta.synthetic = true
+      tmeta.kind = 'tool-cancelled'
+    }
+    this.append(
+      session.id,
+      { role: 'tool', tool_call_id: call.id, content: o.parts?.length ? o.parts : o.content },
+      tmeta
+    )
+  }
+
+  /**
+   * A chamada pode rodar antes do fim da resposta (@shared/earlyTools — = desktop): tool só de
+   * leitura, disponível na sessão, que roda SEM perguntar (a mesma rota de aprovação da execução);
+   * o que usa a posição do aparelho (aprovação de localização — a `weather` sem lugar) nunca.
+   */
+  private earlyEligible(chat: Chat, session: Session, c: EarlyCall): boolean {
+    const name = (TOOL_ALIASES[c.name] ?? c.name) as ToolName
+    if (!EARLY_TOOLS.has(name)) return false
+    let args: Record<string, unknown>
+    try {
+      args = c.arguments.trim() ? (JSON.parse(c.arguments) as Record<string, unknown>) : {}
+    } catch {
+      return false
+    }
+    if (usesLocationApproval(name, args)) return false
+    const voiceCall = voiceCallContextFor(chat, session)
+    const gateChat = voiceCall ? applyVoiceCallChat(chat, voiceCall) : chat
+    if (!availableTools(gateChat, session).includes(name)) return false
+    return approvalRoute(chat.config, this.approvalSettings().modes, name).kind === 'run'
   }
 
   private async executeTool(
