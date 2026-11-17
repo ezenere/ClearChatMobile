@@ -32,7 +32,8 @@ import {
   type TurnTiming,
   type VoiceCallConfig,
   type VoiceCallState,
-  type VoiceTtsChoice
+  type VoiceTtsChoice,
+  effectivePhrasePools
 } from '@shared/voice'
 import { DUCK_FADE_MS, PlaybackDuck, VoicedSpan, type BargeInReason } from '@shared/voicePolicy'
 import { AdaptiveTurnGate, classifyUtteranceEnd, type UtteranceEnd } from '@shared/voiceTurn'
@@ -297,14 +298,17 @@ export class VoiceCallController {
         const v = this.settings()
         const tts = resolveTts(v.tts, this.d.provider)
         if ('block' in tts) return Promise.resolve(null)
+        // os pools da chamada (os próprios da persona/chat — 1.18.0 — ou os deste aparelho)
+        const pp = this.callPools(v)
         return loadCurrentClipAudio(
           this.d.clips,
           tts.settings,
-          v.voiceCallDefaults.fillers.pool,
+          pp.fillerPool,
           cls,
           n,
-          v.voiceCallDefaults.toolPhrases.pool,
-          v.voiceCallDefaults.delayPhrases.thanksPool
+          pp.toolPool,
+          v.voiceCallDefaults.delayPhrases.thanksPool,
+          { filler: pp.ownFiller, tool: pp.ownTool }
         )
       },
       sessionInfo: (sessionId) => {
@@ -674,18 +678,31 @@ export class VoiceCallController {
       : this.settings()
   }
 
-  /** Estado dos clipes de uma voz (sem `tts`: a da chamada/a daqui). */
+  /**
+   * Pools de frases da chamada em andamento: os próprios da persona/chat dela (protocolo 1.18.0) ou
+   * os deste aparelho (sem chamada também).
+   */
+  private callPools(v: VoiceSettings): ReturnType<typeof effectivePhrasePools> {
+    const chatId = this.manager.state().active ? this.manager.state().chatId : null
+    const cfg = chatId ? this.d.repo.chat(chatId)?.config : null
+    const persona = chatId ? this.d.personaVoice(chatId) : null
+    return effectivePhrasePools(cfg?.voice ?? null, v.voiceCallDefaults, persona)
+  }
+
+  /** Estado dos clipes de uma voz (sem `tts`: a da chamada/a daqui, com os pools dela). */
   async clipsOf(tts?: VoiceTtsChoice | null): Promise<CallView['clips']> {
     const v = this.clipSettings(tts)
     const r = resolveTts(v.tts, this.d.provider)
     if ('block' in r) return { state: 'unknown' }
+    const pp = tts ? effectivePhrasePools(null, v.voiceCallDefaults, null) : this.callPools(v)
     try {
       const s = await clipsStatus(
         this.d.clips,
         r.settings,
-        v.voiceCallDefaults.fillers.pool,
-        v.voiceCallDefaults.toolPhrases.pool,
-        v.voiceCallDefaults.delayPhrases.thanksPool
+        pp.fillerPool,
+        pp.toolPool,
+        v.voiceCallDefaults.delayPhrases.thanksPool,
+        { filler: pp.ownFiller, tool: pp.ownTool }
       )
       const missing = (Object.keys(s.byClass) as ClipClass[]).filter(
         (c) => s.byClass[c].ready < s.byClass[c].total
@@ -721,14 +738,17 @@ export class VoiceCallController {
     const r = resolveTts(v.tts, this.d.provider, tts ? (signature ?? null) : this.callSignature())
     if ('block' in r) throw new Error(r.block.reason)
     const mine = !tts
+    // a chamada (dock): com os pools dela (os próprios da persona/chat); a voz de um editor: os daqui
+    const pp = tts ? effectivePhrasePools(null, v.voiceCallDefaults, null) : this.callPools(v)
     if (mine) this.set({ clips: { state: 'generating', done: 0, total: 0 } })
     try {
       await generateClips({
         store: this.d.clips,
         settings: r.settings,
-        fillerPool: v.voiceCallDefaults.fillers.pool,
-        toolPool: v.voiceCallDefaults.toolPhrases.pool,
+        fillerPool: pp.fillerPool,
+        toolPool: pp.toolPool,
         thanksPool: v.voiceCallDefaults.delayPhrases.thanksPool,
+        own: { filler: pp.ownFiller, tool: pp.ownTool },
         synth: (text, signal) => synthesizeBlock({ text, settings: r.settings }, { signal }),
         onProgress: (done, total) => {
           onProgress?.(done, total)

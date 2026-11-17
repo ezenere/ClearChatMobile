@@ -155,8 +155,40 @@ export const safeClipKey = (key: string): string => key.replace(/[^A-Za-z0-9_-]/
  * Conjunto de clipes de uma configuração de voz: `<voz>__<16 hex de clipConfigKey>` — o prefixo
  * das chaves dela (a mesma voz efetiva dá sempre o mesmo conjunto: tela, editor, dock e chamada).
  */
-export function clipScope(settings: TtsSettings): string {
-  return safeClipKey(`${clipVoiceId(settings)}__${clipConfigKey(settings).slice(0, 16)}`)
+export function clipScope(settings: TtsSettings, ownKey?: string | null): string {
+  const base = `${clipVoiceId(settings)}__${clipConfigKey(settings).slice(0, 16)}`
+  return safeClipKey(ownKey ? `${base}-${ownKey}` : base)
+}
+
+/**
+ * Pools PRÓPRIOS de uma persona/chat (protocolo 1.18.0 — `effectivePhrasePools`): quais classes vêm
+ * deles. Com algum, os clipes ganham um conjunto próprio (o escopo leva o hash dos pools próprios) —
+ * gerar os do aparelho não apaga os da persona com a mesma voz (= desktop, pasta própria).
+ */
+export interface ClipOwnPools {
+  filler: boolean
+  tool: boolean
+}
+
+/** Hash curto (8 hex) dos pools próprios; null = nenhum (o conjunto de sempre da voz). */
+export function ownPoolsKey(
+  own: ClipOwnPools | null | undefined,
+  fillerPool?: readonly FillerPhrase[] | null,
+  toolPool?: readonly ToolPhrase[] | null
+): string | null {
+  if (!own || (!own.filler && !own.tool)) return null
+  const set = clipPhraseSet(fillerPool, toolPool, null)
+  return bytesToHex(
+    sha256(
+      new TextEncoder().encode(
+        stableJson({
+          v: 1,
+          ...(own.filler ? { FILLER: set.FILLER } : {}),
+          ...(own.tool ? { TOOL: set.TOOL } : {})
+        })
+      )
+    )
+  ).slice(0, 8)
 }
 
 /**
@@ -269,7 +301,7 @@ export function legacyClipKey(voiceId: string, hash: string, cls: ClipClass, n: 
   return safeClipKey(`${voiceId}__${hash.slice(0, 24)}_${cls}_${n}`)
 }
 
-const NEW_KEY_RE = /^(.+__[0-9a-f]{16})__[0-9a-f]{24}_[A-Z]+_\d+$/
+const NEW_KEY_RE = /^(.+__[0-9a-f]{16}(?:-[0-9a-f]{8})?)__[0-9a-f]{24}_[A-Z]+_\d+$/
 const LEGACY_KEY_RE = /^(.+)__[0-9a-f]{24}_[A-Z]+_\d+$/
 /** O formato mais antigo (`<hash>_<CLASSE>_<n>`, sem a voz): não vale para ninguém. */
 const ANCIENT_KEY_RE = /^[0-9a-f]{24}_[A-Z]+_\d+$/
@@ -299,16 +331,19 @@ export function clipEntries(
   settings: TtsSettings,
   fillerPool?: readonly FillerPhrase[] | null,
   toolPool?: readonly ToolPhrase[] | null,
-  thanksPool?: readonly string[] | null
+  thanksPool?: readonly string[] | null,
+  own?: ClipOwnPools | null
 ): ClipEntry[] {
   const set = clipPhraseSet(fillerPool, toolPool, thanksPool)
   const voice = clipVoiceId(settings)
-  const scope = clipScope(settings)
+  const ownKey = ownPoolsKey(own, fillerPool, toolPool)
+  const scope = clipScope(settings, ownKey)
   return CLIP_CLASSES.flatMap((cls) => {
     const hash = clipClassHash(settings, cls, fillerPool, toolPool, thanksPool)
     return set[cls].map((text, i) => ({
       key: clipKey(scope, hash, cls, i + 1),
-      legacyKey: legacyClipKey(voice, hash, cls, i + 1),
+      // o formato anterior é sempre dos pools do aparelho (pools próprios nasceram depois)
+      legacyKey: ownKey ? clipKey(scope, hash, cls, i + 1) : legacyClipKey(voice, hash, cls, i + 1),
       cls,
       n: i + 1,
       text
@@ -352,7 +387,8 @@ export async function clipsStatus(
   settings: TtsSettings,
   fillerPool?: readonly FillerPhrase[] | null,
   toolPool?: readonly ToolPhrase[] | null,
-  thanksPool?: readonly string[] | null
+  thanksPool?: readonly string[] | null,
+  own?: ClipOwnPools | null
 ): Promise<{
   total: number
   ready: number
@@ -362,7 +398,7 @@ export async function clipsStatus(
     CLIP_CLASSES.map((c) => [c, { total: 0, ready: 0 }])
   ) as Record<ClipClass, { total: number; ready: number }>
   let ready = 0
-  const entries = clipEntries(settings, fillerPool, toolPool, thanksPool)
+  const entries = clipEntries(settings, fillerPool, toolPool, thanksPool, own)
   for (const e of entries) {
     byClass[e.cls].total++
     if (await readEntry(store, e)) {
@@ -370,7 +406,7 @@ export async function clipsStatus(
       byClass[e.cls].ready++
     }
   }
-  if (ready) await markUsed(store, clipScope(settings))
+  if (ready) await markUsed(store, clipScope(settings, ownPoolsKey(own, fillerPool, toolPool)))
   return { total: entries.length, ready, byClass }
 }
 
@@ -382,17 +418,21 @@ export async function loadCurrentClipAudio(
   cls: ClipClass,
   n: number,
   toolPool?: readonly ToolPhrase[] | null,
-  thanksPool?: readonly string[] | null
+  thanksPool?: readonly string[] | null,
+  own?: ClipOwnPools | null
 ): Promise<{ audio: Uint8Array; mime: string } | null> {
   if (!CLIP_CLASSES.includes(cls)) return null
   const count = clipPhraseSet(fillerPool, toolPool, thanksPool)[cls].length
   if (!Number.isInteger(n) || n < 1 || n > count) return null
   const hash = clipClassHash(settings, cls, fillerPool, toolPool, thanksPool)
+  const ownKey = ownPoolsKey(own, fillerPool, toolPool)
+  const scope = clipScope(settings, ownKey)
+  const key = clipKey(scope, hash, cls, n)
   const clip = await readEntry(store, {
-    key: clipKey(clipScope(settings), hash, cls, n),
-    legacyKey: legacyClipKey(clipVoiceId(settings), hash, cls, n)
+    key,
+    legacyKey: ownKey ? key : legacyClipKey(clipVoiceId(settings), hash, cls, n)
   })
-  if (clip) await markUsed(store, clipScope(settings))
+  if (clip) await markUsed(store, scope)
   return clip
 }
 
@@ -409,12 +449,20 @@ export async function generateClips(opts: {
   fillerPool?: readonly FillerPhrase[] | null
   toolPool?: readonly ToolPhrase[] | null
   thanksPool?: readonly string[] | null
+  /** Quais pools são próprios da persona/chat (conjunto próprio — `ownPoolsKey`). */
+  own?: ClipOwnPools | null
   synth: (text: string, signal: AbortSignal) => Promise<{ audio: Uint8Array; mime: string }>
   signal?: AbortSignal
   onProgress?: (done: number, total: number) => void
 }): Promise<{ total: number; generated: number }> {
-  const entries = clipEntries(opts.settings, opts.fillerPool, opts.toolPool, opts.thanksPool)
-  const scope = clipScope(opts.settings)
+  const entries = clipEntries(
+    opts.settings,
+    opts.fillerPool,
+    opts.toolPool,
+    opts.thanksPool,
+    opts.own
+  )
+  const scope = clipScope(opts.settings, ownPoolsKey(opts.own, opts.fillerPool, opts.toolPool))
   const signal = opts.signal ?? new AbortController().signal
   let done = 0
   let generated = 0

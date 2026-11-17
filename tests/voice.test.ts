@@ -52,6 +52,7 @@ import {
   legacyClipKey,
   loadCurrentClipAudio,
   memoryClipStore,
+  ownPoolsKey,
   pruneClips
 } from '../src/voice/clips'
 import {
@@ -898,6 +899,31 @@ describe('clipes e fila de reprodução', () => {
     expect(said(await loadCurrentClipAudio(store, persona, null, 'TOOL', 3))).toBe(
       `antigo|${DEFAULT_TOOL_PHRASE_POOL[2].text}`
     )
+  })
+
+  it('1.18.0: frases PRÓPRIAS da persona — conjunto próprio; gerar as do aparelho não apaga as da persona (nem o contrário)', async () => {
+    const store = memoryClipStore()
+    const s = fish('fish-audio/s1', { instructions: 'calma' })
+    const toolPool = [{ text: 'Frase da persona.', categories: ['web' as const] }]
+    const own = { filler: false, tool: true }
+    await generateClips({ store, settings: s, toolPool, own, synth: synthOf(s, []) })
+    await generateClips({ store, settings: s, synth: synthOf(s, []) })
+    // as duas definições convivem
+    expect(
+      said(await loadCurrentClipAudio(store, s, null, 'TOOL', 1, toolPool, null, own))
+    ).toMatch(/Frase da persona\./)
+    expect(said(await loadCurrentClipAudio(store, s, null, 'TOOL', 1))).toMatch(
+      new RegExp(DEFAULT_TOOL_PHRASE_POOL[0].text.replace(/[.?]/g, '\\$&'))
+    )
+    expect(ownPoolsKey(null, null, toolPool)).toBeNull()
+    expect(clipScope(s, ownPoolsKey(own, null, toolPool))).toMatch(/__[0-9a-f]{16}-[0-9a-f]{8}$/)
+    // gerar a do aparelho de novo não apagou a da persona
+    await generateClips({ store, settings: s, synth: synthOf(s, []) })
+    expect(
+      await loadCurrentClipAudio(store, s, null, 'TOOL', 1, toolPool, null, own)
+    ).not.toBeNull()
+    const st = await clipsStatus(store, s, null, toolPool, null, own)
+    expect(st.byClass.TOOL).toEqual({ total: 1, ready: 1 })
   })
 
   it('limpeza: as vozes em uso nunca perdem clipes; conjunto sem voz em uso sai depois de 30 dias sem uso; nomes desconhecidos ficam', async () => {

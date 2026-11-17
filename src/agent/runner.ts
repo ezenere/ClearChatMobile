@@ -87,7 +87,8 @@ import {
   argsSummary,
   normalizeSmartApprove,
   overrideMessageText,
-  smartRejectText
+  smartRejectText,
+  effectiveJudgeMaxTokens
 } from '@shared/smartApprove'
 import { buildJudgeExtras, isTypedUserMessage } from '@shared/smartApproveContext'
 import { MEMORY_TOOL_NAMES, SEARCH_TOOL, type ToolDefinition } from '@shared/tools'
@@ -1671,6 +1672,7 @@ export class Runner {
             sa,
             provider: sa.providerId ? this.d.provider(sa.providerId) : null,
             chatConfig: chat.config,
+            maxTokens: effectiveJudgeMaxTokens(sa, this.approvalSettings().smart),
             ctx: {
               tool: name,
               args,

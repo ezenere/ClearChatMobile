@@ -706,6 +706,8 @@ export interface VoiceApi {
         tts?: unknown
         call?: boolean
         signature?: unknown
+        /** Frases próprias da persona/chat (`{ toolPhrasePool, fillerPool }` — 1.18.0). */
+        pools?: unknown
       }): Promise<TtsClipsView>
       /**
        * Cache de clipes da voz atual (null = ainda não gerados). `input.tts` (gerar/listar) = a voz
@@ -720,6 +722,8 @@ export interface VoiceApi {
         tts?: unknown
         call?: boolean
         signature?: unknown
+        /** Frases próprias da persona/chat (`{ toolPhrasePool, fillerPool }` — 1.18.0). */
+        pools?: unknown
       }): Promise<TtsClipsView | null>
     }
     /** Vozes do motor local atual (com estado de instalação) + sugestões livres para a API. */
