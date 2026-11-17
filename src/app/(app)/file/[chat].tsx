@@ -10,6 +10,7 @@ import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as Sharing from 'expo-sharing'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { pathBaseName, resolveMarkdownLink } from '@shared/openFile'
 import {
   ActivityIndicator,
   FlatList,
@@ -64,6 +65,20 @@ export default function HostFile() {
   }>()
   const router = useRouter()
   const insets = useSafeAreaInsets()
+  // link de um markdown para outro arquivo (relativo à pasta deste): abre no visualizador, numa
+  // tela nova (voltar retorna a este) — = desktop; âncora e links com esquema seguem o padrão
+  const onLink = useCallback(
+    (href: string): boolean => {
+      const r = resolveMarkdownLink(path, href)
+      if (r?.kind !== 'file') return false
+      router.push({
+        pathname: '/file/[chat]',
+        params: { chat, path: r.path, name: pathBaseName(r.path), ...(root ? { root } : {}) }
+      })
+      return true
+    },
+    [chat, path, root, router]
+  )
   const name = nameParam || path.split(/[\\/]/).pop() || 'arquivo'
   const host = remote.hostName(chat)
   const [info, setInfo] = useState<{ size: number; mtime: number; kind: ViewerKind } | null>(null)
@@ -285,7 +300,7 @@ export default function HostFile() {
       ) : text ? (
         isMd && rendered ? (
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}>
-            <Markdown text={text.text} />
+            <Markdown text={text.text} onLink={onLink} />
             <MoreButton remaining={remaining} loading={loadingMore} onPress={() => void more()} />
           </ScrollView>
         ) : (

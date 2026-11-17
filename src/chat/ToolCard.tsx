@@ -3,6 +3,7 @@
 // (motivo), delegate_task (tarefa + abrir subsessão), send_to_chat, questionário (perguntas e
 // respostas) e mídia devolvida (read_file de imagem/PDF). Somente leitura nesta fase.
 import Ionicons from '@expo/vector-icons/Ionicons'
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons'
 import { memo, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { toolContentText } from '@shared/attachments'
@@ -21,9 +22,13 @@ import { Collapsible, MonoBlock } from './ui'
 
 type Status = 'ok' | 'error' | 'denied' | 'cancelled' | 'pending'
 
-const STATUS: Record<Status, { label: string; color: string; icon: IconName | null }> = {
-  ok: { label: 'ok', color: 'rgba(74,222,128,0.9)', icon: 'checkmark' },
-  error: { label: 'erro', color: colors.danger, icon: 'close-circle-outline' },
+// `iconOnly`: só o ícone (o texto vai no rótulo de acessibilidade) — ok/erro (= desktop)
+const STATUS: Record<
+  Status,
+  { label: string; color: string; icon: IconName | null; iconOnly?: boolean }
+> = {
+  ok: { label: 'ok', color: colors.success, icon: 'checkmark', iconOnly: true },
+  error: { label: 'erro', color: colors.danger, icon: 'close', iconOnly: true },
   denied: { label: 'negada', color: 'rgba(248,113,113,0.9)', icon: 'ban-outline' },
   cancelled: { label: 'interrompida', color: colors.subtle, icon: 'ban-outline' },
   pending: { label: 'sem resultado', color: colors.faint, icon: null }
@@ -161,6 +166,8 @@ function AskUserBody({
 export interface ToolLive {
   run?: ToolRun
   awaiting?: 'approval' | 'question' | null
+  /** Chamada ainda sendo gerada (rascunho do stream, sem execução). */
+  streaming?: boolean
 }
 
 export const ToolCard = memo(function ToolCard({
@@ -228,12 +235,31 @@ export const ToolCard = memo(function ToolCard({
             spin: false,
             icon: 'help-circle-outline' as IconName
           }
-        : !result && live?.run?.judging
-          ? { text: 'Smart-Approve avaliando', color: colors.info, spin: true, icon: null }
-          : !result && live?.run
-            ? { text: 'executando', color: colors.accentStrong, spin: true, icon: null }
+        : null
+  // estados de rotina só com ícone + spinner (= desktop): gerando (cérebro, cinza), Smart-Approve
+  // (escudo com check, roxo), executando (engrenagem, cinza)
+  const busy: { text: string; color: string; icon: 'brain' | 'shield-check' | 'cog' } | null =
+    result || liveChip
+      ? null
+      : live?.run?.judging
+        ? { text: 'Smart-Approve avaliando', color: colors.accentStrong, icon: 'shield-check' }
+        : live?.run?.running
+          ? { text: 'executando', color: colors.subtle, icon: 'cog' }
+          : live?.streaming
+            ? { text: 'gerando', color: colors.subtle, icon: 'brain' }
             : null
-  const chip = liveChip ? (
+  const chip = busy ? (
+    <View
+      style={st.chip}
+      testID="tool-live-status"
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={busy.text}
+    >
+      <MaterialCommunityIcons name={busy.icon} size={13} color={busy.color} />
+      <ActivityIndicator size={10} color={busy.color} />
+    </View>
+  ) : liveChip ? (
     <View style={st.chip} testID="tool-live-status">
       {liveChip.spin ? (
         <ActivityIndicator size={10} color={liveChip.color} />
@@ -251,8 +277,8 @@ export const ToolCard = memo(function ToolCard({
       testID="tool-status"
       accessibilityLabel={outcome ? `${outcome.title} — detalhes` : S.label}
     >
-      {S.icon ? <Ionicons name={S.icon} size={12} color={S.color} /> : null}
-      <Text style={[st.chipText, { color: S.color }]}>{S.label}</Text>
+      {S.icon ? <Ionicons name={S.icon} size={S.iconOnly ? 15 : 12} color={S.color} /> : null}
+      {S.iconOnly ? null : <Text style={[st.chipText, { color: S.color }]}>{S.label}</Text>}
       {outcome?.kind === 'approved' ? (
         <Ionicons name="shield-checkmark-outline" size={11} color={S.color} />
       ) : null}

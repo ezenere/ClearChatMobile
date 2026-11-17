@@ -931,7 +931,7 @@ export const DraftMessage = memo(function DraftMessage({
         <ToolCard
           key={tc.id || `i${i}`}
           call={{ id: tc.id, name: tc.name || '…', arguments: tc.arguments }}
-          live={toolLive(c, tc.id) ?? { run: { running: true } }}
+          live={toolLive(c, tc.id) ?? { streaming: true }}
         />
       ))}
       {rsn.typing ? (

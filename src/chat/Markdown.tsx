@@ -4,7 +4,7 @@
 // no site): imagem externa vira link; `clearchat-attachment://` vira o anexo (baixado e decifrado).
 // Mensagens da chamada de voz (`voiceTags`/`dimFrom`): tags de voz em opacidade 0,65 e o trecho
 // ainda não falado em 0,5, fora de código (`voiceText.ts`).
-import { memo, type ReactNode } from 'react'
+import { createContext, memo, useContext, type ReactNode } from 'react'
 import { Linking, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native'
 import type { Token, Tokens } from 'marked'
 import { attachmentFile } from '@/data/attachments'
@@ -51,6 +51,38 @@ function codeText(text: string, voice: Voice): { text: string; dim: boolean } {
   const t = takeDimMark(text)
   if (t.found) voice.dim = true
   return { text: t.text, dim }
+}
+
+/**
+ * Quem trata os links deste markdown (o visualizador de arquivos: link relativo abre o arquivo);
+ * true = tratado. Sem provedor = o padrão (só links seguros, no app do sistema).
+ */
+const LinkHandler = createContext<((href: string) => boolean) | null>(null)
+
+function MdLink({
+  href,
+  style,
+  children,
+  suppressHighlighting
+}: {
+  href: string
+  style: TextStyle
+  children: ReactNode
+  suppressHighlighting?: boolean
+}) {
+  const handler = useContext(LinkHandler)
+  return (
+    <Text
+      style={style}
+      onPress={() => {
+        if (handler?.(href)) return
+        openLink(href)
+      }}
+      suppressHighlighting={suppressHighlighting}
+    >
+      {children}
+    </Text>
+  )
 }
 
 function openLink(href: string) {
@@ -120,9 +152,9 @@ function inline(
         const body = inline(l.tokens, key, colors.accentStrong, voice)
         if (href.found && voice) voice.dim = true
         return (
-          <Text key={key} style={st.link} onPress={() => openLink(href.text)} suppressHighlighting>
+          <MdLink key={key} style={st.link} href={href.text} suppressHighlighting>
             {body}
-          </Text>
+          </MdLink>
         )
       }
       case 'image': {
@@ -135,9 +167,9 @@ function inline(
             </Text>
           )
         return (
-          <Text key={key} style={st.link} onPress={() => openLink(im.href)}>
+          <MdLink key={key} style={st.link} href={im.href}>
             {label}
-          </Text>
+          </MdLink>
         )
       }
       case 'inlineMath': {
@@ -411,7 +443,8 @@ export const Markdown = memo(function Markdown({
   color = colors.fg,
   selectable = true,
   voiceTags,
-  dimFrom
+  dimFrom,
+  onLink
 }: {
   text: string
   italic?: boolean
@@ -420,6 +453,8 @@ export const Markdown = memo(function Markdown({
   selectable?: boolean
   voiceTags?: boolean
   dimFrom?: number | null
+  /** Clique num link (visualizador: relativo abre o arquivo); true = tratado. */
+  onLink?: (href: string) => boolean
 }) {
   const base: TextStyle = {
     color,
@@ -432,7 +467,9 @@ export const Markdown = memo(function Markdown({
   // estado da passada (na ordem do texto): novo a cada render
   const voice: Voice = voiced ? { tags: !!voiceTags, dim: false } : null
   return (
-    <View style={st.root}>{blocks(lexMarkdown(src), 'md', base, false, selectable, voice)}</View>
+    <LinkHandler.Provider value={onLink ?? null}>
+      <View style={st.root}>{blocks(lexMarkdown(src), 'md', base, false, selectable, voice)}</View>
+    </LinkHandler.Provider>
   )
 })
 
